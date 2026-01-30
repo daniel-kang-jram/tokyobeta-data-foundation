@@ -9,8 +9,7 @@ tokyobeta:
       port: 3306
       user: "{{ env_var('AURORA_USERNAME') }}"
       password: "{{ env_var('AURORA_PASSWORD') }}"
-      database: tokyobeta
-      schema: analytics
+      schema: tokyobeta
       threads: 4
       keepalives_idle: 0
       connect_timeout: 10
@@ -21,9 +20,18 @@ tokyobeta:
       port: 3306
       user: "{{ env_var('AURORA_USERNAME') }}"
       password: "{{ env_var('AURORA_PASSWORD') }}"
-      database: tokyobeta
-      schema: analytics
       threads: 8
+      keepalives_idle: 0
+      connect_timeout: 10
+    
+    local:
+      type: mysql
+      host: 127.0.0.1
+      port: 3307
+      user: root
+      password: localdev
+      schema: tokyobeta
+      threads: 2
       keepalives_idle: 0
       connect_timeout: 10
 

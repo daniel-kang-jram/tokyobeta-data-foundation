@@ -19,7 +19,7 @@ WITH moveouts_base AS (
         m.id as contract_id,
         m.tenant_id,
         a.unique_number as asset_id_hj,
-        r.room_no as room_number,
+        r.room_number as room_number,
         m.moving_agreement_type as contract_system,
         t.media_id as contract_channel,
         m.original_movein_date as original_contract_date,
@@ -28,7 +28,7 @@ WITH moveouts_base AS (
         m.rent_start_date as rent_start_date,
         m.expiration_date as contract_expiration_date,
         m.moveout_receipt_date as cancellation_notice_date,
-        DATE({{ safe_moveout_date() }}) as moveout_date,
+        DATE({{ safe_moveout_date('m') }}) as moveout_date,
         CASE WHEN m.move_renew_flag = 1 THEN 'Yes' ELSE 'No' END as renewal_flag,
         m.rent as monthly_rent,
         {{ is_corporate('m.moving_agreement_type') }} as tenant_type,
@@ -47,8 +47,8 @@ WITH moveouts_base AS (
         a.municipality,
         a.full_address,
         -- Contract duration metrics
-        DATEDIFF(DATE({{ safe_moveout_date() }}), m.movein_date) as total_stay_days,
-        TIMESTAMPDIFF(MONTH, m.movein_date, DATE({{ safe_moveout_date() }})) as total_stay_months,
+        DATEDIFF(DATE({{ safe_moveout_date('m') }}), m.movein_date) as total_stay_days,
+        TIMESTAMPDIFF(MONTH, m.movein_date, DATE({{ safe_moveout_date('m') }})) as total_stay_months,
         t.reason_moveout as moveout_reason_id,
         CURRENT_TIMESTAMP as created_at,
         CURRENT_TIMESTAMP as updated_at
@@ -61,9 +61,9 @@ WITH moveouts_base AS (
         ON m.room_id = r.id
     LEFT JOIN {{ source('staging', 'm_nationalities') }} n
         ON t.m_nationality_id = n.id
-    WHERE {{ safe_moveout_date() }} IS NOT NULL
+    WHERE {{ safe_moveout_date('m') }} IS NOT NULL
       AND m.is_moveout = 1
-      AND DATE({{ safe_moveout_date() }}) >= '{{ var('min_valid_date') }}'
+      AND DATE({{ safe_moveout_date('m') }}) >= '{{ var('min_valid_date') }}'
 )
 
 SELECT *

@@ -70,7 +70,6 @@ on-run-start:
   
 on-run-end:
   - "{{ log('Completed dbt run for Tokyo Beta Analytics', info=True) }}"
-  - "{{ dbt_utils.log_test_results() }}"
 
 # Variables
 vars:

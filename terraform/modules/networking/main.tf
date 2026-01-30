@@ -149,11 +149,20 @@ resource "aws_security_group" "aurora" {
   }
 }
 
-# Security Group for Lambda
+# Security Group for Lambda (also used by Glue)
 resource "aws_security_group" "lambda" {
   name        = "tokyobeta-${var.environment}-lambda-sg"
   description = "Security group for Lambda ETL processor"
   vpc_id      = aws_vpc.main.id
+
+  # Glue requires self-referencing ingress for worker communication
+  ingress {
+    from_port   = 0
+    to_port     = 65535
+    protocol    = "tcp"
+    self        = true
+    description = "Allow Glue workers to communicate with each other"
+  }
 
   egress {
     from_port   = 0

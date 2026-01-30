@@ -168,6 +168,7 @@ resource "aws_glue_job" "daily_etl" {
     "--enable-spark-ui"                  = "true"
     "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/"
     "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/"
+    "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql"
     
     # Custom parameters
     "--S3_SOURCE_BUCKET"     = var.s3_source_bucket
@@ -180,10 +181,13 @@ resource "aws_glue_job" "daily_etl" {
   }
 
   glue_version      = "4.0"
-  max_retries       = 1
+  max_retries       = 0
   timeout           = 60
   worker_type       = "G.1X"
   number_of_workers = 2
+  
+  # VPC connection for Aurora access
+  connections = [aws_glue_connection.aurora.name]
 
   execution_property {
     max_concurrent_runs = 1

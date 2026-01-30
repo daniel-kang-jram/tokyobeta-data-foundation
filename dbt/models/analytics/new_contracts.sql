@@ -19,7 +19,7 @@ WITH new_contracts_base AS (
         m.id as contract_id,
         m.tenant_id,
         a.unique_number as asset_id_hj,
-        r.room_no as room_number,
+        r.room_number as room_number,
         m.moving_agreement_type as contract_system,
         t.media_id as contract_channel,
         m.original_movein_date as original_contract_date,

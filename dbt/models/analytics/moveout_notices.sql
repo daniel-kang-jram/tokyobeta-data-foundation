@@ -19,7 +19,7 @@ WITH moveout_notices_base AS (
         m.id as contract_id,
         m.tenant_id,
         a.unique_number as asset_id_hj,
-        r.room_no as room_number,
+        r.room_number as room_number,
         m.moving_agreement_type as contract_system,
         t.media_id as contract_channel,
         m.original_movein_date as original_contract_date,
@@ -28,7 +28,7 @@ WITH moveout_notices_base AS (
         m.rent_start_date as rent_start_date,
         m.expiration_date as contract_expiration_date,
         m.moveout_receipt_date as notice_received_date,
-        DATE({{ safe_moveout_date() }}) as planned_moveout_date,
+        DATE({{ safe_moveout_date('m') }}) as planned_moveout_date,
         CASE WHEN m.move_renew_flag = 1 THEN 'Yes' ELSE 'No' END as renewal_flag,
         m.rent as monthly_rent,
         {{ is_corporate('m.moving_agreement_type') }} as tenant_type,
@@ -47,7 +47,7 @@ WITH moveout_notices_base AS (
         a.municipality,
         a.full_address,
         -- Notice-specific metrics
-        DATEDIFF(DATE({{ safe_moveout_date() }}), m.moveout_receipt_date) as notice_lead_time_days,
+        DATEDIFF(DATE({{ safe_moveout_date('m') }}), m.moveout_receipt_date) as notice_lead_time_days,
         CASE 
             WHEN m.is_moveout = 1 THEN 'Completed'
             ELSE 'Pending'

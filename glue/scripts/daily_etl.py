@@ -132,10 +132,9 @@ def load_to_aurora_staging(sql_content):
             if not stmt:
                 continue
             
-            # Prefix table names with staging schema
-            stmt = re.sub(r'CREATE TABLE `(\w+)`', r'CREATE TABLE `staging.\1`', stmt)
-            stmt = re.sub(r'INSERT INTO `(\w+)`', r'INSERT INTO `staging.\1`', stmt)
-            stmt = re.sub(r'DROP TABLE IF EXISTS `(\w+)`', r'DROP TABLE IF EXISTS `staging.\1`', stmt)
+            # Skip the original CREATE DATABASE and USE commands - we're already in staging
+            if stmt.upper().startswith('CREATE DATABASE') or stmt.upper().startswith('USE '):
+                continue
             
             try:
                 cursor.execute(stmt)
@@ -191,26 +190,36 @@ def run_dbt_transformations():
     os.environ['AURORA_PASSWORD'] = password
     os.environ['DBT_TARGET'] = args['ENVIRONMENT']
     
+    # dbt is installed in /home/spark/.local/bin/ by pip --user in Glue
+    dbt_executable = "/home/spark/.local/bin/dbt"
+    
     # Install dbt dependencies
     subprocess.run([
-        "dbt", "deps",
+        dbt_executable, "deps",
         "--profiles-dir", dbt_local_path,
         "--project-dir", dbt_local_path
     ], check=True)
     
     # Run dbt models
     result = subprocess.run([
-        "dbt", "run",
+        dbt_executable, "run",
         "--profiles-dir", dbt_local_path,
         "--project-dir", dbt_local_path,
         "--target", args['ENVIRONMENT']
-    ], check=True, capture_output=True, text=True)
+    ], capture_output=True, text=True)
     
+    print("=== DBT RUN OUTPUT ===")
     print(result.stdout)
+    if result.stderr:
+        print("=== DBT RUN ERRORS ===")
+        print(result.stderr)
+    
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
     
     # Run dbt tests
     test_result = subprocess.run([
-        "dbt", "test",
+        dbt_executable, "test",
         "--profiles-dir", dbt_local_path,
         "--project-dir", dbt_local_path,
         "--target", args['ENVIRONMENT']

@@ -6,7 +6,6 @@ version: 2
 sources:
   - name: staging
     description: Raw data loaded from daily SQL dumps via AWS Glue
-    database: tokyobeta
     schema: staging
     
     tables:
@@ -54,6 +53,24 @@ sources:
             description: Contract decision date
           - name: original_movein_date
             description: Original contract start date (for renewals)
+          - name: moving_agreement_type
+            description: Contract agreement type (used for individual/corporate classification)
+          - name: tenant_contract_type
+            description: Tenant contract type (alternative classification field)
+          - name: moveout_receipt_date
+            description: Date moveout notice was received (解約通知日)
+          - name: move_renew_flag
+            description: Renewal flag (0=no, 1=yes)
+          - name: rent_start_date
+            description: Rent start date (賃料発生日)
+          - name: expiration_date
+            description: Contract expiration date (契約満了日)
+          - name: created_at
+            description: Record creation timestamp
+          - name: moveout_date_integrated
+            description: Integrated moveout date (computed field)
+          - name: is_moveout
+            description: Moveout completion flag (0=active, 1=completed)
       
       - name: tenants
         description: Tenant demographics and contact information
@@ -85,6 +102,20 @@ sources:
             description: Company/school name
           - name: full_name
             description: Full name (may contain string 'NULL')
+          - name: media_id
+            description: Contract channel ID (契約チャンネル)
+          - name: personal_identity
+            description: Residence status (在留資格)
+          - name: affiliation
+            description: Company/school affiliation (職種)
+          - name: nationality
+            description: Nationality text
+          - name: age
+            description: Current age
+          - name: gender_type
+            description: Gender (1=Male, 2=Female)
+          - name: m_nationality_id
+            description: Foreign key to nationalities master table
       
       - name: apartments
         description: Property/building master data
@@ -135,5 +166,16 @@ sources:
             description: Foreign key to apartments
             tests:
               - not_null
-          - name: room_no
+          - name: room_number
             description: Room number
+      
+      - name: m_nationalities
+        description: Nationalities master data
+        columns:
+          - name: id
+            description: Primary key - nationality ID
+            tests:
+              - unique
+              - not_null
+          - name: nationality_name
+            description: Nationality name (English)
