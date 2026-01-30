@@ -15,3 +15,25 @@ output "aurora_password" {
   value       = random_password.aurora_password.result
   sensitive   = true
 }
+
+# RDS Cron Credentials Outputs
+output "rds_cron_secret_arn" {
+  description = "ARN of RDS cron credentials secret"
+  value       = var.create_rds_cron_secret ? aws_secretsmanager_secret.rds_cron_credentials[0].arn : ""
+}
+
+output "rds_cron_secret_name" {
+  description = "Name of RDS cron credentials secret"
+  value       = var.create_rds_cron_secret ? aws_secretsmanager_secret.rds_cron_credentials[0].name : ""
+}
+
+output "rds_cron_username" {
+  description = "RDS cron username"
+  value       = var.rds_cron_username
+}
+
+output "rds_cron_password" {
+  description = "RDS cron password (sensitive)"
+  value       = var.create_rds_cron_secret ? (var.rds_cron_password != "" ? var.rds_cron_password : random_password.rds_cron_password[0].result) : ""
+  sensitive   = true
+}

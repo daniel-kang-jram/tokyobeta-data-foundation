@@ -65,7 +65,7 @@ resource "aws_db_parameter_group" "aurora" {
 resource "aws_rds_cluster" "aurora" {
   cluster_identifier              = "tokyobeta-${var.environment}-aurora-cluster"
   engine                          = "aurora-mysql"
-  engine_version                  = "8.0.mysql_aurora.3.05.2"
+  engine_version                  = "8.0.mysql_aurora.3.11.1"
   database_name                   = "tokyobeta"
   master_username                 = var.db_username
   master_password                 = var.db_password

@@ -98,9 +98,13 @@ def load_to_aurora_staging(sql_content):
     try:
         cursor = connection.cursor()
         
-        # Create staging schema if not exists
+        # Create all required schemas if they don't exist
         cursor.execute("CREATE SCHEMA IF NOT EXISTS staging")
+        cursor.execute("CREATE SCHEMA IF NOT EXISTS analytics")
+        cursor.execute("CREATE SCHEMA IF NOT EXISTS seeds")
         cursor.execute("USE staging")
+        
+        print("Schemas verified/created: staging, analytics, seeds")
         
         # Drop all existing tables in staging (full reload strategy)
         cursor.execute("""

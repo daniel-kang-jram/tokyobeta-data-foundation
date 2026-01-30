@@ -195,34 +195,6 @@ resource "aws_glue_job" "daily_etl" {
   }
 }
 
-# Glue Data Quality Ruleset for staging.movings
-resource "aws_glue_data_quality_ruleset" "movings" {
-  name        = "tokyobeta-${var.environment}-movings-dq"
-  description = "Data quality rules for movings table"
-
-  ruleset = <<-EOT
-    Rules = [
-      RowCount > 1000,
-      IsComplete "id",
-      Uniqueness "id" > 0.99,
-      IsComplete "tenant_id",
-      IsComplete "apartment_id",
-      IsComplete "room_id",
-      ColumnValues "cancel_flag" in [0,1],
-      ColumnValues "is_moveout" in [0,1],
-      ColumnValues "rent" > 0,
-      ColumnValues "movein_date" <= "moveout_date" where "moveout_date" is not null
-    ]
-  EOT
-
-  target_table {
-    database_name = aws_glue_catalog_database.staging.name
-    table_name    = "movings"
-  }
-
-  tags = {
-    Name        = "tokyobeta-${var.environment}-movings-dq"
-    Environment = var.environment
-  }
-}
+# Note: Glue Data Quality rulesets will be configured after first ETL run
+# when staging.movings table exists in the Glue Data Catalog
 
