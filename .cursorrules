@@ -1,0 +1,388 @@
+# Real Estate BI Dashboard - Cursor Rules
+
+## Core Principles
+
+### 1. Test-Driven Development (TDD) - STRICTLY ENFORCED
+- **RED-GREEN-REFACTOR cycle is MANDATORY**
+- ALWAYS write tests BEFORE implementation code
+- For any new function, class, or module:
+  1. Write the test first (it should fail)
+  2. Run the test to confirm it fails
+  3. Write minimal code to make it pass
+  4. Refactor while keeping tests green
+- Never commit untested code
+- Test coverage must be ≥ 80% for all Python modules
+- Each PR must include tests for new functionality
+
+### 2. Minimal Change Philosophy
+- Don't touch irrelevant parts of the codebase
+- Don't break/change existing code unless absolutely necessary
+- Make surgical, focused changes to fix bugs or add features
+- Verify that edits don't involuntarily affect existing modules
+- Before modifying, understand all dependencies and downstream impacts
+
+## Project Structure & Conventions
+
+### Directory Organization
+```
+terraform/          # Infrastructure as Code
+  modules/          # Reusable Terraform modules
+  environments/     # Dev/Prod environment configs
+lambda/             # Python Lambda functions
+  etl_processor/    # Main ETL application
+    tests/          # Test files (pytest)
+    transformers/   # Data transformation modules
+sql/                # Database schemas and transformations
+  schemas/          # DDL scripts (numbered: 001_, 002_, etc.)
+  transforms/       # Business logic SQL
+  seeds/            # Initial data CSV files
+quicksight/         # BI layer configurations
+config/             # Environment-specific YAML configs
+scripts/            # Operational scripts (bash, Python)
+docs/               # Architecture and user documentation
+```
+
+### File Naming Conventions
+- **Python**: `snake_case.py` (e.g., `staging_loader.py`)
+- **Terraform**: `snake_case.tf` (e.g., `main.tf`, `variables.tf`)
+- **SQL**: `descriptive_name.sql` (e.g., `daily_activity_summary.sql`)
+- **Tests**: `test_<module_name>.py` (e.g., `test_transformers.py`)
+- **Configs**: `<env>.yaml` (e.g., `dev.yaml`, `prod.yaml`)
+
+## Python Development Standards
+
+### TDD Workflow for Python
+```python
+# 1. WRITE TEST FIRST (in tests/ directory)
+def test_transform_daily_summary():
+    """Test that daily summary aggregates correctly by individual/corporate."""
+    input_data = [...]
+    expected = [...]
+    result = transform_daily_summary(input_data)
+    assert result == expected
+
+# 2. RUN TEST (it should fail - red)
+# pytest tests/test_transformers.py::test_transform_daily_summary
+
+# 3. WRITE MINIMAL IMPLEMENTATION
+def transform_daily_summary(data):
+    # Simplest code to make test pass
+    pass
+
+# 4. RUN TEST AGAIN (should pass - green)
+
+# 5. REFACTOR (optimize, clean up, add error handling)
+```
+
+### Code Quality
+- Follow PEP 8 style guide
+- Use type hints for all function signatures:
+  ```python
+  def load_staging_data(dump_path: str, db_client: DBClient) -> int:
+      """Load SQL dump into staging schema."""
+      pass
+  ```
+- Docstrings required for all public functions (Google style):
+  ```python
+  def geocode_asset(address: str) -> Tuple[float, float]:
+      """Geocode an asset address to latitude/longitude.
+      
+      Args:
+          address: Full Japanese address string
+          
+      Returns:
+          Tuple of (latitude, longitude)
+          
+      Raises:
+          GeocodingError: If address cannot be geocoded
+      """
+  ```
+- Max line length: 100 characters
+- Use meaningful variable names (no single letters except loop iterators)
+
+### Testing Standards
+- **Framework**: pytest
+- **Test structure**: Arrange-Act-Assert (AAA pattern)
+- **Fixtures**: Use pytest fixtures for common setup (DB connections, sample data)
+- **Mocking**: Use unittest.mock for external dependencies (S3, Aurora, AWS services)
+- **Test file structure**:
+  ```python
+  # tests/test_transformers.py
+  import pytest
+  from transformers.daily_summary import transform_daily_summary
+  
+  @pytest.fixture
+  def sample_staging_data():
+      """Fixture providing sample staging data."""
+      return [...]
+  
+  class TestDailySummaryTransformer:
+      def test_aggregates_by_date(self, sample_staging_data):
+          """Test date-based aggregation."""
+          pass
+      
+      def test_splits_individual_corporate(self, sample_staging_data):
+          """Test individual vs corporate classification."""
+          pass
+      
+      def test_handles_empty_input(self):
+          """Test graceful handling of empty dataset."""
+          pass
+  ```
+
+### Lambda-Specific Guidelines
+- Handler function must be named `handler` in `handler.py`
+- Environment variables for configuration (not hardcoded values)
+- Graceful error handling with structured logging:
+  ```python
+  import logging
+  logger = logging.getLogger()
+  logger.setLevel(logging.INFO)
+  
+  try:
+      result = process_etl()
+      logger.info(f"ETL completed: {result['rows_processed']} rows")
+  except Exception as e:
+      logger.error(f"ETL failed: {str(e)}", exc_info=True)
+      raise
+  ```
+- Return structured responses for CloudWatch logging:
+  ```python
+  return {
+      'statusCode': 200,
+      'body': json.dumps({
+          'message': 'ETL completed',
+          'rows_processed': count,
+          'execution_time_seconds': duration
+      })
+  }
+  ```
+
+## Terraform Standards
+
+### Module Design
+- Each module must have: `main.tf`, `variables.tf`, `outputs.tf`
+- Use descriptive variable names with clear descriptions
+- Always specify variable types and validation rules:
+  ```hcl
+  variable "db_instance_class" {
+    type        = string
+    description = "Aurora MySQL instance class"
+    default     = "db.t4g.medium"
+    
+    validation {
+      condition     = can(regex("^db\\.", var.db_instance_class))
+      error_message = "Instance class must start with 'db.'"
+    }
+  }
+  ```
+- Output all resource IDs/ARNs needed by other modules
+- Use tags consistently:
+  ```hcl
+  tags = {
+    Project     = "tokyobeta-data-consolidation"
+    Environment = var.environment
+    ManagedBy   = "terraform"
+    Component   = "aurora"
+  }
+  ```
+
+### State Management
+- Never commit `terraform.tfstate` files
+- Always use S3 backend with DynamoDB locking
+- Separate state files per environment (dev, prod)
+
+### Testing Terraform
+- Use `terraform fmt` before committing
+- Run `terraform validate` after changes
+- Always review `terraform plan` output before applying
+- For modules, write example usage in `examples/` directory
+
+## SQL Standards
+
+### Schema Design
+- Use explicit schema prefixes: `staging.table_name`, `analytics.table_name`
+- Primary keys on all tables
+- Indexes on foreign keys and frequently filtered columns
+- Created/updated timestamp columns on all tables:
+  ```sql
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ```
+
+### Transformation SQL
+- Readable formatting with proper indentation
+- Use CTEs (Common Table Expressions) for complex queries:
+  ```sql
+  WITH daily_counts AS (
+      SELECT 
+          DATE(contract_date) as activity_date,
+          COUNT(*) as contract_count,
+          tenant_type
+      FROM staging.movings
+      WHERE contract_date IS NOT NULL
+      GROUP BY DATE(contract_date), tenant_type
+  )
+  SELECT * FROM daily_counts;
+  ```
+- Always include comments explaining business logic
+- Avoid `SELECT *` in production queries
+
+### Testing SQL
+- Write SQL test scripts in `sql/tests/` directory
+- Test edge cases: NULL values, empty results, boundary dates
+- Validate data integrity after transformations:
+  ```sql
+  -- Test: Verify no duplicate contracts
+  SELECT contract_id, COUNT(*) 
+  FROM analytics.new_contracts 
+  GROUP BY contract_id 
+  HAVING COUNT(*) > 1;
+  -- Should return 0 rows
+  ```
+
+## AWS Best Practices
+
+### Security
+- Never hardcode credentials in code or Terraform files
+- Use AWS Secrets Manager for database passwords
+- IAM roles with least privilege principle
+- Private subnets for Aurora, public subnets for NAT gateway only
+- Security groups: whitelist only required ports/sources
+
+### Cost Optimization
+- Use db.t4g instances for Aurora (ARM-based, cheaper)
+- Lambda memory: right-size based on profiling (start at 512MB)
+- Aurora: enable auto-pause for dev environment
+- S3: lifecycle policies to archive old dumps to Glacier after 90 days
+
+### Monitoring
+- CloudWatch log retention: 7 days for dev, 30 days for prod
+- Alarms for: Lambda errors, Aurora CPU > 80%, ETL duration > 30 min
+- Structured logging in JSON format for easy querying
+
+## Git Workflow
+
+### Commit Messages
+```
+<type>(<scope>): <subject>
+
+[optional body]
+[optional footer]
+```
+Types: `feat`, `fix`, `test`, `refactor`, `docs`, `chore`, `terraform`
+
+Examples:
+- `feat(etl): implement daily summary transformer`
+- `test(etl): add unit tests for staging loader`
+- `terraform(aurora): add backup retention configuration`
+- `fix(lambda): handle missing geocoding data gracefully`
+
+### Branch Strategy
+- `main`: production-ready code
+- `develop`: integration branch
+- `feature/<name>`: new features
+- `fix/<name>`: bug fixes
+- `test/<name>`: test improvements
+
+### Pull Request Checklist
+- [ ] Tests written first (TDD)
+- [ ] All tests pass locally
+- [ ] Code coverage ≥ 80%
+- [ ] Terraform validated and formatted
+- [ ] No linter errors
+- [ ] Documentation updated if needed
+- [ ] No secrets committed
+- [ ] Minimal changes only (no scope creep)
+
+## Documentation Standards
+
+### Code Documentation
+- README.md in each major directory explaining its purpose
+- Architecture decisions documented in `docs/`
+- Inline comments for complex business logic only (code should be self-documenting)
+
+### Operational Documentation
+- Runbooks for common tasks (manual ETL triggers, troubleshooting)
+- Deployment guides with step-by-step commands
+- User guides for QuickSight dashboard usage
+
+## Project-Specific Business Rules
+
+### ETL Logic
+- **Table 1 (daily_activity_summary)**: Aggregate by date and individual/corporate split
+- **Table 2 (new_contracts)**: Include demographics + geolocation (lat/long)
+- **Table 3 (moveouts)**: Full tenant contract history on moveout date
+- **Table 4 (moveout_notices)**: Rolling 24-month window, purge older records
+
+### Data Quality
+- Validate all date fields are not NULL before transformations
+- Geocoding: fallback to prefecture centroid if exact address fails
+- Log all data quality issues but don't fail ETL (partial success)
+
+### Timing & Scheduling
+- ETL runs daily at 7:00 AM JST (after dump generation at 5:30 AM)
+- QuickSight SPICE refresh at 8:00 AM JST (after ETL completes)
+- Alerts sent to `dashboard-etl-alerts` SNS topic
+
+## Development Workflow Summary
+
+1. **Before writing any code**:
+   - Understand the requirement fully
+   - Identify what needs testing
+   - Write test cases first (RED)
+
+2. **Write minimal implementation**:
+   - Make tests pass (GREEN)
+   - Don't add extra features
+
+3. **Refactor**:
+   - Clean up code
+   - Add error handling
+   - Optimize if needed
+   - Keep tests passing
+
+4. **Verify no side effects**:
+   - Run full test suite
+   - Check linter
+   - Confirm existing functionality unaffected
+
+5. **Document**:
+   - Add docstrings
+   - Update README if needed
+   - Add inline comments for complex logic
+
+6. **Review**:
+   - Self-review changes
+   - Ensure adherence to all rules above
+   - Commit with descriptive message
+
+## Anti-Patterns to Avoid
+
+❌ Writing implementation before tests
+❌ Committing code without tests
+❌ Hardcoding configuration values
+❌ Using `SELECT *` in production SQL
+❌ Broad exception catching without logging
+❌ Modifying unrelated code in a PR
+❌ Large, unfocused commits
+❌ Skipping `terraform plan` review
+❌ Testing in production first
+❌ Ignoring linter warnings
+
+## Questions to Ask Before Making Changes
+
+1. Have I written tests first?
+2. Do my tests cover edge cases and error conditions?
+3. Am I changing only what's necessary?
+4. Will this affect existing functionality?
+5. Have I checked for similar patterns in the codebase?
+6. Is my code readable and well-documented?
+7. Have I validated my Terraform changes?
+8. Are all secrets properly managed?
+9. Will this change impact costs or performance?
+10. Have I followed the TDD cycle completely?
+
+---
+
+**Remember**: Test-driven development is not optional. Tests come first, implementation second, always.

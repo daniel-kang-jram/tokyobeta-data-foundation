@@ -1,0 +1,36 @@
+# Glue Module Outputs
+
+output "glue_job_name" {
+  description = "Name of the Glue ETL job"
+  value       = aws_glue_job.daily_etl.name
+}
+
+output "glue_job_arn" {
+  description = "ARN of the Glue ETL job"
+  value       = aws_glue_job.daily_etl.arn
+}
+
+output "glue_role_arn" {
+  description = "ARN of the Glue service role"
+  value       = aws_iam_role.glue_service_role.arn
+}
+
+output "glue_connection_name" {
+  description = "Name of the Glue connection to Aurora"
+  value       = aws_glue_connection.aurora.name
+}
+
+output "catalog_database_source" {
+  description = "Name of the Glue catalog source database"
+  value       = aws_glue_catalog_database.source.name
+}
+
+output "catalog_database_staging" {
+  description = "Name of the Glue catalog staging database"
+  value       = aws_glue_catalog_database.staging.name
+}
+
+output "crawler_name" {
+  description = "Name of the S3 dumps crawler"
+  value       = aws_glue_crawler.s3_dumps.name
+}

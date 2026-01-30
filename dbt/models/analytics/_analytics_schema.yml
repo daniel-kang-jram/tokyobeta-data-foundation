@@ -1,0 +1,176 @@
+# Schema definitions and tests for analytics models
+
+version: 2
+
+models:
+  - name: daily_activity_summary
+    description: Daily aggregation of property management activities by tenant type
+    columns:
+      - name: activity_date
+        description: Date of activity
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= '2018-01-01'"
+              config:
+                severity: warn
+      - name: tenant_type
+        description: Individual or corporate classification
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['individual', 'corporate']
+      - name: applications_count
+        description: Number of applications received
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+      - name: contracts_signed_count
+        description: Number of contracts signed
+        tests:
+          - not_null
+      - name: confirmed_moveins_count
+        description: Number of confirmed move-ins
+        tests:
+          - not_null
+      - name: confirmed_moveouts_count
+        description: Number of confirmed move-outs
+        tests:
+          - not_null
+      - name: net_occupancy_delta
+        description: Net change in occupancy (move-ins minus move-outs)
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - activity_date
+            - tenant_type
+
+  - name: new_contracts
+    description: New tenant contracts with full demographics and geolocation
+    columns:
+      - name: contract_id
+        description: Unique contract identifier
+        tests:
+          - unique
+          - not_null
+      - name: asset_id_hj
+        description: Property ID from GUI system
+        tests:
+          - not_null
+      - name: contract_date
+        description: Contract signing date
+        tests:
+          - not_null
+      - name: tenant_type
+        description: Individual or corporate
+        tests:
+          - accepted_values:
+              values: ['individual', 'corporate']
+      - name: monthly_rent
+        description: Monthly rent amount
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "> 0"
+              config:
+                error_if: ">50"
+                warn_if: ">10"
+      - name: latitude
+        description: Property latitude
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "BETWEEN 35.5 AND 35.9"
+              config:
+                severity: warn
+      - name: longitude
+        description: Property longitude
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: "BETWEEN 139.5 AND 140.0"
+              config:
+                severity: warn
+      - name: age
+        description: Tenant age at contract date
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "BETWEEN 18 AND 100"
+              config:
+                where: "age IS NOT NULL"
+                severity: warn
+
+  - name: moveouts
+    description: Completed moveouts with full contract history
+    columns:
+      - name: contract_id
+        description: Unique contract identifier
+        tests:
+          - unique
+          - not_null
+      - name: moveout_date
+        description: Actual moveout date (integrated logic)
+        tests:
+          - not_null
+      - name: tenant_type
+        description: Individual or corporate
+        tests:
+          - accepted_values:
+              values: ['individual', 'corporate']
+      - name: latitude
+        description: Property latitude
+        tests:
+          - not_null
+      - name: longitude
+        description: Property longitude
+        tests:
+          - not_null
+      - name: total_stay_days
+        description: Total days stayed
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+    tests:
+      # Business logic test: moveout date should be after move-in date
+      - dbt_utils.expression_is_true:
+          expression: "moveout_date >= contract_start_date"
+          config:
+            error_if: ">0"
+
+  - name: moveout_notices
+    description: Moveout notices for the last 24 months (rolling window)
+    columns:
+      - name: contract_id
+        description: Unique contract identifier
+        tests:
+          - unique
+          - not_null
+      - name: notice_received_date
+        description: Date moveout notice was received
+        tests:
+          - not_null
+          - dbt_utils.expression_is_true:
+              expression: ">= DATE_SUB(CURRENT_DATE, INTERVAL 24 MONTH)"
+              config:
+                error_if: ">100"
+                severity: error
+      - name: tenant_type
+        description: Individual or corporate
+        tests:
+          - accepted_values:
+              values: ['individual', 'corporate']
+      - name: notice_lead_time_days
+        description: Days between notice and planned moveout
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= 0"
+              config:
+                where: "planned_moveout_date IS NOT NULL"
+      - name: moveout_status
+        description: Completion status
+        tests:
+          - accepted_values:
+              values: ['Completed', 'Pending']

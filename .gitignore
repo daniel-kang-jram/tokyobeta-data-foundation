@@ -60,6 +60,10 @@ terraform/environments/**/terraform.tfvars
 tmp/
 .cache/
 
+# Data samples (large SQL dumps)
+data/samples/*.sql
+data/samples/*.dump
+
 # AWS
 .aws/credentials
 .aws/config
@@ -74,3 +78,4 @@ htmlcov/
 # Documentation build
 docs/_build/
 docs/.doctrees/
+data/samples/*.sql

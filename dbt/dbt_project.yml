@@ -1,0 +1,84 @@
+# dbt Project Configuration for Tokyo Beta Data Consolidation
+
+name: 'tokyobeta_analytics'
+version: '1.0.0'
+config-version: 2
+
+# Project profile (uses profiles.yml for connection details)
+profile: 'tokyobeta'
+
+# Model paths
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+# Build artifacts
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Model configurations
+models:
+  tokyobeta_analytics:
+    # Staging models (ephemeral or views)
+    staging:
+      +materialized: view
+      +schema: staging
+      +tags: ["staging"]
+    
+    # Intermediate models (views for debugging)
+    intermediate:
+      +materialized: view
+      +schema: intermediate
+      +tags: ["intermediate"]
+    
+    # Analytics models (tables for QuickSight)
+    analytics:
+      +materialized: table
+      +schema: analytics
+      +tags: ["analytics", "dashboard"]
+      +indexes:
+        - type: btree
+          columns: ['activity_date']
+
+# Seeds configuration  
+seeds:
+  tokyobeta_analytics:
+    +schema: seeds
+    +tags: ["seeds"]
+    asset_geocoding:
+      +column_types:
+        asset_id: integer
+        latitude: decimal(8,6)
+        longitude: decimal(9,6)
+
+# Test configurations
+tests:
+  +store_failures: true
+  +schema: test_results
+
+# Documentation
+docs-paths: ["docs"]
+
+# Hooks
+on-run-start:
+  - "{{ log('Starting dbt run for Tokyo Beta Analytics', info=True) }}"
+  
+on-run-end:
+  - "{{ log('Completed dbt run for Tokyo Beta Analytics', info=True) }}"
+  - "{{ dbt_utils.log_test_results() }}"
+
+# Variables
+vars:
+  # Lookback period for moveout notices (months)
+  moveout_notice_window_months: 24
+  
+  # Individual vs Corporate contract type mappings
+  corporate_contract_types: [2, 3, 4]  # From m_systems or contract_type field
+  
+  # Date range for active data (avoid historical test data)
+  min_valid_date: '2018-01-01'

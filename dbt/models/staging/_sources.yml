@@ -1,0 +1,139 @@
+# Source definitions for staging schema
+# These tables are loaded by AWS Glue from S3 SQL dumps
+
+version: 2
+
+sources:
+  - name: staging
+    description: Raw data loaded from daily SQL dumps via AWS Glue
+    database: tokyobeta
+    schema: staging
+    
+    tables:
+      - name: movings
+        description: Contract lifecycle data (move-ins, move-outs, renewals)
+        columns:
+          - name: id
+            description: Primary key - moving/contract ID
+            tests:
+              - unique
+              - not_null
+          - name: tenant_id
+            description: Foreign key to tenants table
+            tests:
+              - not_null
+          - name: apartment_id
+            description: Foreign key to apartments table  
+            tests:
+              - not_null
+          - name: room_id
+            description: Foreign key to rooms table
+            tests:
+              - not_null
+          - name: movein_date
+            description: Move-in date
+          - name: moveout_date
+            description: Moveout date (final rent date)
+          - name: moveout_plans_date
+            description: Actual moveout date
+          - name: moveout_date_integrated
+            description: Computed moveout date (COALESCE of moveout_plans_date, moveout_date)
+          - name: cancel_flag
+            description: Contract cancellation flag (0=active, 1=cancelled)
+            tests:
+              - accepted_values:
+                  values: [0, 1]
+          - name: is_moveout
+            description: Moveout completion flag (0=active, 1=completed)
+            tests:
+              - accepted_values:
+                  values: [0, 1]
+          - name: rent
+            description: Monthly rent amount
+          - name: movein_decided_date
+            description: Contract decision date
+          - name: original_movein_date
+            description: Original contract start date (for renewals)
+      
+      - name: tenants
+        description: Tenant demographics and contact information
+        columns:
+          - name: id
+            description: Primary key - tenant ID
+            tests:
+              - unique
+              - not_null
+          - name: last_name
+            description: Last name
+            tests:
+              - not_null
+          - name: first_name
+            description: First name
+          - name: gender_type
+            description: Gender (numeric code)
+          - name: birth_date
+            description: Date of birth
+          - name: age
+            description: Current age
+          - name: m_nationality_id
+            description: Foreign key to nationalities master
+          - name: nationality
+            description: Nationality text
+          - name: contract_type
+            description: Contract type (1=individual, 2/3=corporate)
+          - name: affiliation
+            description: Company/school name
+          - name: full_name
+            description: Full name (may contain string 'NULL')
+      
+      - name: apartments
+        description: Property/building master data
+        columns:
+          - name: id
+            description: Primary key - apartment ID
+            tests:
+              - unique
+              - not_null
+          - name: unique_number
+            description: Property ID (GUI)
+          - name: apartment_name
+            description: Property name (Japanese)
+            tests:
+              - not_null
+          - name: apartment_name_en
+            description: Property name (English)
+          - name: prefecture
+            description: Prefecture (都道府県)
+            tests:
+              - not_null
+          - name: municipality
+            description: Municipality (市区町村)
+          - name: address
+            description: Street address
+          - name: full_address
+            description: Complete address
+          - name: latitude
+            description: Latitude from Google Maps Geocoding API
+          - name: longitude
+            description: Longitude from Google Maps Geocoding API
+          - name: zip_code
+            description: Postal code
+          - name: room_count
+            description: Total number of rooms
+          - name: vacancy_room_count
+            description: Current vacant room count
+      
+      - name: rooms
+        description: Individual room data
+        columns:
+          - name: id
+            description: Primary key - room ID
+            tests:
+              - unique
+              - not_null
+          - name: apartment_id
+            description: Foreign key to apartments
+            tests:
+              - not_null
+          - name: room_no
+            description: Room number
