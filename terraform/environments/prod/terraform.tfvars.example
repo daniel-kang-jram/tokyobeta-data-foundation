@@ -1,0 +1,10 @@
+# Production Environment Variables
+# Copy this file to terraform.tfvars and fill in actual values
+# terraform.tfvars is gitignored for security
+
+# Email for monitoring alerts
+alert_email = "your-email@example.com"
+
+# S3 source configuration (default values shown)
+# s3_source_bucket = "jram-gghouse"
+# s3_source_prefix = "dumps/"

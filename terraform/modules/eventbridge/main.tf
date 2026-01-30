@@ -1,27 +1,6 @@
 # EventBridge Module
 # Creates EventBridge rule to trigger Glue ETL job daily
 
-variable "environment" {
-  description = "Environment name (dev/prod)"
-  type        = string
-}
-
-variable "glue_job_name" {
-  description = "Name of the Glue job to trigger"
-  type        = string
-}
-
-variable "glue_job_arn" {
-  description = "ARN of the Glue job"
-  type        = string
-}
-
-variable "schedule_expression" {
-  description = "Cron expression for daily trigger (JST 7:00 AM = UTC 22:00 previous day)"
-  type        = string
-  default     = "cron(0 22 * * ? *)"  # 7:00 AM JST = 10:00 PM UTC (UTC+9)
-}
-
 # IAM Role for EventBridge to invoke Glue
 resource "aws_iam_role" "eventbridge_glue" {
   name = "tokyobeta-${var.environment}-eventbridge-glue-role"
@@ -84,18 +63,3 @@ resource "aws_cloudwatch_event_target" "glue_job" {
   role_arn  = aws_iam_role.eventbridge_glue.arn
 }
 
-# Outputs
-output "rule_name" {
-  description = "Name of the EventBridge rule"
-  value       = aws_cloudwatch_event_rule.daily_etl_trigger.name
-}
-
-output "rule_arn" {
-  description = "ARN of the EventBridge rule"
-  value       = aws_cloudwatch_event_rule.daily_etl_trigger.arn
-}
-
-output "schedule_expression" {
-  description = "Schedule expression for the rule"
-  value       = aws_cloudwatch_event_rule.daily_etl_trigger.schedule_expression
-}

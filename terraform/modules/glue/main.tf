@@ -1,53 +1,6 @@
 # AWS Glue Module
 # Creates Glue crawler, ETL jobs, and data quality rulesets
 
-variable "environment" {
-  description = "Environment name (dev/prod)"
-  type        = string
-}
-
-variable "s3_source_bucket" {
-  description = "S3 bucket containing SQL dumps"
-  type        = string
-  default     = "jram-gghouse"
-}
-
-variable "s3_source_prefix" {
-  description = "S3 prefix for SQL dumps"
-  type        = string
-  default     = "dumps/"
-}
-
-variable "aurora_endpoint" {
-  description = "Aurora cluster endpoint"
-  type        = string
-}
-
-variable "aurora_database" {
-  description = "Aurora database name"
-  type        = string
-}
-
-variable "aurora_secret_arn" {
-  description = "ARN of Aurora credentials in Secrets Manager"
-  type        = string
-}
-
-variable "vpc_id" {
-  description = "VPC ID for Glue connection"
-  type        = string
-}
-
-variable "private_subnet_ids" {
-  description = "Private subnet IDs for Glue"
-  type        = list(string)
-}
-
-variable "security_group_id" {
-  description = "Security group for Glue connection"
-  type        = string
-}
-
 # IAM Role for Glue
 resource "aws_iam_role" "glue_service_role" {
   name = "tokyobeta-${var.environment}-glue-service-role"
@@ -273,23 +226,3 @@ resource "aws_glue_data_quality_ruleset" "movings" {
   }
 }
 
-# Outputs
-output "glue_job_name" {
-  description = "Name of the Glue ETL job"
-  value       = aws_glue_job.daily_etl.name
-}
-
-output "glue_role_arn" {
-  description = "ARN of the Glue service role"
-  value       = aws_iam_role.glue_service_role.arn
-}
-
-output "glue_connection_name" {
-  description = "Name of the Glue connection to Aurora"
-  value       = aws_glue_connection.aurora.name
-}
-
-output "catalog_database_staging" {
-  description = "Name of the Glue catalog staging database"
-  value       = aws_glue_catalog_database.staging.name
-}

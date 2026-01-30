@@ -1,26 +1,6 @@
 # Monitoring Module
 # Creates CloudWatch alarms and SNS topics for alerts
 
-variable "environment" {
-  description = "Environment name (dev/prod)"
-  type        = string
-}
-
-variable "glue_job_name" {
-  description = "Name of the Glue job to monitor"
-  type        = string
-}
-
-variable "aurora_cluster_id" {
-  description = "ID of the Aurora cluster to monitor"
-  type        = string
-}
-
-variable "alert_email" {
-  description = "Email address for alert notifications"
-  type        = string
-}
-
 # SNS Topic for alerts
 resource "aws_sns_topic" "etl_alerts" {
   name = "tokyobeta-${var.environment}-dashboard-etl-alerts"
@@ -130,18 +110,3 @@ resource "aws_cloudwatch_metric_alarm" "aurora_storage" {
   }
 }
 
-# Outputs
-output "sns_topic_arn" {
-  description = "ARN of the SNS alerts topic"
-  value       = aws_sns_topic.etl_alerts.arn
-}
-
-output "alarm_names" {
-  description = "Names of all CloudWatch alarms"
-  value = [
-    aws_cloudwatch_metric_alarm.glue_job_failures.alarm_name,
-    aws_cloudwatch_metric_alarm.glue_job_duration.alarm_name,
-    aws_cloudwatch_metric_alarm.aurora_cpu.alarm_name,
-    aws_cloudwatch_metric_alarm.aurora_storage.alarm_name
-  ]
-}

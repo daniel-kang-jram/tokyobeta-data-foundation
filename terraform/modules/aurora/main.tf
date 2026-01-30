@@ -1,49 +1,6 @@
 # Aurora MySQL Module
 # Creates Aurora MySQL cluster for analytics data warehouse
 
-variable "environment" {
-  description = "Environment name (dev/prod)"
-  type        = string
-}
-
-variable "vpc_id" {
-  description = "ID of the VPC"
-  type        = string
-}
-
-variable "private_subnet_ids" {
-  description = "IDs of private subnets for Aurora"
-  type        = list(string)
-}
-
-variable "security_group_id" {
-  description = "Security group ID for Aurora"
-  type        = string
-}
-
-variable "db_username" {
-  description = "Master username for Aurora"
-  type        = string
-}
-
-variable "db_password" {
-  description = "Master password for Aurora"
-  type        = string
-  sensitive   = true
-}
-
-variable "instance_class" {
-  description = "Instance class for Aurora"
-  type        = string
-  default     = "db.t4g.medium"
-}
-
-variable "instance_count" {
-  description = "Number of Aurora instances"
-  type        = number
-  default     = 2
-}
-
 # DB Subnet Group
 resource "aws_db_subnet_group" "aurora" {
   name       = "tokyobeta-${var.environment}-aurora-subnet-group"
@@ -155,28 +112,3 @@ resource "aws_rds_cluster_instance" "aurora" {
   }
 }
 
-# Outputs
-output "cluster_endpoint" {
-  description = "Writer endpoint for the Aurora cluster"
-  value       = aws_rds_cluster.aurora.endpoint
-}
-
-output "reader_endpoint" {
-  description = "Reader endpoint for the Aurora cluster"
-  value       = aws_rds_cluster.aurora.reader_endpoint
-}
-
-output "cluster_id" {
-  description = "ID of the Aurora cluster"
-  value       = aws_rds_cluster.aurora.id
-}
-
-output "database_name" {
-  description = "Name of the default database"
-  value       = aws_rds_cluster.aurora.database_name
-}
-
-output "port" {
-  description = "Port of the Aurora cluster"
-  value       = aws_rds_cluster.aurora.port
-}

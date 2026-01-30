@@ -1,23 +1,6 @@
 # VPC and Networking Module
 # Creates VPC, subnets, NAT gateway, and security groups for the data consolidation infrastructure
 
-variable "environment" {
-  description = "Environment name (dev/prod)"
-  type        = string
-}
-
-variable "vpc_cidr" {
-  description = "CIDR block for VPC"
-  type        = string
-  default     = "10.0.0.0/16"
-}
-
-variable "availability_zones" {
-  description = "Availability zones for subnet distribution"
-  type        = list(string)
-  default     = ["ap-northeast-1a", "ap-northeast-1c"]
-}
-
 # VPC
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
@@ -186,33 +169,3 @@ resource "aws_security_group" "lambda" {
   }
 }
 
-# Outputs
-output "vpc_id" {
-  description = "ID of the VPC"
-  value       = aws_vpc.main.id
-}
-
-output "private_subnet_ids" {
-  description = "IDs of private subnets"
-  value       = aws_subnet.private[*].id
-}
-
-output "public_subnet_ids" {
-  description = "IDs of public subnets"
-  value       = aws_subnet.public[*].id
-}
-
-output "aurora_security_group_id" {
-  description = "ID of Aurora security group"
-  value       = aws_security_group.aurora.id
-}
-
-output "lambda_security_group_id" {
-  description = "ID of Lambda security group"
-  value       = aws_security_group.lambda.id
-}
-
-output "nat_gateway_id" {
-  description = "ID of NAT Gateway"
-  value       = aws_nat_gateway.main.id
-}

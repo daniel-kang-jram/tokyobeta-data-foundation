@@ -18,13 +18,12 @@ terraform {
     region         = "ap-northeast-1"
     encrypt        = true
     dynamodb_table = "tokyobeta-terraform-locks"
-    profile        = "gghouse"
   }
 }
 
 provider "aws" {
-  region  = "ap-northeast-1"
-  profile = "gghouse"
+  region  = var.aws_region
+  profile = var.aws_profile
   
   default_tags {
     tags = {

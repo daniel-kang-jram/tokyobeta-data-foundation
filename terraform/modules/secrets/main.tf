@@ -1,17 +1,6 @@
 # Secrets Manager Module
 # Generates and stores Aurora MySQL credentials securely
 
-variable "environment" {
-  description = "Environment name (dev/prod)"
-  type        = string
-}
-
-variable "db_username" {
-  description = "Master username for Aurora"
-  type        = string
-  default     = "admin"
-}
-
 # Generate random password for Aurora
 resource "random_password" "aurora_password" {
   length  = 32
@@ -38,21 +27,4 @@ resource "aws_secretsmanager_secret_version" "aurora_credentials" {
     engine   = "mysql"
     port     = 3306
   })
-}
-
-# Outputs
-output "aurora_secret_arn" {
-  description = "ARN of the Aurora credentials secret"
-  value       = aws_secretsmanager_secret.aurora_credentials.arn
-}
-
-output "aurora_username" {
-  description = "Aurora master username"
-  value       = var.db_username
-}
-
-output "aurora_password" {
-  description = "Aurora master password (sensitive)"
-  value       = random_password.aurora_password.result
-  sensitive   = true
 }
