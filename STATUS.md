@@ -1,64 +1,58 @@
 # Implementation Status
 
-## ✅ Phase 0: Codebase & Terraform Setup - IN PROGRESS
+**Last Updated**: 2026-01-31 00:50 JST  
+**Repository**: https://github.com/daniel-kang-jram/tokyobeta-data-foundation.git  
+**AWS Account**: gghouse (343881458651)
 
-### Completed
-- [x] Directory structure created
-- [x] Git repository initialized with remote: https://github.com/daniel-kang-jram/tokyobeta-data-foundation.git  
-- [x] `.gitignore` configured for Terraform, Python, secrets
-- [x] `README.md` with project overview
-- [x] `Makefile` with common commands
-- [x] Terraform backend bootstrap configuration (`terraform/bootstrap/`)
-- [x] Terraform backend config (`terraform/backend.tf`)
-- [x] Networking module (VPC, subnets, NAT, security groups)
+## ✅ Phase 0-1: Complete (100%)
 
-### AWS Profile Configuration
-**Important**: All Terraform configs now use `gghouse` profile (AWS account 343881458651) where:
-- EC2 cron job runs (`i-00523f387117d497b` / JRAM-GGH-EC2)
-- S3 dumps are stored (`s3://jram-gghouse/dumps/`)
+### Infrastructure Deployed
+- [x] VPC with public/private subnets + NAT gateway
+- [x] Aurora MySQL cluster (2 x db.t4g.medium) - **AVAILABLE**
+- [x] AWS Glue ETL job with VPC connection
+- [x] EventBridge → Lambda → Glue trigger (7:00 AM JST daily)
+- [x] CloudWatch alarms + SNS alerts
+- [x] Secrets Manager for credentials
 
-### Next Steps - Requires AWS SSO Login
+### Data Processing
+- [x] Glue ETL script uploaded to S3
+- [x] dbt project (4 models + 15 tests) uploaded to S3
+- [x] Security group fixed for Glue worker communication
 
-Before proceeding with Terraform deployment, you need to:
+### Current Status
+🟡 **Glue ETL Job Testing In Progress**
+- Job Run ID: `jr_96014afa8f34f36a2efd512dc4d7e733ea8392b77bedc1015cecc19822e524cf`
+- Processing: 940MB SQL dump (81 tables)
+- Expected duration: 15-20 minutes
 
-```bash
-# 1. Login to AWS SSO for gghouse profile
-aws sso login --profile gghouse
+## Architecture Deployed
 
-# 2. Verify credentials
-aws sts get-caller-identity --profile gghouse
-
-# 3. Deploy Terraform backend (one-time)
-cd terraform/bootstrap
-terraform init
-terraform apply
-
-# 4. Continue with remaining Terraform modules
+**AWS Glue + dbt** (enterprise-grade):
+```
+S3 dumps → Glue ETL → Aurora Staging → dbt → Aurora Analytics → QuickSight
 ```
 
-### Pending (Phase 0)
-- [ ] Complete remaining Terraform modules:
-  - [ ] `secrets` - Secrets Manager for Aurora credentials
-  - [ ] `aurora` - Aurora MySQL cluster
-  - [ ] `lambda` - Lambda ETL function
-  - [ ] `eventbridge` - Daily trigger  
-  - [ ] `monitoring` - CloudWatch alarms & SNS
-  - [ ] `quicksight` - Data source configuration
-- [ ] Lambda skeleton structure
-- [ ] SQL schema files
-- [ ] Scripts (init_db.sh, seed_geocoding.sh, etc.)
+**Key Resources**:
+- Aurora: `tokyobeta-prod-aurora-cluster.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com`
+- Glue Job: `tokyobeta-prod-daily-etl`
+- VPC: `vpc-0973d4c359b12f522`
+- SNS Topic: `tokyobeta-prod-dashboard-etl-alerts`
 
-## Pending Phases
+## Next Steps
 
-- **Phase 1**: Infrastructure Deployment (requires AWS credentials)
-- **Phase 2**: ETL Development  
-- **Phase 3**: QuickSight Setup
-- **Phase 4**: Dashboard Development
-- **Phase 5**: Testing & Deployment
-- **Phase 6**: Operations & Monitoring
+### After Glue Job Completes
+1. Verify 81 tables loaded to `staging` schema
+2. Verify 4 tables created in `analytics` schema
+3. Run dbt tests to validate data quality
 
-## Current Blocker
+### Remaining (QuickSight Dashboards)
+- [ ] Enable QuickSight Enterprise
+- [ ] Connect QuickSight to Aurora
+- [ ] Build 4 dashboards (Executive, Contracts, Moveouts, Tokyo Map)
+- [ ] Invite 4 organizations
 
-🔴 **Awaiting AWS SSO authentication for `gghouse` profile**
-
-Once authenticated, the implementation will continue automatically.
+## Issues Fixed
+- ✅ Aurora engine version (3.05.2 → 3.11.1)
+- ✅ EventBridge Glue trigger (added Lambda wrapper)
+- ✅ Glue VPC connection configuration  
+- ✅ Security group self-referencing ingress
