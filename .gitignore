@@ -61,8 +61,7 @@ tmp/
 .cache/
 
 # Data samples (large SQL dumps)
-data/samples/*.sql
-data/samples/*.dump
+data/
 
 # AWS
 .aws/credentials
@@ -78,4 +77,3 @@ htmlcov/
 # Documentation build
 docs/_build/
 docs/.doctrees/
-data/samples/*.sql
