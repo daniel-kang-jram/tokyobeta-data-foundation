@@ -72,12 +72,13 @@ module "aurora" {
   
   environment        = local.environment
   vpc_id             = module.networking.vpc_id
-  private_subnet_ids = module.networking.private_subnet_ids
+  subnet_ids         = module.networking.public_subnet_ids
   security_group_id  = module.networking.aurora_security_group_id
   db_username        = module.secrets.aurora_username
   db_password        = module.secrets.aurora_password
   instance_class     = "db.t4g.medium"
   instance_count     = 2
+  publicly_accessible = true
   
   backup_retention_period     = 7
   enable_deletion_protection  = true

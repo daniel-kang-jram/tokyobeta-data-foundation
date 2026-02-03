@@ -3,11 +3,11 @@
 
 # DB Subnet Group
 resource "aws_db_subnet_group" "aurora" {
-  name       = "tokyobeta-${var.environment}-aurora-subnet-group"
-  subnet_ids = var.private_subnet_ids
+  name       = "tokyobeta-${var.environment}-aurora-public-subnet-group"
+  subnet_ids = var.subnet_ids
 
   tags = {
-    Name        = "tokyobeta-${var.environment}-aurora-subnet-group"
+    Name        = "tokyobeta-${var.environment}-aurora-public-subnet-group"
     Environment = var.environment
   }
 }
@@ -63,7 +63,7 @@ resource "aws_db_parameter_group" "aurora" {
 
 # Aurora Cluster
 resource "aws_rds_cluster" "aurora" {
-  cluster_identifier              = "tokyobeta-${var.environment}-aurora-cluster"
+  cluster_identifier              = "tokyobeta-${var.environment}-aurora-cluster-public"
   engine                          = "aurora-mysql"
   engine_version                  = "8.0.mysql_aurora.3.11.1"
   database_name                   = "tokyobeta"
@@ -85,7 +85,7 @@ resource "aws_rds_cluster" "aurora" {
   deletion_protection = var.environment == "prod" ? true : false
 
   tags = {
-    Name        = "tokyobeta-${var.environment}-aurora-cluster"
+    Name        = "tokyobeta-${var.environment}-aurora-cluster-public"
     Environment = var.environment
   }
 }
@@ -93,7 +93,7 @@ resource "aws_rds_cluster" "aurora" {
 # Aurora Cluster Instances
 resource "aws_rds_cluster_instance" "aurora" {
   count              = var.instance_count
-  identifier         = "tokyobeta-${var.environment}-aurora-instance-${count.index + 1}"
+  identifier         = "tokyobeta-${var.environment}-aurora-public-instance-${count.index + 1}"
   cluster_identifier = aws_rds_cluster.aurora.id
   instance_class     = var.instance_class
   engine             = aws_rds_cluster.aurora.engine
@@ -101,13 +101,13 @@ resource "aws_rds_cluster_instance" "aurora" {
   
   db_parameter_group_name = aws_db_parameter_group.aurora.name
   
-  publicly_accessible = false
+  publicly_accessible = var.publicly_accessible
   
   performance_insights_enabled    = true
   performance_insights_retention_period = 7
 
   tags = {
-    Name        = "tokyobeta-${var.environment}-aurora-instance-${count.index + 1}"
+    Name        = "tokyobeta-${var.environment}-aurora-public-instance-${count.index + 1}"
     Environment = var.environment
   }
 }

@@ -10,8 +10,8 @@ variable "vpc_id" {
   type        = string
 }
 
-variable "private_subnet_ids" {
-  description = "IDs of private subnets for Aurora"
+variable "subnet_ids" {
+  description = "IDs of subnets for Aurora"
   type        = list(string)
 }
 
@@ -51,6 +51,12 @@ variable "instance_count" {
     condition     = var.instance_count >= 1 && var.instance_count <= 15
     error_message = "Instance count must be between 1 and 15"
   }
+}
+
+variable "publicly_accessible" {
+  description = "Whether Aurora instances are publicly accessible"
+  type        = bool
+  default     = false
 }
 
 variable "backup_retention_period" {
