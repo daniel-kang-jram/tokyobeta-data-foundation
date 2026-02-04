@@ -180,16 +180,15 @@ sources:
           - name: nationality_name
             description: Nationality name (English)
       
-      # - name: inquiries
-      #   description: Customer inquiry records (問い合わせ)
-      #   NOTE: Table not yet loaded in staging schema
-      #   columns:
-      #     - name: id
-      #       description: Primary key - inquiry ID
-      #       tests:
-      #         - unique
-      #         - not_null
-      #     - name: created_at
-      #       description: Inquiry submission timestamp
-      #       tests:
-      #         - not_null
+      - name: inquiries
+        description: Customer inquiry records (問い合わせ)
+        columns:
+          - name: id
+            description: Primary key - inquiry ID
+            tests:
+              - unique
+              - not_null
+          - name: created_at
+            description: Inquiry submission timestamp
+            tests:
+              - not_null
