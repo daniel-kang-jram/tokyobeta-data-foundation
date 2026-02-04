@@ -2,7 +2,7 @@
   config(
     materialized='view',
     schema='silver',
-    enabled=false  -- Disabled until inquiries table is added to staging
+    enabled=true
   )
 }}
 
