@@ -12,11 +12,22 @@
 -- Gold Layer: Daily Activity Summary
 -- Aggregates daily property management activities by individual/corporate tenant type
 -- グラニュラリティ: Daily
--- データ: 申し込み, 契約締結, 確定入居者, 確定退去者, 稼働室数増減 (by 個人 and 法人)
+-- データ: 問い合わせ, 申し込み, 契約締結, 確定入居者, 確定退去者, 稼働室数増減 (by 個人 and 法人)
 
-WITH applications AS (
-    -- 申し込み/問い合わせ: Applications/Inquiries (using tenant registration date as proxy)
-    -- NOTE: This serves as combined metric until inquiries table is added to staging
+WITH inquiries AS (
+    -- 問い合わせ: Customer inquiries by date
+    SELECT
+        inquiry_date as activity_date,
+        'individual' as tenant_type,  -- Default to individual
+        COUNT(*) as inquiry_count
+    FROM {{ ref('stg_inquiries') }}
+    WHERE inquiry_date IS NOT NULL
+      AND inquiry_date >= '{{ var('min_valid_date') }}'
+    GROUP BY inquiry_date
+),
+
+applications AS (
+    -- 申し込み: Applications (tenant registration date)
     SELECT
         DATE(created_at) as activity_date,
         tenant_type,
@@ -69,7 +80,8 @@ date_spine AS (
         activity_date,
         tenant_type
     FROM (
-        SELECT activity_date, tenant_type FROM applications
+        SELECT activity_date, tenant_type FROM inquiries
+        UNION SELECT activity_date, tenant_type FROM applications
         UNION SELECT activity_date, tenant_type FROM contracts_signed
         UNION SELECT activity_date, tenant_type FROM confirmed_movein
         UNION SELECT activity_date, tenant_type FROM confirmed_moveout
@@ -80,7 +92,8 @@ final AS (
     SELECT
         ds.activity_date,
         ds.tenant_type,
-        COALESCE(app.application_count, 0) as applications_count,     -- 申し込み (proxy for 問い合わせ too)
+        COALESCE(inq.inquiry_count, 0) as inquiries_count,            -- 問い合わせ
+        COALESCE(app.application_count, 0) as applications_count,     -- 申し込み
         COALESCE(cs.contract_signed_count, 0) as contracts_signed_count,  -- 契約締結
         COALESCE(mi.movein_count, 0) as confirmed_moveins_count,      -- 確定入居者
         COALESCE(mo.moveout_count, 0) as confirmed_moveouts_count,    -- 確定退去者
@@ -88,6 +101,9 @@ final AS (
         CURRENT_TIMESTAMP as created_at,
         CURRENT_TIMESTAMP as updated_at
     FROM date_spine ds
+    LEFT JOIN inquiries inq
+        ON ds.activity_date = inq.activity_date
+        AND ds.tenant_type = inq.tenant_type
     LEFT JOIN applications app
         ON ds.activity_date = app.activity_date
         AND ds.tenant_type = app.tenant_type
