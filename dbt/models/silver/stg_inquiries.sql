@@ -1,12 +1,14 @@
 {{
   config(
     materialized='view',
-    schema='silver'
+    schema='silver',
+    enabled=false  -- Disabled until inquiries table is added to staging
   )
 }}
 
 -- Silver Layer: Cleaned customer inquiries (問い合わせ)
 -- Transforms raw inquiry data for analytics
+-- NOTE: Currently disabled as inquiries table is not loaded in staging schema
 
 SELECT
     i.id as inquiry_id,
