@@ -1,0 +1,19 @@
+code,label_ja,label_en
+1,製造業,Manufacturing
+2,建設業,Construction
+3,情報通信業,Information Technology
+4,運輸業,Transportation
+5,卸売業,Wholesale
+6,小売業,Retail
+7,金融業,Finance
+8,不動産業,Real Estate
+9,飲食業,Food Service
+10,医療福祉,Healthcare
+11,教育学習支援,Education
+12,サービス業,Services
+13,公務,Public Service
+14,農林漁業,Agriculture
+15,電気ガス,Utilities
+16,その他,Other
+17,学生,Student
+18,無職,Unemployed

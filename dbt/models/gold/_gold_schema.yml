@@ -1,0 +1,100 @@
+version: 2
+
+models:
+  - name: daily_activity_summary
+    description: Daily aggregated property management activities by tenant type
+    config:
+      schema: gold
+    columns:
+      - name: activity_date
+        description: Activity date
+        tests:
+          - not_null
+      - name: tenant_type
+        description: Individual or corporate
+        tests:
+          - accepted_values:
+              values: ['individual', 'corporate']
+      - name: applications_count
+        description: Application count (申し込み)
+      - name: contracts_signed_count
+        description: Contracts signed count (契約締結)
+      - name: confirmed_moveins_count
+        description: Confirmed move-ins count (確定入居者)
+      - name: confirmed_moveouts_count
+        description: Confirmed move-outs count (確定退去者)
+      - name: net_occupancy_delta
+        description: Net change in occupied rooms (稼働室数増減)
+  
+  - name: new_contracts
+    description: New contract records with full demographics and geolocation
+    config:
+      schema: gold
+    columns:
+      - name: contract_id
+        description: Contract ID
+        tests:
+          - unique
+          - not_null
+      - name: asset_id_hj
+        description: Property ID
+        tests:
+          - not_null
+      - name: contract_date
+        description: Contract signing date
+        tests:
+          - not_null
+      - name: latitude
+        description: Property latitude
+        tests:
+          - not_null
+      - name: longitude
+        description: Property longitude
+        tests:
+          - not_null
+  
+  - name: moveouts
+    description: Completed moveout records with full contract history
+    config:
+      schema: gold
+    columns:
+      - name: contract_id
+        description: Contract ID
+        tests:
+          - unique
+          - not_null
+      - name: asset_id_hj
+        description: Property ID
+        tests:
+          - not_null
+      - name: moveout_date
+        description: Moveout date
+        tests:
+          - not_null
+      - name: latitude
+        description: Property latitude
+        tests:
+          - not_null
+      - name: longitude
+        description: Property longitude
+        tests:
+          - not_null
+  
+  - name: moveout_notices
+    description: Moveout notices with 24-month rolling window
+    config:
+      schema: gold
+    columns:
+      - name: contract_id
+        description: Contract ID
+        tests:
+          - unique
+          - not_null
+      - name: asset_id_hj
+        description: Property ID
+        tests:
+          - not_null
+      - name: notice_received_date
+        description: Date moveout notice was received
+        tests:
+          - not_null

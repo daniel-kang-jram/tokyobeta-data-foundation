@@ -1,0 +1,127 @@
+version: 2
+
+models:
+  - name: stg_movings
+    description: Cleaned contract lifecycle data with semantic code labels
+    config:
+      schema: silver
+    columns:
+      - name: moving_id
+        description: Primary key - contract/moving ID
+        tests:
+          - unique
+          - not_null
+      - name: tenant_id
+        description: Foreign key to tenants
+        tests:
+          - not_null
+      - name: apartment_id
+        description: Foreign key to apartments
+        tests:
+          - not_null
+      - name: room_id
+        description: Foreign key to rooms
+        tests:
+          - not_null
+      - name: tenant_type
+        description: Individual or corporate classification
+        tests:
+          - accepted_values:
+              values: ['individual', 'corporate']
+      - name: is_valid_contract
+        description: Contract is active and not cancelled
+      - name: is_completed_moveout
+        description: Moveout has been completed
+  
+  - name: stg_tenants
+    description: Cleaned tenant demographics with semantic labels
+    config:
+      schema: silver
+    columns:
+      - name: tenant_id
+        description: Primary key - tenant ID
+        tests:
+          - unique
+          - not_null
+      - name: gender
+        description: Gender label (English)
+      - name: age
+        description: Current age (calculated from birth_date if available)
+      - name: nationality
+        description: Nationality name
+      - name: tenant_status_en
+        description: Current tenant status (English label)
+      - name: is_active_lease
+        description: Flag indicating tenant has active lease (status 7,9,10,13)
+  
+  - name: stg_apartments
+    description: Cleaned property data with validated geolocation
+    config:
+      schema: silver
+    columns:
+      - name: apartment_id
+        description: Primary key - apartment ID
+        tests:
+          - unique
+          - not_null
+      - name: asset_id_hj
+        description: Property ID from GUI system (AssetID_HJ)
+        tests:
+          - not_null
+      - name: apartment_name
+        description: Property name (Japanese)
+        tests:
+          - not_null
+      - name: prefecture
+        description: Prefecture
+        tests:
+          - not_null
+      - name: latitude
+        description: Validated latitude (Tokyo bounds 35.0-36.0)
+      - name: longitude
+        description: Validated longitude (Tokyo bounds 139.0-140.5)
+  
+  - name: stg_rooms
+    description: Cleaned room data
+    config:
+      schema: silver
+    columns:
+      - name: room_id
+        description: Primary key - room ID
+        tests:
+          - unique
+          - not_null
+      - name: apartment_id
+        description: Foreign key to apartments
+        tests:
+          - not_null
+      - name: room_number
+        description: Room number
+  
+  - name: int_contracts
+    description: Denormalized contract fact table - single source of truth for all analytics
+    config:
+      schema: silver
+    columns:
+      - name: contract_id
+        description: Primary key - contract ID
+        tests:
+          - unique
+          - not_null
+      - name: asset_id_hj
+        description: Property ID (AssetID_HJ)
+        tests:
+          - not_null
+      - name: tenant_type
+        description: Individual or corporate classification
+        tests:
+          - accepted_values:
+              values: ['individual', 'corporate']
+      - name: latitude
+        description: Property latitude
+      - name: longitude
+        description: Property longitude
+      - name: contract_date
+        description: Contract signing date (契約締結日)
+      - name: moveout_date
+        description: Integrated moveout date (退去日)

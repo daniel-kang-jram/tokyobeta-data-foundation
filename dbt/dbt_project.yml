@@ -24,23 +24,26 @@ clean-targets:
 # Model configurations
 models:
   tokyobeta_analytics:
-    # Staging models (ephemeral or views)
+    # Staging models (sources from bronze/raw data)
     staging:
       +materialized: view
       +schema: staging
-      +tags: ["staging"]
+      +tags: ["staging", "bronze"]
     
-    # Intermediate models (views for debugging)
-    intermediate:
+    # Silver layer (cleaned and enriched data)
+    silver:
       +materialized: view
-      +schema: intermediate
-      +tags: ["intermediate"]
+      +schema: silver
+      +tags: ["silver", "intermediate"]
+      # int_* models are tables for performance
+      int_contracts:
+        +materialized: table
     
-    # Analytics models (tables for QuickSight)
-    analytics:
+    # Gold layer (BI-ready analytics tables)
+    gold:
       +materialized: table
-      +schema: analytics
-      +tags: ["analytics", "dashboard"]
+      +schema: gold
+      +tags: ["gold", "dashboard"]
       +indexes:
         - type: btree
           columns: ['activity_date']
@@ -49,7 +52,41 @@ models:
 seeds:
   tokyobeta_analytics:
     +schema: seeds
-    +tags: ["seeds"]
+    +tags: ["seeds", "reference"]
+    # Code mapping seeds
+    code_gender:
+      +column_types:
+        code: integer
+        label_ja: varchar(50)
+        label_en: varchar(50)
+    code_tenant_status:
+      +column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+        is_active_lease: integer
+    code_contract_type:
+      +column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+        tenant_type: varchar(20)
+    code_personal_identity:
+      +column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+    code_affiliation_type:
+      +column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+    code_moveout_reason:
+      +column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+    # Legacy geocoding seed (if exists)
     asset_geocoding:
       +column_types:
         asset_id: integer

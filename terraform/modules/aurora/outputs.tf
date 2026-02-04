@@ -5,6 +5,11 @@ output "cluster_endpoint" {
   value       = aws_rds_cluster.aurora.endpoint
 }
 
+output "public_cluster_endpoint" {
+  description = "Writer endpoint for the public Aurora cluster"
+  value       = aws_rds_cluster.aurora.endpoint
+}
+
 output "reader_endpoint" {
   description = "Reader endpoint for the Aurora cluster"
   value       = aws_rds_cluster.aurora.reader_endpoint

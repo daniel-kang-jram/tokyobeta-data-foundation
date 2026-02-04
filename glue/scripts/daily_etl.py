@@ -4,6 +4,7 @@ Downloads latest SQL dump from S3, parses it, and loads into Aurora staging sche
 Then triggers dbt to transform staging → analytics.
 """
 
+import gzip
 import sys
 import boto3
 import json
@@ -40,6 +41,58 @@ job.init(args['JOB_NAME'], args)
 s3 = boto3.client('s3')
 secretsmanager = boto3.client('secretsmanager')
 
+def normalize_statement(stmt: str) -> str:
+    """Normalize SQL statement and skip session-level commands."""
+    stmt = stmt.strip()
+    if not stmt:
+        return ""
+    if re.match(r"^(SET|LOCK TABLES|UNLOCK TABLES)", stmt, re.IGNORECASE):
+        return ""
+    if stmt.upper().startswith("CREATE DATABASE") or stmt.upper().startswith("USE "):
+        return ""
+    return stmt
+
+def iter_sql_statements(lines):
+    """Yield SQL statements without corrupting inline data."""
+    statements = []
+    buffer = []
+    in_block_comment = False
+
+    for line in lines:
+        stripped = line.strip()
+        if in_block_comment:
+            if "*/" in stripped:
+                in_block_comment = False
+            continue
+        if stripped.startswith("/*"):
+            if not stripped.endswith("*/"):
+                in_block_comment = True
+            continue
+        if stripped.startswith("--"):
+            continue
+
+        buffer.append(line)
+        if stripped.endswith(";"):
+            raw_stmt = "".join(buffer)
+            buffer = []
+            stmt = normalize_statement(raw_stmt)
+            if stmt:
+                statements.append(stmt)
+
+    if buffer:
+        stmt = normalize_statement("".join(buffer))
+        if stmt:
+            statements.append(stmt)
+
+    return statements
+
+def extract_table_name(stmt: str) -> str | None:
+    """Extract table name from CREATE TABLE or INSERT INTO."""
+    match = re.match(r"^(CREATE TABLE|INSERT INTO)\s+`?(\w+)`?", stmt, re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(2)
+
 def get_latest_dump_key():
     """Find the most recent SQL dump file in S3."""
     response = s3.list_objects_v2(
@@ -53,8 +106,11 @@ def get_latest_dump_key():
     # Sort by LastModified descending
     files = sorted(response['Contents'], key=lambda x: x['LastModified'], reverse=True)
     
-    # Filter for gghouse_YYYYMMDD.sql pattern
-    sql_files = [f for f in files if re.match(r'.*gghouse_\d{8}\.sql$', f['Key'])]
+    # Filter for gghouse_YYYYMMDD.sql or .sql.gz pattern
+    sql_files = [
+        f for f in files
+        if re.match(r'.*gghouse_\d{8}\.sql(\.gz)?$', f['Key'])
+    ]
     
     if not sql_files:
         raise ValueError("No SQL dump files matching pattern gghouse_YYYYMMDD.sql found")
@@ -70,19 +126,21 @@ def get_aurora_credentials():
     return secret['username'], secret['password']
 
 def download_and_parse_dump(s3_key):
-    """Download SQL dump from S3 and return as string."""
+    """Download SQL dump from S3 and return local path."""
     local_path = f"/tmp/{s3_key.split('/')[-1]}"
     
     print(f"Downloading {s3_key} to {local_path}...")
     s3.download_file(args['S3_SOURCE_BUCKET'], s3_key, local_path)
-    
-    with open(local_path, 'r', encoding='utf-8') as f:
-        sql_content = f.read()
-    
-    print(f"Downloaded {len(sql_content)} characters")
-    return sql_content, local_path
+    print(f"Downloaded to {local_path}")
+    return local_path
 
-def load_to_aurora_staging(sql_content):
+def open_dump_file(local_path):
+    """Open SQL dump file, supporting optional gzip compression."""
+    if local_path.endswith(".gz"):
+        return gzip.open(local_path, "rt", encoding="utf-8", errors="ignore")
+    return open(local_path, "r", encoding="utf-8", errors="ignore")
+
+def load_to_aurora_staging(dump_path):
     """Load SQL dump into Aurora staging schema."""
     username, password = get_aurora_credentials()
     
@@ -103,6 +161,8 @@ def load_to_aurora_staging(sql_content):
         cursor.execute("CREATE SCHEMA IF NOT EXISTS analytics")
         cursor.execute("CREATE SCHEMA IF NOT EXISTS seeds")
         cursor.execute("USE staging")
+        cursor.execute("SET SESSION sql_mode = 'ALLOW_INVALID_DATES'")
+        cursor.execute("SET NAMES utf8mb4")
         
         print("Schemas verified/created: staging, analytics, seeds")
         
@@ -118,38 +178,39 @@ def load_to_aurora_staging(sql_content):
         
         connection.commit()
         
-        # Split SQL dump into statements
-        # Remove comments and split by semicolon
-        sql_cleaned = re.sub(r'/\*.*?\*/', '', sql_content, flags=re.DOTALL)
-        sql_cleaned = re.sub(r'--.*$', '', sql_cleaned, flags=re.MULTILINE)
-        
-        statements = [s.strip() for s in sql_cleaned.split(';') if s.strip()]
-        
-        print(f"Executing {len(statements)} SQL statements...")
+        # Stream and execute SQL statements incrementally (900MB+ dump)
+        # Uses same buffering logic as local load_dump_key_tables_pymysql.py
+        print("Streaming and executing SQL statements...")
         
         executed = 0
-        for i, stmt in enumerate(statements):
-            if not stmt:
-                continue
-            
-            # Skip the original CREATE DATABASE and USE commands - we're already in staging
-            if stmt.upper().startswith('CREATE DATABASE') or stmt.upper().startswith('USE '):
-                continue
-            
-            try:
-                cursor.execute(stmt)
-                executed += 1
+        buffer = []
+        
+        with open_dump_file(dump_path) as dump_file:
+            for line in dump_file:
+                buffer.append(line)
                 
-                if executed % 100 == 0:
-                    print(f"Progress: {executed}/{len(statements)} statements executed")
-                    connection.commit()
-            except Exception as e:
-                print(f"Warning: Statement {i} failed: {str(e)[:200]}")
-                # Continue on errors (some statements may be incompatible)
-                continue
+                # Execute when we hit statement terminator (same as local script)
+                if line.rstrip().endswith(";"):
+                    raw_stmt = "".join(buffer)
+                    buffer = []
+                    stmt = normalize_statement(raw_stmt)
+                    
+                    if stmt:
+                        try:
+                            cursor.execute(stmt)
+                            executed += 1
+                            
+                            if executed % 100 == 0:
+                                print(f"Progress: {executed} statements executed")
+                                connection.commit()
+                        except Exception as e:
+                            table_name = extract_table_name(stmt)
+                            table_hint = f" table={table_name}" if table_name else ""
+                            print(f"Warning: Statement failed:{table_hint} {str(e)[:200]}")
+                            continue
         
         connection.commit()
-        print(f"Successfully executed {executed}/{len(statements)} statements")
+        print(f"Successfully executed {executed} statements")
         
         # Verify tables were created
         cursor.execute("""
@@ -252,10 +313,10 @@ def main():
     try:
         # Step 1: Find and download latest dump
         latest_key = get_latest_dump_key()
-        sql_content, local_path = download_and_parse_dump(latest_key)
+        local_path = download_and_parse_dump(latest_key)
         
         # Step 2: Load to Aurora staging
-        table_count, stmt_count = load_to_aurora_staging(sql_content)
+        table_count, stmt_count = load_to_aurora_staging(local_path)
         
         # Step 3: Run dbt transformations
         dbt_success = run_dbt_transformations()

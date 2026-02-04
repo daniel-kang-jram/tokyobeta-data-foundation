@@ -1,0 +1,11 @@
+code,label_ja,label_en,tenant_type
+0,未設定,(Not set),unknown
+1,一般,General,individual
+2,法人契約,Corporate Contract,corporate
+3,法人契約個人,Corporate Individual,corporate
+4,Airbnb1,Airbnb Account 1,unknown
+5,Airbnb2,Airbnb Account 2,unknown
+6,定期契約,Term-based Contract,individual
+7,一般保証人,General Guarantor,individual
+8,未設定,(Not set),unknown
+9,一般2,General 2,individual

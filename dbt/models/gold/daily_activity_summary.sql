@@ -1,6 +1,7 @@
 {{
   config(
     materialized='table',
+    schema='gold',
     indexes=[
       {'columns': ['activity_date'], 'type': 'btree'},
       {'columns': ['tenant_type'], 'type': 'btree'}
@@ -8,56 +9,56 @@
   )
 }}
 
--- Table 1: Daily Activity Summary
+-- Gold Layer: Daily Activity Summary
 -- Aggregates daily property management activities by individual/corporate tenant type
 -- グラニュラリティ: Daily
 -- データ: 申し込み, 契約締結, 確定入居者, 確定退去者, 稼働室数増減 (by 個人 and 法人)
 
 WITH applications AS (
     SELECT
-        DATE(m.created_at) as activity_date,
-        {{ is_corporate('m.moving_agreement_type') }} as tenant_type,
+        DATE(created_at) as activity_date,
+        tenant_type,
         COUNT(*) as application_count
-    FROM {{ source('staging', 'movings') }} m
-    WHERE m.created_at IS NOT NULL
-      AND m.created_at >= '{{ var('min_valid_date') }}'
-    GROUP BY DATE(m.created_at), tenant_type
+    FROM {{ ref('int_contracts') }}
+    WHERE created_at IS NOT NULL
+      AND created_at >= '{{ var('min_valid_date') }}'
+    GROUP BY DATE(created_at), tenant_type
 ),
 
 contracts_signed AS (
     SELECT
-        DATE(m.movein_decided_date) as activity_date,
-        {{ is_corporate('m.moving_agreement_type') }} as tenant_type,
+        contract_date as activity_date,
+        tenant_type,
         COUNT(*) as contract_signed_count
-    FROM {{ source('staging', 'movings') }} m
-    WHERE m.movein_decided_date IS NOT NULL
-      AND m.cancel_flag = 0
-      AND m.movein_decided_date >= '{{ var('min_valid_date') }}'
-    GROUP BY DATE(m.movein_decided_date), tenant_type
+    FROM {{ ref('int_contracts') }}
+    WHERE contract_date IS NOT NULL
+      AND is_valid_contract
+      AND contract_date >= '{{ var('min_valid_date') }}'
+    GROUP BY contract_date, tenant_type
 ),
 
 confirmed_movein AS (
     SELECT
-        DATE(m.movein_date) as activity_date,
-        {{ is_corporate('m.moving_agreement_type') }} as tenant_type,
+        contract_start_date as activity_date,
+        tenant_type,
         COUNT(*) as movein_count
-    FROM {{ source('staging', 'movings') }} m
-    WHERE m.movein_date IS NOT NULL
-      AND m.cancel_flag = 0
-      AND m.movein_date >= '{{ var('min_valid_date') }}'
-    GROUP BY DATE(m.movein_date), tenant_type
+    FROM {{ ref('int_contracts') }}
+    WHERE contract_start_date IS NOT NULL
+      AND is_valid_contract
+      AND contract_start_date >= '{{ var('min_valid_date') }}'
+    GROUP BY contract_start_date, tenant_type
 ),
 
 confirmed_moveout AS (
     SELECT
-        DATE({{ safe_moveout_date('m') }}) as activity_date,
-        {{ is_corporate('m.moving_agreement_type') }} as tenant_type,
+        moveout_date as activity_date,
+        tenant_type,
         COUNT(*) as moveout_count
-    FROM {{ source('staging', 'movings') }} m
-    WHERE {{ safe_moveout_date('m') }} IS NOT NULL
-      AND m.is_moveout = 1
-      AND DATE({{ safe_moveout_date('m') }}) >= '{{ var('min_valid_date') }}'
-    GROUP BY DATE({{ safe_moveout_date('m') }}), tenant_type
+    FROM {{ ref('int_contracts') }}
+    WHERE moveout_date IS NOT NULL
+      AND is_completed_moveout
+      AND moveout_date >= '{{ var('min_valid_date') }}'
+    GROUP BY moveout_date, tenant_type
 ),
 
 -- Generate all dates in the range

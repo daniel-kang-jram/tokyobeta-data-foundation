@@ -91,7 +91,7 @@ module "glue" {
   environment         = local.environment
   s3_source_bucket    = var.s3_source_bucket
   s3_source_prefix    = var.s3_source_prefix
-  aurora_endpoint     = module.aurora.cluster_endpoint
+  aurora_endpoint     = module.aurora.public_cluster_endpoint
   aurora_database     = module.aurora.database_name
   aurora_secret_arn   = module.secrets.aurora_secret_arn
   vpc_id              = module.networking.vpc_id

@@ -1,0 +1,19 @@
+code,label_ja,label_en,is_active_lease
+0,検討中,Under Consideration,0
+1,解約,Terminated,0
+2,内見予定,Scheduled Viewing,0
+3,内見済,Viewed,0
+4,仮予約,Tentative Reservation,1
+5,初期賃料,Initial Rent Deposit,0
+6,入居説明,Move-in Explanation,1
+7,入居,Move-in,1
+8,キャンセル,Canceled,0
+9,居住中,In Residence,1
+10,契約更新,Contract Renewal,1
+11,入居通知,Move-in Notice Received,1
+12,入居手続き,Move-in Procedure,1
+13,移動,Move,1
+14,退去通知,Move-out Notice Received,1
+15,退去予定,Expected Move-out,1
+16,メンテ待ち,Awaiting Maintenance,0
+17,退去済,Moved Out,0

@@ -1,0 +1,125 @@
+version: 2
+
+seeds:
+  - name: code_gender
+    description: Gender code mappings for tenant demographics
+    config:
+      schema: seeds
+      column_types:
+        code: integer
+        label_ja: varchar(50)
+        label_en: varchar(50)
+    columns:
+      - name: code
+        description: Gender type code from source system
+        tests:
+          - unique
+          - not_null
+      - name: label_ja
+        description: Japanese gender label
+      - name: label_en
+        description: English gender label
+  
+  - name: code_tenant_status
+    description: Tenant status code mappings
+    config:
+      schema: seeds
+      column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+        is_active_lease: integer
+    columns:
+      - name: code
+        description: Tenant status code (0-17)
+        tests:
+          - unique
+          - not_null
+      - name: label_ja
+        description: Japanese status label
+      - name: label_en
+        description: English status label
+      - name: is_active_lease
+        description: Flag indicating if status represents an active lease (7,9,10,13)
+  
+  - name: code_contract_type
+    description: Contract agreement type mappings
+    config:
+      schema: seeds
+      column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+        tenant_type: varchar(20)
+    columns:
+      - name: code
+        description: Contract type code from moving_agreement_type field
+        tests:
+          - unique
+          - not_null
+      - name: label_ja
+        description: Japanese contract type label
+      - name: label_en
+        description: English contract type label
+      - name: tenant_type
+        description: Tenant classification (individual or corporate)
+        tests:
+          - accepted_values:
+              values: ['individual', 'corporate']
+  
+  - name: code_personal_identity
+    description: Personal identification document type mappings
+    config:
+      schema: seeds
+      column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+    columns:
+      - name: code
+        description: Personal identity document code
+        tests:
+          - unique
+          - not_null
+      - name: label_ja
+        description: Japanese document type label
+      - name: label_en
+        description: English document type label
+  
+  - name: code_affiliation_type
+    description: Employment industry type mappings
+    config:
+      schema: seeds
+      column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+    columns:
+      - name: code
+        description: Industry/affiliation type code
+        tests:
+          - unique
+          - not_null
+      - name: label_ja
+        description: Japanese industry label
+      - name: label_en
+        description: English industry label
+  
+  - name: code_moveout_reason
+    description: Moveout reason code mappings
+    config:
+      schema: seeds
+      column_types:
+        code: integer
+        label_ja: varchar(100)
+        label_en: varchar(100)
+    columns:
+      - name: code
+        description: Moveout reason code
+        tests:
+          - unique
+          - not_null
+      - name: label_ja
+        description: Japanese reason label
+      - name: label_en
+        description: English reason label

@@ -6,8 +6,8 @@ output "vpc_id" {
 }
 
 output "aurora_cluster_endpoint" {
-  description = "Aurora cluster writer endpoint"
-  value       = module.aurora.cluster_endpoint
+  description = "Aurora cluster writer endpoint (public)"
+  value       = module.aurora.public_cluster_endpoint
 }
 
 output "aurora_reader_endpoint" {
@@ -66,11 +66,11 @@ output "deployment_instructions" {
      aws glue get-job-run --job-name ${module.glue.glue_job_name} --run-id <run-id> --profile gghouse
   
   7. Verify analytics tables:
-     mysql -h ${module.aurora.cluster_endpoint} -u admin -p tokyobeta -e "SHOW TABLES IN analytics"
+     mysql -h ${module.aurora.public_cluster_endpoint} -u admin -p tokyobeta -e "SHOW TABLES IN analytics"
   
   8. Set up QuickSight (see docs/QUICKSIGHT_SETUP.md)
   
-  Aurora endpoint: ${module.aurora.cluster_endpoint}
+  Aurora endpoint: ${module.aurora.public_cluster_endpoint}
   Glue job: ${module.glue.glue_job_name}
   Daily trigger: ${module.eventbridge.schedule_expression}
   
