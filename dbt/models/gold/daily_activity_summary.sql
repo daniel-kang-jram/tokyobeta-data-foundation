@@ -13,9 +13,23 @@
 -- Aggregates daily property management activities by individual/corporate tenant type
 -- グラニュラリティ: Daily
 -- データ: 問い合わせ, 申し込み, 契約締結, 確定入居者, 確定退去者, 稼働室数増減 (by 個人 and 法人)
+--
+-- METRIC DEFINITIONS:
+-- 1. inquiries_count (問い合わせ): Customer inquiries - **HISTORICAL DATA ONLY** (2018-2023)
+-- 2. applications_count (申し込み): Tentative Reservations (status=4: 仮予約) by tenant creation date
+-- 3. contracts_signed_count (契約締結): Contracts signed by contract_date (契約締結日)
+-- 4. confirmed_moveins_count (確定入居者): Move-ins by contract_start_date (入居日)
+-- 5. confirmed_moveouts_count (確定退去者): Move-outs by moveout_date (退去日)  
+-- 6. net_occupancy_delta (稼働室数増減): Move-ins minus move-outs
+--
+-- DATA QUALITY NOTES:
+-- - Inquiries table contains only historical data (2018-2023), not actively updated
+-- - Applications only count status=4 (Tentative Reservation), not all new tenants
+-- - Contract dates use actual dates from movings table, validated against is_valid_contract flag
 
 WITH inquiries AS (
     -- 問い合わせ: Customer inquiries by date
+    -- NOTE: Historical data only (2018-2023), not actively collected
     SELECT
         inquiry_date as activity_date,
         'individual' as tenant_type,  -- Default to individual
@@ -27,18 +41,26 @@ WITH inquiries AS (
 ),
 
 applications AS (
-    -- 申し込み: Applications (tenant registration date)
+    -- 申し込み: Tentative Reservations (status=4: 仮予約)
+    -- Counts DISTINCT tenants with "Tentative Reservation" status by creation date
     SELECT
-        DATE(created_at) as activity_date,
-        tenant_type,
-        COUNT(*) as application_count
-    FROM {{ ref('int_contracts') }}
-    WHERE created_at IS NOT NULL
-      AND created_at >= '{{ var('min_valid_date') }}'
-    GROUP BY DATE(created_at), tenant_type
+        DATE(t.created_at) as activity_date,
+        CASE 
+            WHEN t.corporate_name IS NOT NULL THEN 'corporate'
+            ELSE 'individual'
+        END as tenant_type,
+        COUNT(DISTINCT t.id) as application_count
+    FROM {{ source('staging', 'tenants') }} t
+    WHERE t.status = 4  -- Status 4 = Tentative Reservation (仮予約)
+      AND t.created_at IS NOT NULL
+      AND t.created_at >= '{{ var('min_valid_date') }}'
+    GROUP BY DATE(t.created_at), tenant_type
 ),
 
 contracts_signed AS (
+    -- 契約締結: Contracts signed (契約締結日)
+    -- Counts contracts by their contract_date (movein_decided_date)
+    -- Only includes valid contracts (is_valid_contract = true)
     SELECT
         contract_date as activity_date,
         tenant_type,
@@ -51,6 +73,9 @@ contracts_signed AS (
 ),
 
 confirmed_movein AS (
+    -- 確定入居者: Confirmed move-ins (契約開始日/入居日)
+    -- Counts contracts by their contract_start_date (actual move-in date)
+    -- Only includes valid contracts
     SELECT
         contract_start_date as activity_date,
         tenant_type,
@@ -63,6 +88,9 @@ confirmed_movein AS (
 ),
 
 confirmed_moveout AS (
+    -- 確定退去者: Confirmed move-outs (退去日)
+    -- Counts contracts by their moveout_date (actual move-out date)
+    -- Only includes completed move-outs (is_completed_moveout = true)
     SELECT
         moveout_date as activity_date,
         tenant_type,
