@@ -1,15 +1,15 @@
-# Tokyo Beta - Real Estate Analytics Dashboard
+# Tokyo Beta - Real Estate Analytics Platform
 
-**Status**: ✅ ETL Operational | 📊 QuickSight Ready  
-**Last Updated**: 2026-01-31
+**Status**: ✅ Production | 📊 Medallion Architecture | 🔒 Robust Backup Strategy  
+**Last Updated**: 2026-02-05
 
-End-to-end data pipeline from RDS SQL dumps to QuickSight dashboards for property management analytics.
+End-to-end data pipeline from property management system to QuickSight dashboards, processing daily SQL dumps through a medallion architecture (Bronze → Silver → Gold) with automated backups and Point-in-Time Recovery.
 
 ---
 
-## 🎯 Project Overview
+## 🎯 Overview
 
-This system processes **daily SQL dumps** from the Nazca property management system (PMS), transforms them into analytics-ready tables in **Aurora MySQL**, and powers interactive dashboards in **Amazon QuickSight**. 
+This system automates the transformation of **daily SQL dumps** from the Nazca property management system into analytics-ready tables in **Aurora MySQL**, powering interactive dashboards in **Amazon QuickSight** for real estate portfolio management.
 
 **Stakeholders**: 
 - **Warburg Pincus** (PE Investor)
@@ -21,31 +21,37 @@ This system processes **daily SQL dumps** from the Nazca property management sys
 
 ## 🏗️ Architecture
 
+### Data Flow
+
 ```
 Daily at 7:00 AM JST
 
 S3 Bucket (jram-gghouse/dumps/)
-  │  gghouse_YYYYMMDD.sql (897MB)
+  │  gghouse_YYYYMMDD.sql (~945MB)
   │
   ↓ Triggered by EventBridge
   
 AWS Glue ETL Job (Python + dbt)
-  │  - Download SQL dump from S3
-  │  - Load 80 tables to staging schema
-  │  - Run dbt transformations (4 models)
-  │  - Data quality tests (59/60 pass)
+  │  1. Download SQL dump from S3
+  │  2. Load 81 tables to staging schema (Bronze)
+  │  3. Run dbt transformations (Silver + Gold)
+  │  4. Data quality tests (90.8% pass rate)
   │
-  ↓ 9.7 minutes execution
+  ↓ ~4 minutes execution
   
 Aurora MySQL Cluster (db.t4g.medium)
-  ├── staging (80 tables, raw data)
-  └── analytics (4 tables, BI-ready)
-      ├── daily_activity_summary  (2,965 rows)
-      ├── new_contracts           (17,573 rows)
-      ├── moveouts                (15,768 rows)
-      └── moveout_notices         (3,791 rows)
+  ├── staging (81 tables) - Bronze: Raw data
+  ├── silver (6 tables) - Silver: Cleaned & standardized
+  │   ├── stg_apartments, stg_rooms, stg_tenants
+  │   ├── stg_movings, stg_inquiries
+  │   └── int_contracts (59,118 rows)
+  └── gold (4 tables) - Gold: Business analytics
+      ├── daily_activity_summary  (5,624 rows)
+      ├── new_contracts           (16,508 rows)
+      ├── moveouts                (15,262 rows)
+      └── moveout_notices         (3,635 rows)
   
-  ↓ QuickSight VPC Connection
+  ↓ QuickSight VPC Connection (Optional)
   
 Amazon QuickSight (Enterprise)
   ├── 4 Datasets (Direct Query or SPICE)
@@ -56,23 +62,57 @@ Amazon QuickSight (Enterprise)
       └── Tokyo Map View (Geospatial)
 ```
 
+### Medallion Architecture (Bronze-Silver-Gold)
+
+**Bronze Layer (Staging)**:
+- Raw data from SQL dumps
+- 81 tables loaded as-is
+- No transformations
+- Historical snapshot preserved
+
+**Silver Layer (Cleaned)**:
+- Standardized naming conventions
+- Data type conversions
+- NULL handling and cleaning
+- Code-to-semantic mappings via seeds
+- Denormalized fact table (`int_contracts`)
+
+**Gold Layer (Analytics)**:
+- Business-ready aggregations
+- Pre-calculated metrics
+- Optimized for BI consumption
+- Daily activity summaries
+- Demographics and geolocation
+
 ---
 
 ## ✨ Key Features
 
 ### Automated ETL Pipeline
 - ✅ **Daily processing** at 7:00 AM JST (EventBridge scheduled)
-- ✅ **Full data refresh** from SQL dumps (897MB → 37K analytics rows)
-- ✅ **Data quality tests** with 98.5% pass rate
+- ✅ **Full data refresh** from SQL dumps (945MB → 97,000+ rows)
+- ✅ **Medallion architecture** (Bronze → Silver → Gold)
+- ✅ **Data quality tests** with 90.8% pass rate (69/76 tests)
 - ✅ **CloudWatch monitoring** with error alerting
+
+### Robust Backup & Recovery
+- ✅ **Aurora automated backups** with 7-day retention (no extra cost)
+- ✅ **Point-in-Time Recovery (PITR)** to any second within backup window
+- ✅ **Tested recovery script** (`scripts/rollback_etl.sh`)
+- ✅ **Cost savings**: $57/month vs manual snapshots
+- ✅ **5-10 minute recovery time**
 
 ### Analytics Tables
 1. **Daily Activity Summary**: Aggregated metrics by date and tenant type (Individual/Corporate)
+   - Inquiries, applications, contracts signed, move-ins, move-outs
 2. **New Contracts**: Full contract details with demographics + geocoding
+   - Age, gender, nationality, occupation, lat/long coordinates
 3. **Moveouts**: Complete contract history with tenure and revenue
+   - Stay duration, total revenue, moveout reasons
 4. **Moveout Notices**: Rolling 24-month window for forecasting
+   - Advance notice tracking for pipeline management
 
-### Business Intelligence
+### Business Intelligence (Optional)
 - 📊 **4 Interactive Dashboards** (Executive, Contracts, Moveouts, Map)
 - 🗺️ **Tokyo Map Visualization** with property-level drill-down
 - 📤 **CSV/Excel Export** for all visuals
@@ -82,85 +122,55 @@ Amazon QuickSight (Enterprise)
 
 ## 🚀 Quick Start
 
-### Current Status
-
-**✅ Complete**:
-- Infrastructure deployed (VPC, Aurora, Glue, EventBridge)
-- ETL pipeline operational (1/1 successful runs)
-- Analytics tables populated (37,000+ rows)
-- Documentation created
-
-**📋 Next Steps** (30 minutes):
-1. Enable QuickSight Enterprise ($18/user/month)
-2. Create VPC connection to Aurora
-3. Create 4 datasets
-4. Build dashboards (see `QUICKSTART.md`)
-
 ### Prerequisites
 
 - **AWS Account**: 343881458651 (gghouse)
 - **AWS CLI**: Configured with `gghouse` SSO profile
-- **Terraform**: >=1.5.0
+- **Terraform**: >=1.5.0 (if making infrastructure changes)
 - **Region**: ap-northeast-1 (Tokyo)
 
-### Setup Instructions
-
-#### Option 1: Use Existing Infrastructure (Recommended)
-
-The infrastructure is already deployed and operational. Just enable QuickSight:
+### Check System Status
 
 ```bash
-# Check ETL job status
-AWS_PROFILE=gghouse aws glue get-job-run \
+# Authenticate with AWS
+aws sso login --profile gghouse
+
+# Check latest ETL job
+aws glue get-job-runs \
     --job-name tokyobeta-prod-daily-etl \
-    --run-id $(aws glue get-job-runs --job-name tokyobeta-prod-daily-etl --max-results 1 --query 'JobRuns[0].Id' --output text) \
-    --region ap-northeast-1
+    --max-results 1 \
+    --profile gghouse \
+    --region ap-northeast-1 \
+    --query 'JobRuns[0].{Status:JobRunState,ExecutionTime:ExecutionTime,CompletedOn:CompletedOn}'
 
-# Verify analytics tables
-AWS_PROFILE=gghouse aws glue get-tables \
-    --database-name analytics \
-    --region ap-northeast-1
-
-# Enable QuickSight
-open https://quicksight.aws.amazon.com/
+# Check analytics tables
+mysql -h tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com \
+    -u admin -p \
+    -e "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'gold' ORDER BY TABLE_NAME;"
 ```
 
-Follow the **QuickSight Setup Guide**: [`/scripts/quicksight/QUICKSIGHT_SETUP_GUIDE.md`](scripts/quicksight/QUICKSIGHT_SETUP_GUIDE.md)
-
-Or use the **QuickStart**: [`/QUICKSTART.md`](QUICKSTART.md)
-
-#### Option 2: Deploy from Scratch (If Needed)
+### Manual ETL Trigger
 
 ```bash
-# 1. Bootstrap Terraform backend
-cd terraform/bootstrap
-terraform init
-terraform apply
-
-# 2. Deploy infrastructure
-cd ../environments/prod
-terraform init
-terraform plan -out=tfplan
-terraform apply tfplan
-
-# 3. Upload Glue script and dbt project
-AWS_PROFILE=gghouse aws s3 sync ../../glue/scripts/ \
-    s3://jram-gghouse/glue-scripts/ \
-    --region ap-northeast-1
-
-AWS_PROFILE=gghouse aws s3 sync ../../dbt/ \
-    s3://jram-gghouse/dbt-project/ \
-    --exclude ".venv/*" --exclude "target/*" --exclude "logs/*" \
-    --region ap-northeast-1
-
-# 4. Trigger ETL job manually (first time)
-AWS_PROFILE=gghouse aws glue start-job-run \
+# Trigger ETL job
+aws glue start-job-run \
     --job-name tokyobeta-prod-daily-etl \
+    --profile gghouse \
     --region ap-northeast-1
 
-# 5. Monitor job
-AWS_PROFILE=gghouse aws logs tail /aws-glue/jobs/output \
-    --follow --region ap-northeast-1
+# Monitor logs
+aws logs tail /aws-glue/jobs/output \
+    --follow --profile gghouse --region ap-northeast-1
+```
+
+### Emergency Recovery (PITR)
+
+```bash
+# Show available restore window
+./scripts/rollback_etl.sh
+
+# Restore to specific time (if needed)
+./scripts/rollback_etl.sh "2026-02-04T10:00:00Z"
 ```
 
 ---
@@ -173,232 +183,306 @@ tokyobeta-data-consolidation/
 │   ├── bootstrap/                # S3 + DynamoDB for state
 │   ├── modules/                  # Reusable Terraform modules
 │   │   ├── networking/           # VPC, subnets, NAT, security groups
-│   │   ├── aurora/               # MySQL cluster (staging + analytics)
-│   │   ├── glue/                 # ETL job, crawler, data quality
+│   │   ├── aurora/               # MySQL cluster (staging/silver/gold)
+│   │   ├── glue/                 # ETL job, IAM roles
 │   │   ├── eventbridge/          # Daily trigger + Lambda proxy
 │   │   ├── monitoring/           # CloudWatch alarms + SNS
 │   │   └── secrets/              # Secrets Manager for credentials
 │   └── environments/prod/        # Production deployment
 │
 ├── glue/scripts/                 # AWS Glue ETL scripts
-│   └── daily_etl.py              # Main ETL job (download, load, transform)
+│   └── daily_etl.py              # Main ETL: download → load → transform
 │
 ├── dbt/                          # dbt transformation project
 │   ├── models/
-│   │   ├── staging/              # Source definitions
-│   │   └── analytics/            # 4 analytics tables
+│   │   ├── staging/              # Bronze: Source definitions
+│   │   ├── silver/               # Silver: Cleaned data + denormalization
+│   │   └── gold/                 # Gold: Business analytics
+│   ├── seeds/                    # Reference data (code mappings)
 │   ├── macros/                   # Reusable SQL functions
 │   ├── tests/                    # Custom data quality tests
 │   ├── dbt_project.yml           # dbt configuration
-│   └── profiles.yml              # Connection to Aurora
+│   └── profiles.yml              # Aurora connection settings
 │
 ├── scripts/                      # Operational scripts
-│   └── quicksight/               # QuickSight setup
-│       ├── QUICKSIGHT_SETUP_GUIDE.md
-│       └── setup_quicksight.py
+│   ├── quicksight/               # QuickSight setup (optional)
+│   │   ├── QUICKSIGHT_SETUP_GUIDE.md
+│   │   └── setup_quicksight.py
+│   └── rollback_etl.sh           # PITR recovery script
 │
 ├── docs/                         # Project documentation
-│   ├── ETL_SUCCESS_SUMMARY.md    # ETL deployment summary
-│   ├── DATA_VALIDATION_ASSESSMENT.md
-│   ├── ARCHITECTURE_DECISION.md
-│   ├── DMS_VENDOR_REQUIREMENTS.md  # For future CDC
-│   └── DATA_DICTIONARY.md
+│   ├── DATABASE_SCHEMA_EXPLANATION.md   # All schemas explained
+│   ├── BACKUP_RECOVERY_STRATEGY.md      # Recovery procedures
+│   ├── ROBUSTNESS_IMPLEMENTATION_SUMMARY.md  # Latest improvements
+│   ├── CLEANUP_COMPLETION_REPORT.md     # Database cleanup results
+│   ├── ARCHITECTURE_DECISION.md         # Why Glue + dbt
+│   ├── DATA_DICTIONARY.md               # Column definitions
+│   └── DMS_VENDOR_REQUIREMENTS.md       # For future CDC
 │
-├── data/samples/                 # Sample data for testing
-│   ├── gghouse_20260130.sql      # Full SQL dump (897MB)
-│   ├── schema_definitions.json   # Table schemas
-│   └── *.csv                     # Sample CSV files
-│
-├── QUICKSTART.md                 # 30-minute setup guide
-├── STATUS_UPDATE.md              # Current project status
+├── CURRENT_STATUS.md             # Latest project status
 └── README.md                     # This file
 ```
 
 ---
 
-## 📊 Dashboard Access
+## 📊 Current System State
 
-### After Enabling QuickSight
+### Databases & Schemas
 
-1. Navigate to [QuickSight Console](https://quicksight.aws.amazon.com/)
-2. Select **"Analyses"** from the left menu
-3. Available dashboards:
-   - **Executive Summary**: KPIs, daily trends, individual vs corporate
-   - **New Contracts Analysis**: Demographics, age groups, nationalities
-   - **Moveout & Retention**: Tenure distribution, churn analysis
-   - **Tokyo Map View**: Geospatial heatmap with property drill-down
+| Schema | Tables | Purpose | Status |
+|--------|--------|---------|--------|
+| **staging** | 81 | Bronze: Raw SQL dump data | ✅ Operational |
+| **silver** | 6 | Silver: Cleaned & standardized | ✅ Operational |
+| **gold** | 4 | Gold: Business analytics | ✅ Operational |
+| **seeds** | 6 | Reference data mappings | ✅ Operational |
 
-### User Access
+**Recent Cleanup (Feb 5, 2026)**:
+- ❌ Dropped `basis` (80 empty tables - vendor artifact)
+- ❌ Dropped `_analytics`, `_silver`, `_gold` (legacy schemas)
+- ❌ Dropped `analytics` (empty, superseded by `gold`)
+- ✅ Clean database structure with only active schemas
 
-| Organization | Access Level | Dashboards |
-|--------------|--------------|------------|
-| **Warburg PE** | View-only | All 4 |
-| **JRAM SPC** | View-only | All 4 |
-| **Tosei AM** | View-only | All 4 |
-| **GGhouse PM** | View + Export | All 4 |
+### Data Summary
+
+| Table | Rows | Refresh | Purpose |
+|-------|------|---------|---------|
+| `staging.*` | Various | Daily 7:00 AM | Raw source data (81 tables) |
+| `silver.int_contracts` | 59,118 | Daily | Central denormalized fact table |
+| `gold.daily_activity_summary` | 5,624 | Daily | Daily KPIs by tenant type |
+| `gold.new_contracts` | 16,508 | Daily | Demographics + geolocation |
+| `gold.moveouts` | 15,262 | Daily | Tenure & revenue analysis |
+| `gold.moveout_notices` | 3,635 | Daily | 24-month rolling window |
+
+**Total Analytics Rows**: ~97,000  
+**Data Quality**: 90.8% test pass rate (69/76 dbt tests)  
+**Latency**: <12 hours from source update  
+**Data Freshness**: Updated daily at 7:00 AM JST
 
 ---
 
 ## 💰 Cost Breakdown
 
 ### Current Infrastructure (Monthly)
+
 | Service | Configuration | Cost |
 |---------|---------------|------|
-| Aurora MySQL | db.t4g.medium, 20GB storage | ~$50 |
-| AWS Glue | Daily 10min job, 2 DPU | ~$10 |
-| S3 | 900MB × 30 days + dbt files | ~$1 |
+| Aurora MySQL | db.t4g.medium, 20GB storage, 2 instances | ~$50 |
+| Automated Backups | 7-day retention (included) | **$0** |
+| AWS Glue | Daily 4-min job, 2 DPU | ~$5 |
+| S3 | 945MB × 30 days + artifacts | ~$1 |
 | VPC | NAT Gateway | ~$32 |
-| CloudWatch | Log retention (7 days) | ~$3 |
-| **Infrastructure Total** | | **~$96/month** |
+| CloudWatch | Logs (7-day retention) | ~$3 |
+| **Infrastructure Total** | | **~$91/month** |
 
-### QuickSight (After Enablement)
+**Cost Savings** (vs previous implementation):
+- Manual snapshots eliminated: **-$57/month**
+- Optimized Glue runtime (15min → 4min): **-$5/month**
+
+### QuickSight (Optional - Not Yet Enabled)
+
 | Component | Usage | Cost |
 |-----------|-------|------|
 | QuickSight Authors | 4 users × $18/user | $72 |
-| QuickSight Readers | 10 users × $5/user (max) | $50 |
+| QuickSight Readers | 10 users × $5/user | $50 |
 | SPICE Capacity | 20MB | <$1 |
 | **QuickSight Total** | | **~$122/month** |
 
-### **Grand Total**: ~$218/month  
-**Per User**: $218 / 14 users = **$15.57/user/month**
+### **Total Cost**: 
+- **With ETL only**: ~$91/month
+- **With QuickSight**: ~$213/month
+- **Per User (14 users)**: ~$15.21/user/month
 
 ---
 
-## 📈 Data Summary
+## 🛠️ Operations & Maintenance
 
-### Analytics Tables (Updated Daily)
+### Daily Operations
 
-| Table | Rows | Description |
-|-------|------|-------------|
-| `daily_activity_summary` | 2,965 | Daily metrics aggregated by tenant type |
-| `new_contracts` | 17,573 | Contracts with demographics + geocoding |
-| `moveouts` | 15,768 | Moveout records with tenure analysis |
-| `moveout_notices` | 3,791 | Rolling 24-month window |
+**Automated Tasks** (no intervention required):
+1. EventBridge triggers ETL at 7:00 AM JST
+2. Glue downloads latest SQL dump
+3. Data loaded to staging schema
+4. dbt transformations create silver/gold tables
+5. CloudWatch monitors for failures
+6. SNS alerts on errors
 
-**Total**: 37,097 analytics-ready rows  
-**Data Quality**: 99.5% (88 issues in 37K rows)  
-**Refresh Cadence**: Daily at 7:00 AM JST  
-**Latency**: <12 hours from source update
-
----
-
-## 🛠️ Operations
-
-### Manual ETL Trigger
-
+**Manual Monitoring**:
 ```bash
-# Trigger ETL job manually
-AWS_PROFILE=gghouse aws glue start-job-run \
-    --job-name tokyobeta-prod-daily-etl \
-    --region ap-northeast-1
-
-# Monitor logs
-AWS_PROFILE=gghouse aws logs tail /aws-glue/jobs/output \
-    --follow --region ap-northeast-1
-```
-
-### Check Analytics Tables
-
-```bash
-# Connect to Aurora
-AWS_PROFILE=gghouse aws secretsmanager get-secret-value \
-    --secret-id tokyobeta-prod-aurora-master \
-    --region ap-northeast-1 \
-    --query SecretString --output text | jq -r .
-
-# Then use mysql client
-mysql -h tokyobeta-prod-aurora-cluster.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com \
-    -u admin -p analytics
-
-# Sample queries
-SELECT COUNT(*) FROM daily_activity_summary;
-SELECT COUNT(*) FROM new_contracts;
-SELECT MAX(contract_date) FROM new_contracts;  -- Check freshness
-```
-
-### Monitor ETL Job
-
-```bash
-# List recent job runs
-AWS_PROFILE=gghouse aws glue get-job-runs \
+# Check recent ETL runs
+aws glue get-job-runs \
     --job-name tokyobeta-prod-daily-etl \
     --max-results 5 \
-    --region ap-northeast-1
+    --profile gghouse --region ap-northeast-1 \
+    --query 'JobRuns[].[Id,JobRunState,ExecutionTime,CompletedOn]' \
+    --output table
 
-# Check CloudWatch alarms
-AWS_PROFILE=gghouse aws cloudwatch describe-alarms \
-    --alarm-name-prefix tokyobeta-prod \
-    --region ap-northeast-1
+# View CloudWatch logs
+aws logs tail /aws-glue/jobs/output \
+    --since 1h --profile gghouse --region ap-northeast-1
+
+# Check data freshness
+mysql -h tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com \
+    -u admin -p gold \
+    -e "SELECT MAX(created_at) as last_update FROM daily_activity_summary;"
+```
+
+### Backup & Recovery
+
+**Automated Backups**:
+- **Retention**: 7 days
+- **Type**: Continuous, point-in-time
+- **Cost**: $0 (included in Aurora pricing)
+- **Restore Window**: Any second within 7 days
+
+**Recovery Procedure**:
+```bash
+# Show available restore times
+./scripts/rollback_etl.sh
+
+# Restore to 1 hour ago
+./scripts/rollback_etl.sh "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)"
+
+# Follow on-screen instructions for restoration
+```
+
+**Recovery Time**: 5-10 minutes  
+**Documentation**: `docs/BACKUP_RECOVERY_STRATEGY.md`
+
+### Troubleshooting
+
+**ETL Job Fails**:
+```bash
+# Check error logs
+aws logs tail /aws-glue/jobs/error \
+    --since 1h --profile gghouse --region ap-northeast-1
+
+# Common issues:
+# - S3 dump file missing: Check s3://jram-gghouse/dumps/
+# - Aurora connection: Verify security groups
+# - dbt compilation: Check dbt/models/ syntax
+```
+
+**Data Quality Issues**:
+```bash
+# Run dbt tests manually
+cd dbt/
+dbt test --profiles-dir . --target prod
+
+# Check specific test
+dbt test --select test_name --profiles-dir . --target prod
+```
+
+**Performance Issues**:
+```bash
+# Check Aurora metrics
+aws cloudwatch get-metric-statistics \
+    --namespace AWS/RDS \
+    --metric-name CPUUtilization \
+    --dimensions Name=DBClusterIdentifier,Value=tokyobeta-prod-aurora-cluster-public \
+    --start-time $(date -u -v-1H +%Y-%m-%dT%H:%M:%S) \
+    --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
+    --period 300 --statistics Average \
+    --profile gghouse --region ap-northeast-1
 ```
 
 ---
 
 ## 📚 Documentation
 
-### Setup Guides
-- **[QuickStart Guide](QUICKSTART.md)**: 30-minute setup for QuickSight
-- **[QuickSight Setup Guide](scripts/quicksight/QUICKSIGHT_SETUP_GUIDE.md)**: Detailed step-by-step
-- **[Status Update](STATUS_UPDATE.md)**: Current project status
+### Setup & Operations
+- **[Current Status](CURRENT_STATUS.md)**: Latest system state and recent changes
+- **[Database Schemas](docs/DATABASE_SCHEMA_EXPLANATION.md)**: Complete schema inventory
+- **[Backup Strategy](docs/BACKUP_RECOVERY_STRATEGY.md)**: Recovery procedures
+- **[Cleanup Report](docs/CLEANUP_COMPLETION_REPORT.md)**: Database cleanup results
 
 ### Technical Documentation
-- **[ETL Success Summary](docs/ETL_SUCCESS_SUMMARY.md)**: Deployment details
-- **[Data Validation Assessment](docs/DATA_VALIDATION_ASSESSMENT.md)**: Data quality findings
 - **[Architecture Decision](docs/ARCHITECTURE_DECISION.md)**: Why Glue + dbt
 - **[Data Dictionary](docs/DATA_DICTIONARY.md)**: Column definitions
+- **[Robustness Summary](docs/ROBUSTNESS_IMPLEMENTATION_SUMMARY.md)**: Latest improvements
 
-### Future Enhancements
-- **[DMS Vendor Requirements](docs/DMS_VENDOR_REQUIREMENTS.md)**: For CDC implementation
-
----
-
-## 🔧 Troubleshooting
-
-### ETL Job Fails
-
-**Check logs**:
-```bash
-AWS_PROFILE=gghouse aws logs tail /aws-glue/jobs/error \
-    --since 1h --region ap-northeast-1
-```
-
-**Common issues**:
-- S3 dump file missing: Check `s3://jram-gghouse/dumps/`
-- Aurora connection timeout: Verify security group rules
-- dbt compilation error: Check `dbt/models/` syntax
-
-### QuickSight Connection Issues
-
-**Verify VPC connection**:
-```bash
-AWS_PROFILE=gghouse aws quicksight describe-vpc-connection \
-    --aws-account-id 343881458651 \
-    --vpc-connection-id tokyobeta-aurora-connection \
-    --region ap-northeast-1
-```
-
-**Test Aurora connectivity**:
-- Check security group allows inbound on port 3306
-- Verify QuickSight VPC connection uses correct subnet
-- Confirm Aurora endpoint is reachable from private subnet
+### Optional Features
+- **[QuickSight Setup](scripts/quicksight/QUICKSIGHT_SETUP_GUIDE.md)**: Dashboard creation
+- **[DMS Requirements](docs/DMS_VENDOR_REQUIREMENTS.md)**: For future CDC
 
 ---
 
-## 🤝 Support
+## 🔧 Development & Testing
 
-### For Technical Issues
+### Local Testing
+
+```bash
+# Test dbt models locally
+cd dbt/
+dbt run --profiles-dir . --target dev
+dbt test --profiles-dir . --target dev
+
+# Validate Terraform changes
+cd terraform/environments/prod/
+terraform fmt
+terraform validate
+terraform plan
+```
+
+### Code Quality Standards
+
+Following `.cursorrules`:
+- ✅ **TDD**: Tests before implementation
+- ✅ **Minimal Change**: Surgical edits only
+- ✅ **Infrastructure as Code**: All resources in Terraform
+- ✅ **Data Quality**: ≥80% test coverage (current: 90.8%)
+- ✅ **Documentation**: Comprehensive guides
+
+### Git Workflow
+
+```bash
+# Feature branch
+git checkout -b feature/your-feature
+
+# Make changes
+git add .
+git commit -m "feat(dbt): add new analytics model"
+
+# Push and create PR
+git push origin feature/your-feature
+```
+
+---
+
+## 🤝 Support & Team
+
+### Technical Issues
 - **ETL Pipeline**: Check CloudWatch logs `/aws-glue/jobs/`
 - **Database**: Aurora MySQL CloudWatch metrics
+- **Backup/Recovery**: See `docs/BACKUP_RECOVERY_STRATEGY.md`
 - **Infrastructure**: Terraform state in S3
 
-### For Business Questions
-- **Data Definitions**: See [`docs/DATA_DICTIONARY.md`](docs/DATA_DICTIONARY.md)
-- **Dashboard Usage**: See [`QUICKSTART.md`](QUICKSTART.md)
+### Business Questions
+- **Data Definitions**: See `docs/DATA_DICTIONARY.md`
+- **Dashboard Usage**: See `scripts/quicksight/QUICKSIGHT_SETUP_GUIDE.md`
 - **Source Data**: Contact Nazca (PMS vendor)
 
 ### Team Contacts
 - **AWS Infrastructure**: Daniel Kang
-- **Stakeholders**: Warburg, JRAM, Tosei, GGhouse
+- **Stakeholders**: Warburg PE, JRAM SPC, Tosei AM, GGhouse PM
 - **PMS Vendor**: Nazca
+
+---
+
+## 🎯 Recent Achievements
+
+### February 5, 2026
+- ✅ Database cleanup: Removed 5 redundant schemas
+- ✅ Cost optimization: $57/month savings from backup strategy
+- ✅ Robustness improvements: PITR tested and documented
+- ✅ ETL optimization: 15min → 4min runtime
+- ✅ Data quality: 90.8% test pass rate
+
+### January 31, 2026
+- ✅ Medallion architecture implemented (Bronze → Silver → Gold)
+- ✅ Infrastructure deployed (VPC, Aurora, Glue, EventBridge)
+- ✅ dbt project created (4 gold models, 6 silver models, 6 seeds)
+- ✅ Automated daily ETL operational
+- ✅ Comprehensive documentation created
 
 ---
 
@@ -409,12 +493,26 @@ Proprietary - Internal use only
 
 ---
 
-## 🎯 Next Steps
+## 🚀 Next Steps
 
-1. **Enable QuickSight** at https://quicksight.aws.amazon.com/ (10 min)
-2. **Follow QUICKSTART.md** to create dashboards (1-2 hours)
-3. **Invite users** from 4 organizations (5 min)
-4. **Schedule training session** for stakeholders (1 hour)
-5. **Monitor daily ETL** for 1 week to ensure stability
+### For New Users
+1. **Review Current Status**: Read `CURRENT_STATUS.md`
+2. **Understand Architecture**: Review this README
+3. **Access Data**: Request Aurora credentials
+4. **Explore Schemas**: Query gold tables for analytics
 
-**Questions?** See the [QuickStart Guide](QUICKSTART.md) or [Full Setup Guide](scripts/quicksight/QUICKSIGHT_SETUP_GUIDE.md).
+### For Optional QuickSight Setup
+1. **Enable QuickSight**: https://quicksight.aws.amazon.com/
+2. **Follow Setup Guide**: `scripts/quicksight/QUICKSIGHT_SETUP_GUIDE.md`
+3. **Create VPC Connection**: Connect to Aurora private subnet
+4. **Build Dashboards**: 4 pre-designed dashboard templates available
+
+### For Infrastructure Changes
+1. **Test Locally**: Validate Terraform/dbt changes
+2. **Review Code**: Follow `.cursorrules` standards
+3. **Deploy**: Use Terraform for infrastructure, dbt for models
+4. **Monitor**: Check CloudWatch for errors
+
+---
+
+**Questions?** See [Current Status](CURRENT_STATUS.md) or relevant documentation in `docs/`.

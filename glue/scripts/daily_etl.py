@@ -40,6 +40,7 @@ job.init(args['JOB_NAME'], args)
 # Initialize clients
 s3 = boto3.client('s3')
 secretsmanager = boto3.client('secretsmanager')
+rds = boto3.client('rds')
 
 def normalize_statement(stmt: str) -> str:
     """Normalize SQL statement and skip session-level commands."""
@@ -166,15 +167,18 @@ def load_to_aurora_staging(dump_path):
         
         print("Schemas verified/created: staging, analytics, seeds")
         
-        # Drop all existing tables in staging (full reload strategy)
+        # Check existing tables (SQL dump has DROP TABLE IF EXISTS, so we don't need to drop manually)
         cursor.execute("""
             SELECT table_name 
             FROM information_schema.tables 
             WHERE table_schema = 'staging'
         """)
-        for (table_name,) in cursor.fetchall():
-            print(f"Dropping staging.{table_name}")
-            cursor.execute(f"DROP TABLE IF EXISTS staging.{table_name}")
+        existing_tables = [row[0] for row in cursor.fetchall()]
+        
+        if existing_tables:
+            print(f"Found {len(existing_tables)} existing staging tables - SQL dump will handle recreation")
+        else:
+            print("No existing staging tables - clean load")
         
         connection.commit()
         
@@ -326,6 +330,10 @@ def main():
     start_time = datetime.now()
     
     try:
+        # NOTE: Aurora automated backups enabled with 7-day retention for PITR
+        # No manual snapshots created to reduce costs (~$57/month savings)
+        # Use scripts/rollback_etl.sh if recovery needed
+        
         # Step 1: Find and download latest dump
         latest_key = get_latest_dump_key()
         local_path = download_and_parse_dump(latest_key)
@@ -350,6 +358,7 @@ def main():
         print(f"SQL statements executed: {stmt_count}")
         print(f"dbt transformations: {'Success' if dbt_success else 'Failed'}")
         print(f"{'='*60}\n")
+        print(f"Note: Automated backups enabled - use PITR for recovery if needed")
         
         job.commit()
         

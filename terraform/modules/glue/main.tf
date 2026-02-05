@@ -54,6 +54,22 @@ resource "aws_iam_role_policy" "glue_service_policy" {
       {
         Effect = "Allow"
         Action = [
+          "rds:DescribeDBClusterSnapshots",
+          "rds:CreateDBClusterSnapshot",
+          "rds:DeleteDBClusterSnapshot",
+          "rds:DescribeDBClusters",
+          "rds:ListTagsForResource"
+        ]
+        Resource = ["*"]
+        Condition = {
+          StringLike = {
+            "rds:cluster-tag/ManagedBy" = "terraform"
+          }
+        }
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
@@ -78,6 +94,16 @@ resource "aws_iam_role_policy" "glue_service_policy" {
           "ec2:DescribeVpcAttribute",
           "ec2:DescribeRouteTables",
           "ec2:DescribeSecurityGroups"
+        ]
+        Resource = ["*"]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "rds:CreateDBClusterSnapshot",
+          "rds:DescribeDBClusterSnapshots",
+          "rds:DeleteDBClusterSnapshot",
+          "rds:ListTagsForResource"
         ]
         Resource = ["*"]
       }
