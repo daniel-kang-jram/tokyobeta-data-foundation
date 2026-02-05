@@ -261,6 +261,21 @@ def run_dbt_transformations():
         "--project-dir", dbt_local_path
     ], check=True)
     
+    # Load seed files (code mappings)
+    seed_result = subprocess.run([
+        dbt_executable, "seed",
+        "--profiles-dir", dbt_local_path,
+        "--project-dir", dbt_local_path,
+        "--target", args['ENVIRONMENT']
+    ], capture_output=True, text=True)
+    
+    print("=== DBT SEED OUTPUT ===")
+    print(seed_result.stdout)
+    if seed_result.returncode != 0:
+        print("=== DBT SEED ERRORS ===")
+        print(seed_result.stderr)
+        raise subprocess.CalledProcessError(seed_result.returncode, seed_result.args, seed_result.stdout, seed_result.stderr)
+    
     # Run dbt models
     result = subprocess.run([
         dbt_executable, "run",
