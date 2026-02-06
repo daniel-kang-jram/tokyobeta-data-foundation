@@ -1,6 +1,43 @@
 version: 2
 
 models:
+  - name: tenant_status_history
+    description: |
+      Slowly Changing Dimension (SCD Type 2) tracking historical changes in tenant status.
+      Creates new records only when key status fields change, enabling time-series analysis.
+    columns:
+      - name: tenant_id
+        description: Tenant identifier
+        tests:
+          - not_null
+      - name: valid_from
+        description: Start date of this status period (inclusive)
+        tests:
+          - not_null
+      - name: valid_to
+        description: End date of this status period (inclusive), NULL if current
+      - name: is_current
+        description: Boolean flag indicating if this is the current/latest record
+      - name: status
+        description: Primary tenant status code
+      - name: contract_type
+        description: Contract type (1=Individual, 2/3=Corporate)
+      - name: affiliation_status
+        description: Employment/affiliation status
+      - name: is_transferred
+        description: Transfer flag
+      - name: is_renewal_ng
+        description: Renewal eligibility flag (1=not eligible)
+      - name: is_paysle_unpaid
+        description: Unpaid Paysle charges flag
+      - name: renewal_priority
+        description: Renewal priority level
+      - name: agreement_type
+        description: Agreement type code
+      - name: moving_id
+        description: Reference to current moving/contract record
+      - name: dbt_updated_at
+        description: Timestamp when this record was created by dbt
   - name: stg_movings
     description: Cleaned contract lifecycle data with semantic code labels
     config:

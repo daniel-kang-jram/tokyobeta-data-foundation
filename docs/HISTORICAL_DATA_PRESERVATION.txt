@@ -1,0 +1,253 @@
+================================================================================
+HOW HISTORICAL DATA IS PRESERVED (Despite Daily SQL Dumps)
+================================================================================
+
+QUESTION: Aren't we wiping the entire database every day?
+ANSWER: NO! Only the staging schema is replaced. Silver/Gold preserve history.
+
+================================================================================
+DAILY ETL BREAKDOWN
+================================================================================
+
+5:30 AM JST - SQL Dump Generated
+  │
+  └─> Creates snapshot of source database
+      File: gghouse_20260206.sql (~945MB)
+      Content: Current state only (no history)
+  
+7:00 AM JST - AWS Glue ETL Starts
+  │
+  ┌─── STEP 1: Load to STAGING Schema ─────────────────────────────────
+  │
+  │   Command: USE staging;  ← Important!
+  │   
+  │   SQL Dump contains:
+  │     DROP TABLE IF EXISTS tenants;    ← Only affects staging.tenants
+  │     CREATE TABLE tenants (...);      ← Creates staging.tenants
+  │     INSERT INTO tenants VALUES (...);
+  │   
+  │   Result:
+  │     staging.tenants = Today's snapshot only (no history)
+  │     
+  │   What about silver.tenant_status_history?
+  │     ✅ UNTOUCHED - Different schema, not affected by staging drops
+  │
+  └─────────────────────────────────────────────────────────────────────
+  │
+  ┌─── STEP 2: dbt Transforms (staging → silver) ──────────────────────
+  │
+  │   Model: tenant_status_history
+  │   Materialization: INCREMENTAL ← Key!
+  │   
+  │   Logic:
+  │   
+  │   IF table doesn't exist:
+  │     CREATE TABLE silver.tenant_status_history AS
+  │     SELECT ... FROM staging.tenants;
+  │     (Insert all ~50,000 tenants)
+  │   
+  │   IF table exists (every day after Day 1):
+  │     1. Compare today's staging.tenants with yesterday's silver records
+  │     2. For each tenant:
+  │        - IF status changed:
+  │          → UPDATE old row (set valid_to, is_current=FALSE)
+  │          → INSERT new row (valid_from=today, is_current=TRUE)
+  │        - IF status NOT changed:
+  │          → Do nothing (keep existing row)
+  │   
+  │   Result:
+  │     silver.tenant_status_history GROWS over time
+  │     Historical rows PRESERVED forever
+  │
+  └─────────────────────────────────────────────────────────────────────
+  │
+  └─── STEP 3: dbt Transforms (silver → gold) ─────────────────────────
+      
+      Model: tenant_status_transitions
+      Materialization: TABLE (rebuilt from silver)
+      
+      Logic:
+        DROP TABLE IF EXISTS gold.tenant_status_transitions;
+        CREATE TABLE gold.tenant_status_transitions AS
+        SELECT ... FROM silver.tenant_status_history;
+        (Rebuilds from complete history in silver)
+      
+      Result:
+        gold.tenant_status_transitions = All history with analysis labels
+
+================================================================================
+VISUAL EXAMPLE: Tenant #12345 Over 30 Days
+================================================================================
+
+Day 1 (Feb 6):  status=3 (Application)
+Day 7 (Feb 12): status=4 (Under Contract)  ← Changed!
+Day 30 (Mar 7): status=5 (Active Tenant)   ← Changed!
+
+STAGING Schema (gets wiped daily):
+┌──────────────────────────────────────┐
+│ Day 1:  { id: 12345, status: 3 }     │ ← Snapshot
+├──────────────────────────────────────┤
+│ Day 7:  { id: 12345, status: 4 }     │ ← Snapshot (Day 1 data gone)
+├──────────────────────────────────────┤
+│ Day 30: { id: 12345, status: 5 }     │ ← Snapshot (Day 7 data gone)
+└──────────────────────────────────────┘
+Only current state visible
+
+SILVER Schema (accumulates history):
+┌──────────────────────────────────────────────────────────────────┐
+│ tenant_id | status | valid_from | valid_to   | is_current      │
+├───────────┼────────┼────────────┼────────────┼─────────────────┤
+│ 12345     | 3      | 2026-02-06 | 2026-02-11 | FALSE           │ Day 1
+│ 12345     | 4      | 2026-02-12 | 2026-03-06 | FALSE           │ Day 7
+│ 12345     | 5      | 2026-03-07 | NULL       | TRUE            │ Day 30
+└──────────────────────────────────────────────────────────────────┘
+Complete history from Day 1 to now!
+
+================================================================================
+WHY IT WORKS: SCHEMA SEPARATION
+================================================================================
+
+Schema Ownership:
+  
+  staging.*        Owned by: SQL Dump (from source system)
+                   Behavior: DROP & RECREATE daily
+                   Data: Current state only
+                   
+  silver.*         Owned by: dbt (incremental models)
+                   Behavior: APPEND new data only
+                   Data: Historical accumulation
+                   
+  gold.*           Owned by: dbt (table models)
+                   Behavior: REBUILD from silver
+                   Data: All history (sourced from silver)
+
+SQL Dump Scope:
+  
+  The SQL dump runs:
+    USE staging;  ← All subsequent statements apply to staging
+    
+  When it runs:
+    DROP TABLE IF EXISTS tenants;
+    
+  This becomes:
+    DROP TABLE IF EXISTS staging.tenants;  ← Only affects staging
+    
+  It CANNOT affect:
+    silver.tenant_status_history  ← Different schema, protected
+
+Database Command Scoping:
+  
+  ✅ DROP TABLE tenants;              → Drops staging.tenants (current schema)
+  ❌ DROP TABLE silver.tenant_status_history;  → Would need explicit schema
+  
+  Since SQL dump doesn't know about silver schema, it can't touch it!
+
+================================================================================
+VERIFICATION (Run These Queries)
+================================================================================
+
+1. Check schemas are separate:
+   
+   SHOW SCHEMAS;
+   -- Should show: staging, silver, gold (all separate)
+
+2. Check silver.tenant_status_history exists and is growing:
+   
+   SELECT 
+       COUNT(*) as total_records,
+       COUNT(DISTINCT DATE(dbt_updated_at)) as days_of_data,
+       MIN(valid_from) as oldest_record,
+       MAX(valid_from) as newest_record
+   FROM silver.tenant_status_history;
+   -- Should show cumulative growth over time
+
+3. Verify historical records preserved:
+   
+   SELECT COUNT(*) 
+   FROM silver.tenant_status_history
+   WHERE is_current = FALSE;
+   -- Should be > 0 after Day 2
+   -- Should grow as status changes occur
+
+4. Check a specific tenant's complete history:
+   
+   SELECT 
+       tenant_id,
+       status,
+       valid_from,
+       valid_to,
+       is_current,
+       COALESCE(DATEDIFF(valid_to, valid_from), 
+                DATEDIFF(CURDATE(), valid_from)) as days_in_status
+   FROM silver.tenant_status_history
+   WHERE tenant_id = 12345  -- Pick any tenant
+   ORDER BY valid_from;
+   -- Should show all historical status changes
+
+================================================================================
+ADDITIONAL SAFEGUARDS
+================================================================================
+
+1. Aurora Automated Backups (7-Day PITR)
+   - Even if silver.tenant_status_history was accidentally dropped
+   - Can restore to any second within 7 days
+   - Recovery time: 5-10 minutes
+   - Command: ./scripts/rollback_etl.sh "2026-02-06T06:00:00Z"
+
+2. dbt Incremental Logic
+   - Only inserts new rows
+   - Never deletes old rows
+   - Updates only to close out records (set valid_to)
+   - Unique key prevents duplicates
+
+3. Schema Isolation
+   - staging, silver, gold are completely separate
+   - SQL dump can't cross schema boundaries
+   - dbt manages silver/gold independently
+
+4. Code Review & Testing
+   - All models tested before deployment
+   - Documentation requires incremental materialization
+   - Monitoring queries to detect issues early
+
+================================================================================
+SUMMARY
+================================================================================
+
+Question: "Aren't we wiping the database daily?"
+
+Answer: 
+  ✅ staging.tenants - YES, replaced daily (by design)
+  ✅ silver.tenant_status_history - NO, accumulates history (by design)
+  ✅ gold.tenant_status_transitions - NO, rebuilt from history (by design)
+
+Why It's Safe:
+  1. Schema separation (staging ≠ silver ≠ gold)
+  2. dbt incremental materialization (append only, never drop)
+  3. SQL dump scoped to staging schema only
+  4. Aurora PITR backup as last resort
+
+Historical Data:
+  - Preserved in silver.tenant_status_history
+  - Grows over time (new rows added daily)
+  - Old rows never deleted (only updated to close them)
+  - Complete audit trail from Day 1 onwards
+
+Verification:
+  - Run queries above to confirm
+  - Check record count increases daily
+  - Verify historical records exist (is_current=FALSE)
+  - Monitor for 7 days to confirm stability
+
+================================================================================
+CONFIDENCE LEVEL: HIGH ✅
+================================================================================
+
+The medallion architecture is specifically designed to:
+1. Refresh source data (staging)
+2. Preserve transformations (silver/gold)
+3. Accumulate history where needed
+
+Your historical data is SAFE!
+
+================================================================================

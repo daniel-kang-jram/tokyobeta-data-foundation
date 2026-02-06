@@ -153,6 +153,19 @@ The Tokyo Beta real estate analytics platform is **fully operational** with a pr
   - Status: Code ready, not yet applied
   - Command: `cd terraform/environments/prod && terraform apply`
 
+### Future Enhancements (Documented, Not Urgent)
+- [ ] **AWS DMS for Real-Time Data** - Replace daily dumps with CDC
+  - Status: Fully documented, requires Nazca vendor coordination
+  - See: `docs/DUMP_GENERATION_ALTERNATIVES_STATUS.md`
+  - Benefit: 24-hour latency → real-time
+  - Cost: +$60-110/month
+  
+- [ ] **Secure EC2 Cron Migration** - Remove hardcoded credentials
+  - Status: Migration plan ready, example scripts available
+  - See: `docs/SECURITY_MIGRATION_PLAN.md`
+  - Benefit: Better security with Secrets Manager + IAM roles
+  - Cost: +$1/month
+
 ---
 
 ## Performance Metrics

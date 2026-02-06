@@ -1,6 +1,46 @@
 version: 2
 
 models:
+  - name: tenant_status_transitions
+    description: |
+      Analysis-ready view of tenant status changes over time with business-friendly labels.
+      Tracks status transitions, payment changes, and renewal eligibility over time.
+      Includes duration calculations and transition flow analysis.
+    columns:
+      - name: tenant_id
+        description: Tenant identifier
+        tests:
+          - not_null
+      - name: effective_date
+        description: Date when this status became effective
+        tests:
+          - not_null
+      - name: end_date
+        description: Date when this status ended (NULL if current)
+      - name: is_current
+        description: Boolean flag for current/active status
+      - name: status_code
+        description: Numeric tenant status code
+      - name: status_label
+        description: Human-readable status description
+      - name: previous_status_code
+        description: Previous status code (for transition analysis)
+      - name: previous_status_label
+        description: Previous status human-readable label
+      - name: status_changed
+        description: Boolean flag indicating if status changed from previous record
+      - name: status_transition
+        description: Formatted string showing status transition (e.g., "Inquiry → Active Tenant")
+      - name: contract_type_label
+        description: Human-readable contract type (Individual/Corporate)
+      - name: is_unpaid
+        description: Boolean flag for unpaid Paysle charges
+      - name: payment_status_changed
+        description: Boolean flag indicating payment status changed
+      - name: payment_status_change
+        description: Formatted payment status change description
+      - name: days_in_status
+        description: Number of days tenant has been in current status
   - name: daily_activity_summary
     description: Daily aggregated property management activities by tenant type
     config:

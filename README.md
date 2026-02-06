@@ -231,7 +231,7 @@ tokyobeta-data-consolidation/
 
 | Schema | Tables | Purpose | Status |
 |--------|--------|---------|--------|
-| **staging** | 81 | Bronze: Raw SQL dump data | ✅ Operational |
+| **staging** | ~71 | Bronze: Raw SQL dump data | ✅ Operational (auto-cleaned) |
 | **silver** | 6 | Silver: Cleaned & standardized | ✅ Operational |
 | **gold** | 4 | Gold: Business analytics | ✅ Operational |
 | **seeds** | 6 | Reference data mappings | ✅ Operational |
@@ -240,7 +240,9 @@ tokyobeta-data-consolidation/
 - ❌ Dropped `basis` (80 empty tables - vendor artifact)
 - ❌ Dropped `_analytics`, `_silver`, `_gold` (legacy schemas)
 - ❌ Dropped `analytics` (empty, superseded by `gold`)
+- ❌ Dropped 10 empty staging tables (automated daily cleanup)
 - ✅ Clean database structure with only active schemas
+- ✅ Automated cleanup integrated into daily ETL
 
 ### Data Summary
 
@@ -302,9 +304,10 @@ tokyobeta-data-consolidation/
 1. EventBridge triggers ETL at 7:00 AM JST
 2. Glue downloads latest SQL dump
 3. Data loaded to staging schema
-4. dbt transformations create silver/gold tables
-5. CloudWatch monitors for failures
-6. SNS alerts on errors
+4. Empty tables automatically dropped (cleanup)
+5. dbt transformations create silver/gold tables
+6. CloudWatch monitors for failures
+7. SNS alerts on errors
 
 **Manual Monitoring**:
 ```bash

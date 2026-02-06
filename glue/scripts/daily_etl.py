@@ -235,6 +235,130 @@ def load_to_aurora_staging(dump_path):
         cursor.close()
         connection.close()
 
+def create_pre_etl_backups():
+    """
+    Create backup copies of critical tables before ETL transformations.
+    This protects against data loss if dbt models fail or produce incorrect results.
+    """
+    print("\n=== Creating Pre-ETL Backups ===")
+    
+    CRITICAL_TABLES = [
+        'silver.tenant_status_history',
+        'silver.int_contracts',
+        'gold.daily_activity_summary',
+        'gold.new_contracts',
+        'gold.moveouts',
+        'gold.moveout_notices'
+    ]
+    
+    username, password = get_aurora_credentials()
+    connection = pymysql.connect(
+        host=args['AURORA_ENDPOINT'],
+        user=username,
+        password=password,
+        database=args['AURORA_DATABASE'],
+        charset='utf8mb4'
+    )
+    
+    backup_count = 0
+    backup_suffix = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    try:
+        cursor = connection.cursor()
+        
+        for table in CRITICAL_TABLES:
+            schema, table_name = table.split('.')
+            backup_name = f"{table_name}_backup_{backup_suffix}"
+            
+            try:
+                # Check if table exists
+                cursor.execute(f"SHOW TABLES FROM {schema} LIKE '{table_name}'")
+                if cursor.fetchone():
+                    row_count_result = cursor.execute(f"SELECT COUNT(*) FROM {schema}.{table_name}")
+                    cursor.fetchone()
+                    
+                    print(f"  Backing up {table}...")
+                    cursor.execute(f"""
+                        CREATE TABLE {schema}.{backup_name} 
+                        AS SELECT * FROM {schema}.{table_name}
+                    """)
+                    
+                    # Verify backup
+                    cursor.execute(f"SELECT COUNT(*) FROM {schema}.{backup_name}")
+                    backup_row_count = cursor.fetchone()[0]
+                    print(f"    ✓ Created {schema}.{backup_name} ({backup_row_count} rows)")
+                    backup_count += 1
+                else:
+                    print(f"  ⊘ Skipping {table} (table does not exist)")
+                    
+            except Exception as e:
+                print(f"  ✗ Failed to backup {table}: {str(e)[:200]}")
+                # Continue with other backups even if one fails
+                continue
+        
+        connection.commit()
+        print(f"\nBackup complete: {backup_count} tables backed up")
+        return backup_count
+        
+    finally:
+        cursor.close()
+        connection.close()
+
+def cleanup_old_backups(days_to_keep=3):
+    """
+    Remove backup tables older than N days to manage storage costs.
+    Backup table naming convention: {table_name}_backup_{YYYYMMDD_HHMMSS}
+    """
+    print(f"\n=== Cleaning Up Old Backups (keeping last {days_to_keep} days) ===")
+    
+    cutoff_date = (datetime.now() - timedelta(days=days_to_keep)).strftime('%Y%m%d')
+    
+    username, password = get_aurora_credentials()
+    connection = pymysql.connect(
+        host=args['AURORA_ENDPOINT'],
+        user=username,
+        password=password,
+        database=args['AURORA_DATABASE'],
+        charset='utf8mb4'
+    )
+    
+    removed_count = 0
+    
+    try:
+        cursor = connection.cursor()
+        
+        for schema in ['silver', 'gold']:
+            cursor.execute(f"""
+                SELECT TABLE_NAME 
+                FROM information_schema.TABLES 
+                WHERE TABLE_SCHEMA = '{schema}' 
+                AND TABLE_NAME LIKE '%_backup_%'
+                ORDER BY TABLE_NAME
+            """)
+            
+            backup_tables = [row[0] for row in cursor.fetchall()]
+            
+            for table_name in backup_tables:
+                # Extract date from backup name (format: tablename_backup_YYYYMMDD_HHMMSS)
+                if '_backup_' in table_name:
+                    try:
+                        date_part = table_name.split('_backup_')[1][:8]
+                        if date_part < cutoff_date:
+                            print(f"  Removing old backup: {schema}.{table_name} (date: {date_part})")
+                            cursor.execute(f"DROP TABLE IF EXISTS {schema}.{table_name}")
+                            removed_count += 1
+                    except (IndexError, ValueError) as e:
+                        print(f"  Warning: Could not parse date from {table_name}: {e}")
+                        continue
+        
+        connection.commit()
+        print(f"Cleanup complete: {removed_count} old backups removed")
+        return removed_count
+        
+    finally:
+        cursor.close()
+        connection.close()
+
 def run_dbt_transformations():
     """Execute dbt models to transform staging → analytics."""
     print("\nRunning dbt transformations...")
@@ -280,12 +404,13 @@ def run_dbt_transformations():
         print(seed_result.stderr)
         raise subprocess.CalledProcessError(seed_result.returncode, seed_result.args, seed_result.stdout, seed_result.stderr)
     
-    # Run dbt models
+    # Run dbt models with --fail-fast to stop on first error (data protection)
     result = subprocess.run([
         dbt_executable, "run",
         "--profiles-dir", dbt_local_path,
         "--project-dir", dbt_local_path,
-        "--target", args['ENVIRONMENT']
+        "--target", args['ENVIRONMENT'],
+        "--fail-fast"  # Stop immediately on first model failure
     ], capture_output=True, text=True)
     
     print("=== DBT RUN OUTPUT ===")
@@ -311,6 +436,63 @@ def run_dbt_transformations():
         # Don't fail job on test failures, just warn
     
     return result.returncode == 0
+
+def cleanup_empty_staging_tables():
+    """Drop empty staging tables to optimize database performance."""
+    print("\nCleaning up empty staging tables...")
+    
+    username, password = get_aurora_credentials()
+    
+    connection = pymysql.connect(
+        host=args['AURORA_ENDPOINT'],
+        user=username,
+        password=password,
+        database=args['AURORA_DATABASE'],
+        charset='utf8mb4'
+    )
+    
+    try:
+        cursor = connection.cursor()
+        
+        # Find empty tables
+        cursor.execute("""
+            SELECT TABLE_NAME 
+            FROM information_schema.TABLES 
+            WHERE TABLE_SCHEMA = 'staging' 
+            AND TABLE_ROWS = 0
+        """)
+        
+        empty_tables = [row[0] for row in cursor.fetchall()]
+        
+        if not empty_tables:
+            print("No empty tables found - staging schema is clean")
+            return 0
+        
+        print(f"Found {len(empty_tables)} empty tables to drop")
+        
+        dropped_count = 0
+        for table_name in empty_tables:
+            # Double-check it's actually empty
+            cursor.execute(f"SELECT COUNT(*) FROM `staging`.`{table_name}`")
+            actual_count = cursor.fetchone()[0]
+            
+            if actual_count == 0:
+                try:
+                    cursor.execute(f"DROP TABLE IF EXISTS `staging`.`{table_name}`")
+                    connection.commit()
+                    print(f"  Dropped: {table_name}")
+                    dropped_count += 1
+                except Exception as e:
+                    print(f"  Failed to drop {table_name}: {str(e)}")
+            else:
+                print(f"  Skipped {table_name}: has {actual_count} rows")
+        
+        print(f"Cleanup completed: {dropped_count} empty tables dropped")
+        return dropped_count
+        
+    finally:
+        cursor.close()
+        connection.close()
 
 def archive_processed_dump(s3_key):
     """Move processed dump to archive folder."""
@@ -341,10 +523,19 @@ def main():
         # Step 2: Load to Aurora staging
         table_count, stmt_count = load_to_aurora_staging(local_path)
         
-        # Step 3: Run dbt transformations
+        # Step 3: Clean up empty tables
+        dropped_count = cleanup_empty_staging_tables()
+        
+        # Step 4: Create backups before dbt transformations
+        backup_count = create_pre_etl_backups()
+        
+        # Step 5: Clean up old backups (keep last 3 days)
+        removed_backups = cleanup_old_backups(days_to_keep=3)
+        
+        # Step 6: Run dbt transformations
         dbt_success = run_dbt_transformations()
         
-        # Step 4: Archive processed dump
+        # Step 7: Archive processed dump
         archive_processed_dump(latest_key)
         
         # Calculate duration
@@ -355,10 +546,16 @@ def main():
         print(f"ETL Job Completed Successfully")
         print(f"Duration: {duration:.2f} seconds")
         print(f"Tables loaded: {table_count}")
+        print(f"Empty tables dropped: {dropped_count}")
+        print(f"Pre-ETL backups created: {backup_count}")
+        print(f"Old backups removed: {removed_backups}")
         print(f"SQL statements executed: {stmt_count}")
         print(f"dbt transformations: {'Success' if dbt_success else 'Failed'}")
         print(f"{'='*60}\n")
-        print(f"Note: Automated backups enabled - use PITR for recovery if needed")
+        print(f"Data Protection:")
+        print(f"  • Table-level backups: {backup_count} created (3-day retention)")
+        print(f"  • Aurora PITR: 7-day retention for cluster-level recovery")
+        print(f"  • Recovery guide: docs/DATA_PROTECTION_STRATEGY.md")
         
         job.commit()
         
