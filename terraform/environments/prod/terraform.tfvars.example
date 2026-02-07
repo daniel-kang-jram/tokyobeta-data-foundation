@@ -5,6 +5,13 @@
 # Email for monitoring alerts
 alert_email = "your-email@example.com"
 
+# External IPs allowed to access Aurora MySQL (optional)
+# Format: ["IP/32"] for single IP, or ["IP/24"] for IP range
+# Leave empty [] to block all external access
+allowed_cidr_blocks = [
+  "YOUR_IP_ADDRESS/32"
+]
+
 # S3 source configuration (default values shown)
 # s3_source_bucket = "jram-gghouse"
 # s3_source_prefix = "dumps/"

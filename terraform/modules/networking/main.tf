@@ -135,6 +135,18 @@ resource "aws_security_group" "aurora" {
     description = "MySQL from Lambda"
   }
 
+  # Allow external access from specific IPs (optional)
+  dynamic "ingress" {
+    for_each = length(var.allowed_cidr_blocks) > 0 ? [1] : []
+    content {
+      from_port   = 3306
+      to_port     = 3306
+      protocol    = "tcp"
+      cidr_blocks = var.allowed_cidr_blocks
+      description = "MySQL from allowed external IPs"
+    }
+  }
+
   egress {
     from_port   = 0
     to_port     = 0

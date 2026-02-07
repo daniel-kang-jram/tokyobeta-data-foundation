@@ -56,6 +56,7 @@ module "networking" {
   environment        = local.environment
   vpc_cidr           = "10.0.0.0/16"
   availability_zones = ["ap-northeast-1a", "ap-northeast-1c"]
+  allowed_cidr_blocks = var.allowed_cidr_blocks  # External IPs allowed to access Aurora
 }
 
 # Module: Secrets (Aurora credentials)
@@ -72,7 +73,7 @@ module "aurora" {
   
   environment        = local.environment
   vpc_id             = module.networking.vpc_id
-  subnet_ids         = module.networking.public_subnet_ids
+  subnet_ids         = module.networking.private_subnet_ids
   security_group_id  = module.networking.aurora_security_group_id
   db_username        = module.secrets.aurora_username
   db_password        = module.secrets.aurora_password
@@ -103,6 +104,20 @@ module "glue" {
   job_timeout        = 60
 }
 
+# Module: Step Functions (NEW - Orchestrates ETL layers)
+module "step_functions" {
+  source = "../../modules/step_functions"
+  
+  environment                = local.environment
+  staging_loader_name        = module.glue.staging_loader_name
+  staging_loader_arn         = module.glue.staging_loader_arn
+  silver_transformer_name    = module.glue.silver_transformer_name
+  silver_transformer_arn     = module.glue.silver_transformer_arn
+  gold_transformer_name      = module.glue.gold_transformer_name
+  gold_transformer_arn       = module.glue.gold_transformer_arn
+  sns_topic_arn              = module.monitoring.sns_topic_arn
+}
+
 # Module: EventBridge
 module "eventbridge" {
   source = "../../modules/eventbridge"
@@ -110,7 +125,11 @@ module "eventbridge" {
   environment          = local.environment
   glue_job_name        = module.glue.glue_job_name
   glue_job_arn         = module.glue.glue_job_arn
-  schedule_expression  = "cron(0 22 * * ? *)"  # 7:00 AM JST = 22:00 UTC
+  schedule_expression  = "cron(0 22 * * ? *)"  # 7:00 AM JST = 22:00 UTC (OLD - Keep for rollback)
+  
+  # NEW: Trigger Step Functions instead (commented out for now - parallel run phase)
+  # state_machine_arn    = module.step_functions.state_machine_arn
+  # schedule_expression  = "cron(0 22 * * ? *)"  # 7:00 AM JST
 }
 
 # Module: Monitoring
