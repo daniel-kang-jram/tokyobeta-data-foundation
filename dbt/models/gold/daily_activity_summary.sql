@@ -39,20 +39,21 @@ WITH inquiries AS (
 ),
 
 applications AS (
-    -- 申し込み数: Tenants with status 仮予約(4) or 初期賃料(5) by updated_at date
+    -- 申し込み数: Tenants who transitioned to status 仮予約(4) or 初期賃料(5)
+    -- Uses tenant_status_history to capture historical status changes (not just current snapshot)
     SELECT
-        DATE(t.updated_at) as activity_date,
+        h.valid_from as activity_date,
         CASE 
-            WHEN t.contract_type IN (2, 3) THEN 'corporate'
-            WHEN t.contract_type IN (1, 6, 7, 9) THEN 'individual'
+            WHEN h.contract_type IN (2, 3) THEN 'corporate'
+            WHEN h.contract_type IN (1, 6, 7, 9) THEN 'individual'
             ELSE 'unknown'
         END as tenant_type,
-        COUNT(DISTINCT t.id) as application_count
-    FROM {{ source('staging', 'tenants') }} t
-    WHERE t.status IN (4, 5)  -- 4=仮予約, 5=初期賃料
-      AND t.updated_at IS NOT NULL
-      AND t.updated_at >= '{{ var('min_valid_date') }}'
-    GROUP BY DATE(t.updated_at), tenant_type
+        COUNT(DISTINCT h.tenant_id) as application_count
+    FROM {{ ref('tenant_status_history') }} h
+    WHERE h.status IN (4, 5)  -- 4=仮予約, 5=初期賃料
+      AND h.valid_from IS NOT NULL
+      AND h.valid_from >= '{{ var('min_valid_date') }}'
+    GROUP BY h.valid_from, tenant_type
 ),
 
 contracts_signed AS (
