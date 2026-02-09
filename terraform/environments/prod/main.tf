@@ -92,8 +92,9 @@ module "glue" {
   environment         = local.environment
   s3_source_bucket    = var.s3_source_bucket
   s3_source_prefix    = var.s3_source_prefix
-  aurora_endpoint     = module.aurora.public_cluster_endpoint
-  aurora_database     = module.aurora.database_name
+  # TEMPORARY: Hardcoded public Aurora endpoint until private cluster is fully removed
+  aurora_endpoint     = "tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com"
+  aurora_database     = "tokyobeta"
   aurora_secret_arn   = module.secrets.aurora_secret_arn
   vpc_id              = module.networking.vpc_id
   private_subnet_ids  = module.networking.private_subnet_ids

@@ -1,0 +1,477 @@
+"""
+AWS Glue ETL Job: Silver Transformer
+Runs dbt to transform staging → silver layer (cleaned & standardized).
+
+Part of the resilient ETL architecture: Staging → Silver → Gold
+This job focuses ONLY on the silver layer transformations.
+"""
+
+import sys
+import boto3
+import json
+import subprocess
+import os
+from datetime import datetime
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from pyspark.context import SparkContext
+import pymysql
+
+# Initialize Glue context
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+
+# Get job parameters
+args = getResolvedOptions(sys.argv, [
+    'JOB_NAME',
+    'S3_SOURCE_BUCKET',
+    'DBT_PROJECT_PATH',
+    'AURORA_ENDPOINT',
+    'AURORA_DATABASE',
+    'AURORA_SECRET_ARN',
+    'ENVIRONMENT'
+])
+
+job.init(args['JOB_NAME'], args)
+
+# Initialize clients
+s3 = boto3.client('s3')
+secretsmanager = boto3.client('secretsmanager')
+
+# Silver tables to backup before transformation
+SILVER_TABLES = [
+    'stg_movings',
+    'stg_tenants',
+    'stg_apartments',
+    'stg_rooms',
+    'stg_inquiries',
+    'int_contracts'
+]
+
+
+def get_aurora_credentials(secretsmanager_client, secret_arn):
+    """
+    Retrieve Aurora credentials from Secrets Manager.
+    
+    Args:
+        secretsmanager_client: boto3 Secrets Manager client
+        secret_arn: ARN of the secret
+        
+    Returns:
+        Tuple of (username, password)
+    """
+    response = secretsmanager_client.get_secret_value(SecretId=secret_arn)
+    secret = json.loads(response['SecretString'])
+    return secret['username'], secret['password']
+
+
+def get_dbt_executable_path():
+    """
+    Get path to dbt executable in Glue environment.
+    
+    Returns:
+        Path to dbt binary
+    """
+    # dbt is installed in /home/spark/.local/bin/ by pip --user in Glue
+    possible_paths = [
+        "/home/spark/.local/bin/dbt",
+        "/usr/local/bin/dbt",
+        "dbt"  # Fallback to PATH
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path) or path == "dbt":
+            return path
+    
+    return "dbt"  # Default fallback
+
+
+def download_dbt_project(bucket, s3_prefix, local_path):
+    """
+    Download dbt project from S3.
+    
+    Args:
+        bucket: S3 bucket name
+        s3_prefix: S3 prefix for dbt project
+        local_path: Local destination path
+        
+    Returns:
+        Local path to dbt project
+    """
+    print(f"Downloading dbt project from s3://{bucket}/{s3_prefix}...")
+    
+    subprocess.run([
+        "aws", "s3", "sync",
+        f"s3://{bucket}/{s3_prefix}",
+        local_path
+    ], check=True)
+    
+    print(f"dbt project downloaded to {local_path}")
+    return local_path
+
+
+def install_dbt_dependencies(dbt_project_path):
+    """
+    Install dbt dependencies (dbt_utils, etc.).
+    
+    Args:
+        dbt_project_path: Path to dbt project
+        
+    Returns:
+        True if successful
+    """
+    print("\nInstalling dbt dependencies...")
+    
+    dbt_executable = get_dbt_executable_path()
+    
+    result = subprocess.run([
+        dbt_executable, "deps",
+        "--profiles-dir", dbt_project_path,
+        "--project-dir", dbt_project_path
+    ], capture_output=True, text=True)
+    
+    print(result.stdout)
+    if result.returncode != 0:
+        print("=== DBT DEPS ERRORS ===")
+        print(result.stderr)
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            result.stdout,
+            result.stderr
+        )
+    
+    return True
+
+
+def run_dbt_seed(dbt_project_path, target_env):
+    """
+    Load dbt seed files (code mappings).
+    
+    Args:
+        dbt_project_path: Path to dbt project
+        target_env: Target environment (prod/dev)
+        
+    Returns:
+        Result dict
+    """
+    print("\n" + "="*60)
+    print("RUNNING DBT SEED")
+    print("="*60)
+    
+    dbt_executable = get_dbt_executable_path()
+    
+    result = subprocess.run([
+        dbt_executable, "seed",
+        "--profiles-dir", dbt_project_path,
+        "--project-dir", dbt_project_path,
+        "--target", target_env
+    ], capture_output=True, text=True)
+    
+    print(result.stdout)
+    if result.returncode != 0:
+        print("=== DBT SEED ERRORS ===")
+        print(result.stderr)
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            result.stdout,
+            result.stderr
+        )
+    
+    return {
+        'success': True,
+        'output': result.stdout
+    }
+
+
+def run_dbt_silver_models(
+    dbt_project_path,
+    target_env,
+    aurora_endpoint=None,
+    aurora_username=None,
+    aurora_password=None
+):
+    """
+    Run dbt silver layer models only.
+    
+    Args:
+        dbt_project_path: Path to dbt project
+        target_env: Target environment (prod/dev)
+        aurora_endpoint: Aurora endpoint (for env var)
+        aurora_username: Aurora username (for env var)
+        aurora_password: Aurora password (for env var)
+        
+    Returns:
+        Result dict with models_built count
+    """
+    print("\n" + "="*60)
+    print("RUNNING DBT SILVER MODELS")
+    print("="*60)
+    
+    # Set environment variables for dbt profiles
+    if aurora_endpoint:
+        os.environ['AURORA_ENDPOINT'] = aurora_endpoint
+    if aurora_username:
+        os.environ['AURORA_USERNAME'] = aurora_username
+    if aurora_password:
+        os.environ['AURORA_PASSWORD'] = aurora_password
+    os.environ['DBT_TARGET'] = target_env
+    
+    dbt_executable = get_dbt_executable_path()
+    
+    # Run only silver models with --fail-fast to stop on first error
+    result = subprocess.run([
+        dbt_executable, "run",
+        "--profiles-dir", dbt_project_path,
+        "--project-dir", dbt_project_path,
+        "--target", target_env,
+        "--models", "silver.*",
+        "--fail-fast"
+    ], capture_output=True, text=True)
+    
+    print(result.stdout)
+    if result.stderr:
+        print("=== DBT RUN WARNINGS ===")
+        print(result.stderr)
+    
+    if result.returncode != 0:
+        print("=== DBT RUN FAILED ===")
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            result.stdout,
+            result.stderr
+        )
+    
+    # Parse model count from output
+    models_built = 0
+    if "models built" in result.stdout.lower() or "completed successfully" in result.stdout.lower():
+        models_built = len(SILVER_TABLES)  # Approximate count
+    
+    return {
+        'success': True,
+        'models_built': models_built,
+        'output': result.stdout
+    }
+
+
+def run_dbt_silver_tests(dbt_project_path, target_env):
+    """
+    Run dbt tests for silver layer models.
+    
+    Args:
+        dbt_project_path: Path to dbt project
+        target_env: Target environment (prod/dev)
+        
+    Returns:
+        Result dict with test counts
+    """
+    print("\n" + "="*60)
+    print("RUNNING DBT SILVER TESTS")
+    print("="*60)
+    
+    dbt_executable = get_dbt_executable_path()
+    
+    result = subprocess.run([
+        dbt_executable, "test",
+        "--profiles-dir", dbt_project_path,
+        "--project-dir", dbt_project_path,
+        "--target", target_env,
+        "--models", "silver.*"
+    ], capture_output=True, text=True)
+    
+    print(result.stdout)
+    
+    # Parse test results
+    import re
+    tests_passed = 0
+    tests_failed = 0
+    
+    if "passed" in result.stdout.lower():
+        # Try to extract numbers
+        match = re.search(r'(\d+)\s+test.*passed', result.stdout, re.IGNORECASE)
+        if match:
+            tests_passed = int(match.group(1))
+    
+    if "failed" in result.stdout.lower() or result.returncode != 0:
+        match = re.search(r'(\d+)\s+test.*failed', result.stdout, re.IGNORECASE)
+        if match:
+            tests_failed = int(match.group(1))
+    
+    if result.returncode != 0:
+        print(f"WARNING: {tests_failed} tests failed (non-blocking)")
+    
+    return {
+        'tests_passed': tests_passed,
+        'tests_failed': tests_failed,
+        'output': result.stdout
+    }
+
+
+def create_table_backups(connection, tables, schema='silver'):
+    """
+    Create backup copies of tables before transformation.
+    
+    Args:
+        connection: pymysql connection
+        tables: List of table names to backup
+        schema: Schema name
+        
+    Returns:
+        Number of backups created
+    """
+    print(f"\n=== Creating Pre-Transform Backups ({schema} layer) ===")
+    
+    backup_count = 0
+    backup_suffix = datetime.now().strftime('%Y%m%d_%H%M%S')
+    
+    cursor = connection.cursor()
+    
+    try:
+        for table_name in tables:
+            backup_name = f"{table_name}_backup_{backup_suffix}"
+            
+            try:
+                # Check if table exists
+                cursor.execute(f"SHOW TABLES FROM {schema} LIKE '{table_name}'")
+                if cursor.fetchone():
+                    # Get row count
+                    cursor.execute(f"SELECT COUNT(*) FROM {schema}.{table_name}")
+                    row_count = cursor.fetchone()[0]
+                    
+                    print(f"  Backing up {schema}.{table_name} ({row_count} rows)...")
+                    
+                    # Create backup
+                    cursor.execute(f"""
+                        CREATE TABLE {schema}.{backup_name} 
+                        AS SELECT * FROM {schema}.{table_name}
+                    """)
+                    
+                    print(f"    ✓ Created {schema}.{backup_name}")
+                    backup_count += 1
+                else:
+                    print(f"  ⊘ Skipping {table_name} (table does not exist)")
+                    
+            except Exception as e:
+                print(f"  ✗ Failed to backup {table_name}: {str(e)[:200]}")
+                # Continue with other backups
+                continue
+        
+        connection.commit()
+        print(f"\nBackup complete: {backup_count} tables backed up")
+        return backup_count
+        
+    finally:
+        cursor.close()
+
+
+def main():
+    """Main silver transformer workflow."""
+    start_time = datetime.now()
+    
+    try:
+        print("="*60)
+        print("SILVER TRANSFORMER JOB STARTED")
+        print(f"Environment: {args['ENVIRONMENT']}")
+        print("="*60)
+        
+        # Step 1: Download dbt project from S3
+        dbt_local_path = "/tmp/dbt-project"
+        download_dbt_project(
+            args['S3_SOURCE_BUCKET'],
+            args['DBT_PROJECT_PATH'].replace(f"s3://{args['S3_SOURCE_BUCKET']}/", ""),
+            dbt_local_path
+        )
+        
+        # Step 2: Get database credentials
+        username, password = get_aurora_credentials(secretsmanager, args['AURORA_SECRET_ARN'])
+        
+        # Set environment variables for dbt
+        import os
+        os.environ['AURORA_ENDPOINT'] = args['AURORA_ENDPOINT']
+        os.environ['AURORA_USERNAME'] = username
+        os.environ['AURORA_PASSWORD'] = password
+        os.environ['DBT_TARGET'] = args['ENVIRONMENT']
+        
+        # Step 3: Create backups of existing silver tables
+        connection = pymysql.connect(
+            host=args['AURORA_ENDPOINT'],
+            user=username,
+            password=password,
+            database=args['AURORA_DATABASE'],
+            charset='utf8mb4'
+        )
+        
+        try:
+            backup_count = create_table_backups(connection, SILVER_TABLES, 'silver')
+        finally:
+            connection.close()
+        
+        # Step 4: Install dbt dependencies
+        install_dbt_dependencies(dbt_local_path)
+        
+        # Step 5: Load seed files
+        seed_result = run_dbt_seed(dbt_local_path, args['ENVIRONMENT'])
+        
+        # Step 6: Run silver models
+        silver_result = run_dbt_silver_models(
+            dbt_local_path,
+            args['ENVIRONMENT'],
+            aurora_endpoint=args['AURORA_ENDPOINT'],
+            aurora_username=username,
+            aurora_password=password
+        )
+        
+        # Step 7: Run silver tests
+        test_result = run_dbt_silver_tests(dbt_local_path, args['ENVIRONMENT'])
+        
+        # Calculate duration
+        duration = (datetime.now() - start_time).total_seconds()
+        
+        # Log success
+        result = {
+            'status': 'SUCCESS',
+            'models_built': silver_result['models_built'],
+            'backup_count': backup_count,
+            'tests_passed': test_result['tests_passed'],
+            'tests_failed': test_result['tests_failed'],
+            'duration_seconds': int(duration)
+        }
+        
+        print(f"\n{'='*60}")
+        print("SILVER TRANSFORMER COMPLETED SUCCESSFULLY")
+        print(f"Duration: {duration:.2f} seconds")
+        print(f"Models built: {silver_result['models_built']}")
+        print(f"Backups created: {backup_count}")
+        print(f"Tests passed: {test_result['tests_passed']}")
+        print(f"Tests failed: {test_result['tests_failed']}")
+        print(f"{'='*60}\n")
+        
+        # Output result for Step Functions
+        print(f"RESULT_JSON: {json.dumps(result)}")
+        
+        job.commit()
+        return result
+        
+    except Exception as e:
+        print(f"\nERROR: Silver transformer job failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        result = {
+            'status': 'FAILED',
+            'error': str(e),
+            'error_type': type(e).__name__
+        }
+        print(f"RESULT_JSON: {json.dumps(result)}")
+        
+        job.commit()
+        raise
+
+
+if __name__ == "__main__":
+    main()

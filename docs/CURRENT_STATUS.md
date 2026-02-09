@@ -71,7 +71,7 @@ The Tokyo Beta real estate analytics platform is **fully operational** with a pr
 |--------|--------|------|---------|
 | **staging** | 81 | Various | Bronze: Raw SQL dump data |
 | **silver** | 6 | 59,118 (int_contracts) | Silver: Cleaned & standardized |
-| **gold** | 4 | 41,027 total | Gold: Business analytics |
+| **gold** | 6 | 41,027+ total | Gold: Business analytics |
 | **seeds** | 6 | 73 total | Reference data mappings |
 
 ### Gold Tables (Business Analytics)
@@ -82,8 +82,10 @@ The Tokyo Beta real estate analytics platform is **fully operational** with a pr
 | `new_contracts` | 16,508 | Demographics + geolocation |
 | `moveouts` | 15,262 | Tenure & revenue analysis |
 | `moveout_notices` | 3,635 | 24-month rolling window |
+| `moveout_analysis` | ~15,262 | Moveouts with rent ranges, age groups, tenure categories |
+| `moveout_summary` | ~1,500 | Pre-aggregated moveout counts by date/rent/geography |
 
-**Total**: 41,027 analytics-ready rows  
+**Total**: 41,027+ analytics-ready rows  
 **Updated**: Daily at 7:00 AM JST
 
 ---
@@ -231,6 +233,57 @@ mysql -h tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-
 
 # Restore to 1 hour ago (if needed)
 ./scripts/rollback_etl.sh "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)"
+```
+
+### Moveout Analysis Queries
+
+**Who moved out yesterday?**
+```sql
+SELECT contract_id, asset_id_hj, room_number, tenant_type, 
+       rent_range, age_group, nationality, moveout_reason_en
+FROM gold.moveout_analysis 
+WHERE moveout_date = CURRENT_DATE - INTERVAL 1 DAY
+ORDER BY rent_range_order, asset_id_hj;
+```
+
+**Current occupancy landscape by rent range:**
+```sql
+SELECT rent_range, prefecture, tenant_type, 
+       moveout_count, avg_monthly_rent, avg_tenure_months
+FROM gold.moveout_summary
+WHERE moveout_date >= CURRENT_DATE - INTERVAL 30 DAY
+ORDER BY rent_range_order, moveout_count DESC;
+```
+
+**Top moveout reasons by rent bracket:**
+```sql
+SELECT rent_range, moveout_reason_en, COUNT(*) as count
+FROM gold.moveout_analysis
+WHERE moveout_date >= CURRENT_DATE - INTERVAL 90 DAY
+GROUP BY rent_range, rent_range_order, moveout_reason_en
+ORDER BY rent_range_order, count DESC;
+```
+
+**Demographics breakdown for high-rent moveouts:**
+```sql
+SELECT age_group, gender, nationality, COUNT(*) as moveout_count
+FROM gold.moveout_analysis
+WHERE rent_range IN ('100K-150K', '150K+')
+  AND moveout_date >= CURRENT_DATE - INTERVAL 180 DAY
+GROUP BY age_group, gender, nationality
+ORDER BY moveout_count DESC
+LIMIT 20;
+```
+
+**Monthly trend by geography:**
+```sql
+SELECT moveout_year_month, prefecture, 
+       SUM(moveout_count) as total_moveouts,
+       AVG(avg_monthly_rent) as avg_rent
+FROM gold.moveout_summary
+WHERE moveout_date >= DATE_SUB(CURRENT_DATE, INTERVAL 12 MONTH)
+GROUP BY moveout_year_month, prefecture
+ORDER BY moveout_year_month DESC, total_moveouts DESC;
 ```
 
 ---

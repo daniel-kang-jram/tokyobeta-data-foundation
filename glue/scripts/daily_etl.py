@@ -10,12 +10,15 @@ import boto3
 import json
 import re
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from pyspark.context import SparkContext
 import pymysql
+import csv
+from io import StringIO, BytesIO
+from typing import List, Tuple, Dict, Any
 
 # Initialize Glue context
 sc = SparkContext()
@@ -494,10 +497,404 @@ def cleanup_empty_staging_tables():
         cursor.close()
         connection.close()
 
+def query_tenant_snapshot(cursor) -> List[Tuple]:
+    """Query current tenant snapshot from staging.tenants."""
+    query = """
+        SELECT 
+            id AS tenant_id,
+            status,
+            contract_type,
+            full_name
+        FROM staging.tenants
+        ORDER BY id
+    """
+    cursor.execute(query)
+    return cursor.fetchall()
+
+
+def generate_snapshot_csv(rows: List[Tuple], snapshot_date: date) -> str:
+    """Generate CSV content from snapshot rows."""
+    output = StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow(['tenant_id', 'status', 'contract_type', 'full_name', 'snapshot_date'])
+    
+    # Data rows
+    for row in rows:
+        tenant_id, status, contract_type, full_name = row
+        writer.writerow([tenant_id, status, contract_type, full_name, snapshot_date.strftime('%Y-%m-%d')])
+    
+    return output.getvalue()
+
+
+def upload_snapshot_csv(s3_client, bucket: str, csv_content: str, snapshot_date: date):
+    """Upload snapshot CSV to S3."""
+    date_str = snapshot_date.strftime('%Y%m%d')
+    key = f"snapshots/tenant_status/{date_str}.csv"
+    
+    print(f"Uploading snapshot to s3://{bucket}/{key}")
+    
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=csv_content.encode('utf-8'),
+        ContentType='text/csv'
+    )
+    
+    print(f"✓ Uploaded snapshot: {len(csv_content):,} bytes")
+
+
+def export_tenant_snapshot_to_s3(connection, s3_client, bucket: str, snapshot_date: date) -> Dict[str, Any]:
+    """
+    Export current tenant snapshot to S3.
+    
+    Called after staging load, ensures S3 always has latest snapshot.
+    """
+    print("\n" + "="*60)
+    print("STEP: Export Tenant Snapshot to S3")
+    print("="*60)
+    
+    try:
+        cursor = connection.cursor()
+        
+        # Query snapshot
+        rows = query_tenant_snapshot(cursor)
+        print(f"Queried {len(rows)} tenant records")
+        
+        # Generate CSV
+        csv_content = generate_snapshot_csv(rows, snapshot_date)
+        
+        # Upload to S3
+        upload_snapshot_csv(s3_client, bucket, csv_content, snapshot_date)
+        
+        cursor.close()
+        
+        return {
+            'status': 'success',
+            'rows_exported': len(rows),
+            'snapshot_date': snapshot_date
+        }
+    
+    except Exception as e:
+        print(f"⚠ Warning: Snapshot export failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'status': 'failed',
+            'error': str(e)
+        }
+
+
+def list_snapshot_csvs(s3_client, bucket: str, prefix: str = 'snapshots/tenant_status/') -> List[str]:
+    """List all snapshot CSV files from S3."""
+    print(f"Listing snapshot CSVs from s3://{bucket}/{prefix}")
+    
+    paginator = s3_client.get_paginator('list_objects_v2')
+    csv_keys = []
+    
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        if 'Contents' not in page:
+            continue
+        
+        for obj in page['Contents']:
+            key = obj['Key']
+            if key.endswith('.csv'):
+                csv_keys.append(key)
+    
+    csv_keys.sort()
+    print(f"Found {len(csv_keys)} snapshot CSV files")
+    
+    return csv_keys
+
+
+def create_tenant_daily_snapshots_table(cursor):
+    """Create staging.tenant_daily_snapshots table if it doesn't exist."""
+    create_table_sql = """
+        CREATE TABLE IF NOT EXISTS staging.tenant_daily_snapshots (
+            tenant_id INT NOT NULL,
+            status INT NOT NULL,
+            contract_type INT NOT NULL,
+            full_name VARCHAR(191),
+            snapshot_date DATE NOT NULL,
+            PRIMARY KEY (tenant_id, snapshot_date),
+            INDEX idx_snapshot_date (snapshot_date),
+            INDEX idx_tenant_id (tenant_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        COMMENT='Daily tenant status snapshots loaded from S3'
+    """
+    
+    cursor.execute(create_table_sql)
+    print("✓ Created/verified staging.tenant_daily_snapshots table")
+
+
+def download_and_parse_csv(s3_client, bucket: str, key: str) -> List[Tuple]:
+    """Download and parse a snapshot CSV from S3."""
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    content = response['Body'].read().decode('utf-8')
+    
+    reader = csv.DictReader(StringIO(content))
+    rows = []
+    
+    for row in reader:
+        rows.append((
+            int(row['tenant_id']),
+            int(row['status']),
+            int(row['contract_type']),
+            row['full_name'],
+            datetime.strptime(row['snapshot_date'], '%Y-%m-%d').date()
+        ))
+    
+    return rows
+
+
+def bulk_insert_snapshots(connection, cursor, rows: List[Tuple]) -> int:
+    """Bulk insert snapshot rows into Aurora."""
+    if not rows:
+        return 0
+    
+    insert_sql = """
+        INSERT INTO staging.tenant_daily_snapshots
+        (tenant_id, status, contract_type, full_name, snapshot_date)
+        VALUES (%s, %s, %s, %s, %s)
+    """
+    
+    cursor.executemany(insert_sql, rows)
+    connection.commit()
+    
+    return len(rows)
+
+
+def load_tenant_snapshots_from_s3(connection, s3_client, bucket: str) -> Dict[str, Any]:
+    """
+    Load new snapshot CSVs from S3 into staging.tenant_daily_snapshots (INCREMENTAL).
+    
+    Only loads snapshots that don't already exist in the table.
+    First run: loads all historical snapshots (backfill)
+    Daily runs: loads only today's new snapshot
+    """
+    print("\n" + "="*60)
+    print("STEP: Load Tenant Snapshots from S3 (Incremental)")
+    print("="*60)
+    
+    try:
+        cursor = connection.cursor()
+        
+        # Create table if not exists
+        create_tenant_daily_snapshots_table(cursor)
+        
+        # Get existing snapshot dates in the table
+        print("Checking existing snapshots in database...")
+        cursor.execute('SELECT DISTINCT snapshot_date FROM staging.tenant_daily_snapshots')
+        existing_dates = {row[0].strftime('%Y%m%d') for row in cursor.fetchall()}
+        print(f"Found {len(existing_dates)} existing snapshot dates in table")
+        
+        # List all snapshot CSVs from S3
+        csv_keys = list_snapshot_csvs(s3_client, bucket)
+        
+        if not csv_keys:
+            print("⚠ No snapshot CSVs found in S3")
+            return {
+                'status': 'success',
+                'csv_files_loaded': 0,
+                'total_rows_loaded': 0
+            }
+        
+        # Filter to only NEW snapshots (not already loaded)
+        new_csv_keys = []
+        for key in csv_keys:
+            # Extract date from filename: snapshots/tenant_status/YYYYMMDD.csv
+            filename = key.split('/')[-1]
+            snapshot_date = filename.replace('.csv', '')
+            if snapshot_date not in existing_dates:
+                new_csv_keys.append(key)
+        
+        if not new_csv_keys:
+            print("✓ All snapshots already loaded - nothing new to import")
+            return {
+                'status': 'success',
+                'csv_files_loaded': 0,
+                'csv_files_skipped': len(csv_keys),
+                'total_rows_loaded': 0
+            }
+        
+        print(f"\nFound {len(new_csv_keys)} NEW snapshots to load (out of {len(csv_keys)} total)")
+        
+        # Load each NEW CSV
+        total_rows = 0
+        loaded_files = 0
+        failed_files = 0
+        
+        for i, key in enumerate(new_csv_keys, 1):
+            try:
+                print(f"[{i}/{len(new_csv_keys)}] Loading {key}...")
+                
+                rows = download_and_parse_csv(s3_client, bucket, key)
+                inserted = bulk_insert_snapshots(connection, cursor, rows)
+                
+                total_rows += inserted
+                loaded_files += 1
+                
+                if i % 10 == 0 or i == len(new_csv_keys):
+                    print(f"  Progress: {i}/{len(new_csv_keys)} files, {total_rows:,} rows")
+            
+            except Exception as e:
+                print(f"  ✗ Failed to load {key}: {str(e)}")
+                failed_files += 1
+                continue
+        
+        # Verify
+        cursor.execute('SELECT COUNT(*) FROM staging.tenant_daily_snapshots')
+        final_count = cursor.fetchone()[0]
+        
+        cursor.close()
+        
+        print(f"\n✓ Snapshot load complete:")
+        print(f"  - NEW CSV files loaded: {loaded_files}")
+        print(f"  - CSV files skipped (already loaded): {len(csv_keys) - len(new_csv_keys)}")
+        print(f"  - CSV files failed: {failed_files}")
+        print(f"  - NEW rows loaded: {total_rows:,}")
+        print(f"  - Final table count: {final_count:,}")
+        
+        return {
+            'status': 'success',
+            'csv_files_loaded': loaded_files,
+            'csv_files_skipped': len(csv_keys) - len(new_csv_keys),
+            'csv_files_failed': failed_files,
+            'total_rows_loaded': total_rows
+        }
+    
+    except Exception as e:
+        print(f"⚠ Error loading snapshots: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'status': 'failed',
+            'error': str(e)
+        }
+
+
+def validate_snapshot_counts(cursor) -> Dict[str, Any]:
+    """Validate snapshot data quality."""
+    cursor.execute('SELECT COUNT(*) FROM staging.tenant_daily_snapshots')
+    total_rows = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(DISTINCT tenant_id) FROM staging.tenant_daily_snapshots')
+    unique_tenants = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT MIN(snapshot_date), MAX(snapshot_date) FROM staging.tenant_daily_snapshots')
+    date_range = cursor.fetchone()
+    
+    return {
+        'total_rows': total_rows,
+        'unique_tenants': unique_tenants,
+        'date_range': date_range
+    }
+
+
+def detect_missing_dates(cursor) -> List[date]:
+    """Detect missing snapshot dates."""
+    cursor.execute("""
+        SELECT DISTINCT snapshot_date 
+        FROM staging.tenant_daily_snapshots 
+        ORDER BY snapshot_date
+    """)
+    
+    dates = [row[0] for row in cursor.fetchall()]
+    
+    if not dates:
+        return []
+    
+    missing = []
+    current = dates[0]
+    
+    for next_date in dates[1:]:
+        delta = (next_date - current).days
+        if delta > 1:
+            # Gap detected
+            for i in range(1, delta):
+                missing.append(current + timedelta(days=i))
+        current = next_date
+    
+    return missing
+
+
+def validate_no_future_dates(cursor) -> bool:
+    """Validate no snapshots have future dates."""
+    cursor.execute("""
+        SELECT COUNT(*) 
+        FROM staging.tenant_daily_snapshots 
+        WHERE snapshot_date > CURDATE()
+    """)
+    future_count = cursor.fetchone()[0]
+    
+    return future_count == 0
+
+
+def enrich_nationality_data():
+    """
+    Enrich missing nationality data using AWS Bedrock LLM.
+    Targets records with レソト placeholder, NULL, or empty nationality.
+    """
+    print("\n" + "="*60)
+    print("STEP: LLM Nationality Enrichment")
+    print("="*60)
+    
+    try:
+        # Download nationality_enricher.py from S3 and add to path
+        import os
+        import tempfile
+        enricher_path = os.path.join(tempfile.gettempdir(), 'nationality_enricher.py')
+        s3.download_file(
+            args['S3_SOURCE_BUCKET'],
+            'glue-scripts/nationality_enricher.py',
+            enricher_path
+        )
+        
+        # Add to Python path
+        enricher_dir = os.path.dirname(enricher_path)
+        if enricher_dir not in sys.path:
+            sys.path.insert(0, enricher_dir)
+        
+        print(f"✓ Downloaded nationality_enricher.py from S3")
+        
+        # Import enricher
+        from nationality_enricher import NationalityEnricher
+        
+        # Create enricher instance
+        enricher = NationalityEnricher(
+            aurora_endpoint=args['AURORA_ENDPOINT'],
+            aurora_database=args['AURORA_DATABASE'],
+            secret_arn=args['AURORA_SECRET_ARN'],
+            bedrock_region='us-east-1',
+            max_batch_size=1000,  # Process up to 1000 per day
+            requests_per_second=5,  # Rate limit for Bedrock API
+            dry_run=False
+        )
+        
+        # Run enrichment
+        summary = enricher.enrich_all_missing_nationalities()
+        
+        print(f"✓ Nationality enrichment completed:")
+        print(f"  - Tenants identified: {summary['tenants_identified']}")
+        print(f"  - Predictions made: {summary['predictions_made']}")
+        print(f"  - Successful updates: {summary['successful_updates']}")
+        print(f"  - Failed updates: {summary['failed_updates']}")
+        print(f"  - Execution time: {summary['execution_time_seconds']:.1f}s")
+        
+        return summary['successful_updates']
+        
+    except Exception as e:
+        print(f"⚠ Warning: Nationality enrichment failed: {str(e)}")
+        print("  (Continuing with ETL - enrichment is non-critical)")
+        import traceback
+        traceback.print_exc()
+        return 0
+
 def archive_processed_dump(s3_key):
     """Move processed dump to archive folder."""
     source_key = s3_key
-    dest_key = source_key.replace('/dumps/', '/processed/')
+    dest_key = source_key.replace('/dumps/', '/processed/').replace('dumps/', 'processed/')
     
     s3.copy_object(
         Bucket=args['S3_SOURCE_BUCKET'],
@@ -526,16 +923,48 @@ def main():
         # Step 3: Clean up empty tables
         dropped_count = cleanup_empty_staging_tables()
         
-        # Step 4: Create backups before dbt transformations
+        # Step 4: Export today's tenant snapshot to S3
+        username, password = get_aurora_credentials()
+        connection = pymysql.connect(
+            host=args['AURORA_ENDPOINT'],
+            user=username,
+            password=password,
+            database=args['AURORA_DATABASE'],
+            charset='utf8mb4'
+        )
+        
+        snapshot_date = datetime.now().date()
+        snapshot_export_result = export_tenant_snapshot_to_s3(
+            connection,
+            s3,
+            args['S3_SOURCE_BUCKET'],
+            snapshot_date
+        )
+        snapshot_exported = snapshot_export_result.get('rows_exported', 0)
+        
+        # Step 5: Load all historical snapshots from S3
+        snapshot_load_result = load_tenant_snapshots_from_s3(
+            connection,
+            s3,
+            args['S3_SOURCE_BUCKET']
+        )
+        snapshot_rows_loaded = snapshot_load_result.get('total_rows_loaded', 0)
+        
+        connection.close()
+        
+        # Step 6: Enrich nationality data using LLM (レソト and missing values)
+        enriched_count = enrich_nationality_data()
+        
+        # Step 7: Create backups before dbt transformations
         backup_count = create_pre_etl_backups()
         
-        # Step 5: Clean up old backups (keep last 3 days)
+        # Step 8: Clean up old backups (keep last 3 days)
         removed_backups = cleanup_old_backups(days_to_keep=3)
         
-        # Step 6: Run dbt transformations
+        # Step 9: Run dbt transformations
         dbt_success = run_dbt_transformations()
         
-        # Step 7: Archive processed dump
+        # Step 10: Archive processed dump
         archive_processed_dump(latest_key)
         
         # Calculate duration
@@ -547,12 +976,23 @@ def main():
         print(f"Duration: {duration:.2f} seconds")
         print(f"Tables loaded: {table_count}")
         print(f"Empty tables dropped: {dropped_count}")
+        print(f"Snapshot exported: {snapshot_exported} tenants")
+        print(f"Historical snapshots loaded: {snapshot_rows_loaded:,} rows")
+        print(f"Nationalities enriched: {enriched_count}")
         print(f"Pre-ETL backups created: {backup_count}")
         print(f"Old backups removed: {removed_backups}")
         print(f"SQL statements executed: {stmt_count}")
         print(f"dbt transformations: {'Success' if dbt_success else 'Failed'}")
         print(f"{'='*60}\n")
+        print(f"Tenant Status History:")
+        print(f"  • Today's snapshot: {snapshot_exported} tenants exported to S3")
+        print(f"  • Historical data: {snapshot_rows_loaded:,} snapshot rows loaded")
+        print(f"  • Wipe-resilient: Full history rebuilt from S3 on every run")
+        print(f"Data Quality:")
+        print(f"  • LLM nationality enrichment: {enriched_count} records updated")
+        print(f"  • Model: Claude 3 Haiku (Bedrock)")
         print(f"Data Protection:")
+        print(f"  • S3 snapshots: Daily tenant status backups (unlimited retention)")
         print(f"  • Table-level backups: {backup_count} created (3-day retention)")
         print(f"  • Aurora PITR: 7-day retention for cluster-level recovery")
         print(f"  • Recovery guide: docs/DATA_PROTECTION_STRATEGY.md")

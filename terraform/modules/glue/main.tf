@@ -106,6 +106,20 @@ resource "aws_iam_role_policy" "glue_service_policy" {
           "rds:ListTagsForResource"
         ]
         Resource = ["*"]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel"
+        ]
+        Resource = [
+          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+        ]
+        Condition = {
+          StringEquals = {
+            "aws:RequestedRegion" = "us-east-1"
+          }
+        }
       }
     ]
   })
@@ -194,7 +208,7 @@ resource "aws_glue_job" "daily_etl" {
     "--enable-spark-ui"                  = "true"
     "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/"
     "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/"
-    "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql"
+    "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql,boto3>=1.34.51,botocore>=1.34.51"
     
     # Custom parameters
     "--S3_SOURCE_BUCKET"     = var.s3_source_bucket
@@ -227,4 +241,158 @@ resource "aws_glue_job" "daily_etl" {
 
 # Note: Glue Data Quality rulesets will be configured after first ETL run
 # when staging.movings table exists in the Glue Data Catalog
+
+# ============================================================================
+# NEW RESILIENT ETL ARCHITECTURE (Three Independent Jobs)
+# ============================================================================
+
+# Job 1: Staging Loader
+resource "aws_glue_job" "staging_loader" {
+  name     = "tokyobeta-${var.environment}-staging-loader"
+  role_arn = aws_iam_role.glue_service_role.arn
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.s3_source_bucket}/glue-scripts/staging_loader.py"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--job-language"                     = "python"
+    "--job-bookmark-option"              = "job-bookmark-disable"
+    "--enable-metrics"                   = "true"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-spark-ui"                  = "true"
+    "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/staging/"
+    "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/staging/"
+    "--additional-python-modules"        = "pymysql"
+    
+    # Custom parameters
+    "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
+    "--S3_SOURCE_PREFIX"  = var.s3_source_prefix
+    "--AURORA_ENDPOINT"   = var.aurora_endpoint
+    "--AURORA_DATABASE"   = var.aurora_database
+    "--AURORA_SECRET_ARN" = var.aurora_secret_arn
+    "--ENVIRONMENT"       = var.environment
+  }
+
+  glue_version      = "4.0"
+  max_retries       = 0  # Retries handled by Step Functions
+  timeout           = 30 # 30 minutes max
+  worker_type       = "G.1X"
+  number_of_workers = 2
+  
+  connections = [aws_glue_connection.aurora.name]
+
+  execution_property {
+    max_concurrent_runs = 1
+  }
+
+  tags = {
+    Name        = "tokyobeta-${var.environment}-staging-loader"
+    Environment = var.environment
+    Layer       = "bronze"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Job 2: Silver Transformer
+resource "aws_glue_job" "silver_transformer" {
+  name     = "tokyobeta-${var.environment}-silver-transformer"
+  role_arn = aws_iam_role.glue_service_role.arn
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.s3_source_bucket}/glue-scripts/silver_transformer.py"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--job-language"                     = "python"
+    "--job-bookmark-option"              = "job-bookmark-disable"
+    "--enable-metrics"                   = "true"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-spark-ui"                  = "true"
+    "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/silver/"
+    "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/silver/"
+    "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql"
+    
+    # Custom parameters
+    "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
+    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
+    "--AURORA_ENDPOINT"   = var.aurora_endpoint
+    "--AURORA_DATABASE"   = var.aurora_database
+    "--AURORA_SECRET_ARN" = var.aurora_secret_arn
+    "--ENVIRONMENT"       = var.environment
+  }
+
+  glue_version      = "4.0"
+  max_retries       = 0  # Retries handled by Step Functions
+  timeout           = 60 # 60 minutes max (dbt deps + seed + models + tests + backups)
+  worker_type       = "G.1X"
+  number_of_workers = 2
+  
+  connections = [aws_glue_connection.aurora.name]
+
+  execution_property {
+    max_concurrent_runs = 1
+  }
+
+  tags = {
+    Name        = "tokyobeta-${var.environment}-silver-transformer"
+    Environment = var.environment
+    Layer       = "silver"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Job 3: Gold Transformer
+resource "aws_glue_job" "gold_transformer" {
+  name     = "tokyobeta-${var.environment}-gold-transformer"
+  role_arn = aws_iam_role.glue_service_role.arn
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.s3_source_bucket}/glue-scripts/gold_transformer.py"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--job-language"                     = "python"
+    "--job-bookmark-option"              = "job-bookmark-disable"
+    "--enable-metrics"                   = "true"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-spark-ui"                  = "true"
+    "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/gold/"
+    "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/gold/"
+    "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql"
+    
+    # Custom parameters
+    "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
+    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
+    "--AURORA_ENDPOINT"   = var.aurora_endpoint
+    "--AURORA_DATABASE"   = var.aurora_database
+    "--AURORA_SECRET_ARN" = var.aurora_secret_arn
+    "--ENVIRONMENT"       = var.environment
+  }
+
+  glue_version      = "4.0"
+  max_retries       = 0  # Retries handled by Step Functions
+  timeout           = 60 # 60 minutes max (dbt deps + seed + models + tests + backups)
+  worker_type       = "G.1X"
+  number_of_workers = 2
+  
+  connections = [aws_glue_connection.aurora.name]
+
+  execution_property {
+    max_concurrent_runs = 1
+  }
+
+  tags = {
+    Name        = "tokyobeta-${var.environment}-gold-transformer"
+    Environment = var.environment
+    Layer       = "gold"
+    ManagedBy   = "terraform"
+  }
+}
 

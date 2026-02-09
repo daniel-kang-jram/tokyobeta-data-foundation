@@ -34,3 +34,34 @@ output "crawler_name" {
   description = "Name of the S3 dumps crawler"
   value       = aws_glue_crawler.s3_dumps.name
 }
+
+# New resilient ETL job outputs
+output "staging_loader_name" {
+  description = "Name of the staging loader Glue job"
+  value       = aws_glue_job.staging_loader.name
+}
+
+output "staging_loader_arn" {
+  description = "ARN of the staging loader Glue job"
+  value       = aws_glue_job.staging_loader.arn
+}
+
+output "silver_transformer_name" {
+  description = "Name of the silver transformer Glue job"
+  value       = aws_glue_job.silver_transformer.name
+}
+
+output "silver_transformer_arn" {
+  description = "ARN of the silver transformer Glue job"
+  value       = aws_glue_job.silver_transformer.arn
+}
+
+output "gold_transformer_name" {
+  description = "Name of the gold transformer Glue job"
+  value       = aws_glue_job.gold_transformer.name
+}
+
+output "gold_transformer_arn" {
+  description = "ARN of the gold transformer Glue job"
+  value       = aws_glue_job.gold_transformer.arn
+}

@@ -3,11 +3,11 @@
 
 # DB Subnet Group
 resource "aws_db_subnet_group" "aurora" {
-  name       = "tokyobeta-${var.environment}-aurora-public-subnet-group"
+  name       = "tokyobeta-${var.environment}-aurora-subnet-group"
   subnet_ids = var.subnet_ids
 
   tags = {
-    Name        = "tokyobeta-${var.environment}-aurora-public-subnet-group"
+    Name        = "tokyobeta-${var.environment}-aurora-subnet-group"
     Environment = var.environment
   }
 }
@@ -63,7 +63,7 @@ resource "aws_db_parameter_group" "aurora" {
 
 # Aurora Cluster
 resource "aws_rds_cluster" "aurora" {
-  cluster_identifier              = "tokyobeta-${var.environment}-aurora-cluster-public"
+  cluster_identifier              = "tokyobeta-${var.environment}-aurora-cluster"
   engine                          = "aurora-mysql"
   engine_version                  = "8.0.mysql_aurora.3.11.1"
   database_name                   = "tokyobeta"
@@ -93,7 +93,7 @@ resource "aws_rds_cluster" "aurora" {
 # Aurora Cluster Instances
 resource "aws_rds_cluster_instance" "aurora" {
   count              = var.instance_count
-  identifier         = "tokyobeta-${var.environment}-aurora-public-instance-${count.index + 1}"
+  identifier         = "tokyobeta-${var.environment}-aurora-instance-${count.index + 1}"
   cluster_identifier = aws_rds_cluster.aurora.id
   instance_class     = var.instance_class
   engine             = aws_rds_cluster.aurora.engine

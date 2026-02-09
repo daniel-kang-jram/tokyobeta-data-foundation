@@ -192,3 +192,25 @@ sources:
             description: Inquiry submission timestamp
             tests:
               - not_null
+      
+      - name: tenant_daily_snapshots
+        description: Daily tenant status snapshots loaded from S3 for historical analysis
+        columns:
+          - name: tenant_id
+            description: Tenant ID
+            tests:
+              - not_null
+          - name: status
+            description: Tenant status code at snapshot date
+            tests:
+              - not_null
+          - name: contract_type
+            description: Contract type (1=individual, 2/3=corporate)
+            tests:
+              - not_null
+          - name: full_name
+            description: Tenant full name
+          - name: snapshot_date
+            description: Date of snapshot
+            tests:
+              - not_null

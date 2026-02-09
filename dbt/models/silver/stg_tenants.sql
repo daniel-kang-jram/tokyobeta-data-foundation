@@ -26,9 +26,42 @@ SELECT
     t.birth_date,
     COALESCE(t.age, TIMESTAMPDIFF(YEAR, t.birth_date, CURRENT_DATE)) as age,
     
-    -- Nationality
+    -- Nationality with LLM enrichment fallback
     t.m_nationality_id,
-    COALESCE({{ clean_string_null('t.nationality') }}, n.nationality_name) as nationality,
+    CASE 
+        -- Priority 1: Use original nationality if valid (not placeholder)
+        WHEN {{ clean_string_null('t.nationality') }} IS NOT NULL 
+             AND t.nationality != 'レソト'
+        THEN {{ clean_string_null('t.nationality') }}
+        
+        -- Priority 2: Use lookup table nationality_name
+        WHEN n.nationality_name IS NOT NULL
+        THEN n.nationality_name
+        
+        -- Priority 3: Use LLM-predicted nationality (if enrichment ran)
+        WHEN t.llm_nationality IS NOT NULL
+        THEN t.llm_nationality
+        
+        -- Priority 4: Fallback to "その他 (Unknown)"
+        ELSE 'その他'
+    END as nationality,
+    
+    -- LLM-predicted nationality (for transparency)
+    t.llm_nationality,
+    
+    -- Data quality flag for nationality
+    CASE 
+        WHEN {{ clean_string_null('t.nationality') }} IS NOT NULL 
+             AND t.nationality != 'レソト'
+        THEN 'original'
+        WHEN t.nationality = 'レソト'
+        THEN 'lesotho_placeholder'
+        WHEN t.llm_nationality IS NOT NULL
+        THEN 'llm_predicted'
+        WHEN n.nationality_name IS NOT NULL
+        THEN 'lookup_table'
+        ELSE 'missing'
+    END as nationality_data_source,
     
     -- Personal identity with semantic label
     t.personal_identity as personal_identity_raw,

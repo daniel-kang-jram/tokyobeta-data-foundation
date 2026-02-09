@@ -28,13 +28,6 @@ WITH history AS (
         full_name,
         status,
         contract_type,
-        affiliation_status,
-        is_transferred,
-        is_renewal_ng,
-        is_paysle_unpaid,
-        renewal_priority,
-        agreement_type,
-        moving_id,
         valid_from,
         valid_to,
         is_current,
@@ -47,8 +40,6 @@ with_previous_status AS (
     SELECT
         h.*,
         LAG(status) OVER (PARTITION BY tenant_id ORDER BY valid_from) AS previous_status,
-        LAG(is_paysle_unpaid) OVER (PARTITION BY tenant_id ORDER BY valid_from) AS previous_unpaid_status,
-        LAG(is_renewal_ng) OVER (PARTITION BY tenant_id ORDER BY valid_from) AS previous_renewal_ng,
         LAG(valid_from) OVER (PARTITION BY tenant_id ORDER BY valid_from) AS previous_change_date
     FROM history h
 ),
@@ -64,124 +55,52 @@ with_duration AS (
         CASE
             WHEN previous_status IS NOT NULL AND status != previous_status THEN TRUE
             ELSE FALSE
-        END AS status_changed,
-        CASE
-            WHEN previous_unpaid_status IS NOT NULL AND is_paysle_unpaid != previous_unpaid_status THEN TRUE
-            ELSE FALSE  
-        END AS payment_status_changed,
-        CASE
-            WHEN previous_renewal_ng IS NOT NULL AND is_renewal_ng != previous_renewal_ng THEN TRUE
-            ELSE FALSE
-        END AS renewal_eligibility_changed
+        END AS status_changed
     FROM with_previous_status
 ),
 
--- Add business-friendly status labels
+-- Add business-friendly status labels using seed table lookups
 final AS (
     SELECT
-        tenant_id,
-        full_name,
+        d.tenant_id,
+        d.full_name,
         
-        -- Status information
-        status AS status_code,
-        CASE status
-            WHEN 1 THEN 'Inquiry'
-            WHEN 2 THEN 'Preview Scheduled'
-            WHEN 3 THEN 'Application Submitted'
-            WHEN 4 THEN 'Under Contract'
-            WHEN 5 THEN 'Active Tenant'
-            WHEN 6 THEN 'Moveout Notice'
-            WHEN 7 THEN 'Moved Out'
-            WHEN 8 THEN 'Cancelled'
-            ELSE CONCAT('Unknown (', status, ')')
-        END AS status_label,
+        -- Status information (joined with code tables)
+        d.status AS status_code,
+        COALESCE(ts.label_en, CONCAT('Unknown (', d.status, ')')) AS status_label,
         
-        previous_status AS previous_status_code,
-        CASE previous_status
-            WHEN 1 THEN 'Inquiry'
-            WHEN 2 THEN 'Preview Scheduled'
-            WHEN 3 THEN 'Application Submitted'
-            WHEN 4 THEN 'Under Contract'
-            WHEN 5 THEN 'Active Tenant'
-            WHEN 6 THEN 'Moveout Notice'
-            WHEN 7 THEN 'Moved Out'
-            WHEN 8 THEN 'Cancelled'
-            ELSE CONCAT('Unknown (', previous_status, ')')
-        END AS previous_status_label,
+        d.previous_status AS previous_status_code,
+        COALESCE(pts.label_en, CONCAT('Unknown (', d.previous_status, ')')) AS previous_status_label,
         
         -- Status transition flags
-        status_changed,
+        d.status_changed,
         CASE
-            WHEN status_changed THEN CONCAT(
-                CASE previous_status
-                    WHEN 1 THEN 'Inquiry'
-                    WHEN 2 THEN 'Preview Scheduled'
-                    WHEN 3 THEN 'Application Submitted'
-                    WHEN 4 THEN 'Under Contract'
-                    WHEN 5 THEN 'Active Tenant'
-                    WHEN 6 THEN 'Moveout Notice'
-                    WHEN 7 THEN 'Moved Out'
-                    WHEN 8 THEN 'Cancelled'
-                    ELSE CONCAT('Unknown (', previous_status, ')')
-                END,
+            WHEN d.status_changed THEN CONCAT(
+                COALESCE(pts.label_en, CONCAT('Unknown (', d.previous_status, ')')),
                 ' → ',
-                CASE status
-                    WHEN 1 THEN 'Inquiry'
-                    WHEN 2 THEN 'Preview Scheduled'
-                    WHEN 3 THEN 'Application Submitted'
-                    WHEN 4 THEN 'Under Contract'
-                    WHEN 5 THEN 'Active Tenant'
-                    WHEN 6 THEN 'Moveout Notice'
-                    WHEN 7 THEN 'Moved Out'
-                    WHEN 8 THEN 'Cancelled'
-                    ELSE CONCAT('Unknown (', status, ')')
-                END
+                COALESCE(ts.label_en, CONCAT('Unknown (', d.status, ')'))
             )
             ELSE NULL
         END AS status_transition,
         
         -- Contract information
-        contract_type,
-        CASE contract_type
-            WHEN 1 THEN 'Individual'
-            WHEN 2 THEN 'Corporate - Company'
-            WHEN 3 THEN 'Corporate - Other'
-            ELSE 'Unknown'
-        END AS contract_type_label,
-        
-        -- Payment status
-        COALESCE(is_paysle_unpaid, 0) AS is_unpaid,
-        payment_status_changed,
-        CASE
-            WHEN payment_status_changed AND is_paysle_unpaid = 1 THEN 'Became Unpaid'
-            WHEN payment_status_changed AND is_paysle_unpaid = 0 THEN 'Payment Resolved'
-            ELSE NULL
-        END AS payment_status_change,
-        
-        -- Renewal information
-        COALESCE(is_renewal_ng, 0) AS is_renewal_ineligible,
-        renewal_eligibility_changed,
-        COALESCE(renewal_priority, 0) AS renewal_priority,
-        
-        -- Other flags
-        COALESCE(is_transferred, 0) AS is_transferred,
-        affiliation_status,
-        agreement_type,
-        
-        -- References
-        moving_id,
+        d.contract_type,
+        COALESCE(ct.label_en, 'Unknown') AS contract_type_label,
         
         -- Time dimensions
-        valid_from AS effective_date,
-        valid_to AS end_date,
-        days_in_status,
-        is_current,
+        d.valid_from AS effective_date,
+        d.valid_to AS end_date,
+        d.days_in_status,
+        d.is_current,
         
         -- Metadata
-        dbt_updated_at,
+        d.dbt_updated_at,
         CURRENT_TIMESTAMP AS created_at
         
-    FROM with_duration
+    FROM with_duration d
+    LEFT JOIN {{ ref('code_tenant_status') }} ts ON d.status = ts.code
+    LEFT JOIN {{ ref('code_tenant_status') }} pts ON d.previous_status = pts.code
+    LEFT JOIN {{ ref('code_contract_type') }} ct ON d.contract_type = ct.code
 )
 
 SELECT * FROM final
