@@ -448,7 +448,6 @@ aws cloudwatch get-metric-statistics \
 ### Technical Documentation
 - **[Architecture Decision](docs/ARCHITECTURE_DECISION.md)**: Why Glue + dbt
 - **[Data Dictionary](docs/DATA_DICTIONARY.md)**: Column definitions
-- **[Robustness Summary](docs/ROBUSTNESS_IMPLEMENTATION_SUMMARY.md)**: Latest improvements
 - **[Rent Roll Reconciliation](docs/RENT_ROLL_RECONCILIATION_20260209.md)**: Reconciliation between PMS and analytics
 - **[Nationality Enrichment](docs/LLM_NATIONALITY_ENRICHMENT.md)**: LLM-based nationality prediction
 
