@@ -70,40 +70,56 @@ contracts_signed AS (
 ),
 
 confirmed_movein AS (
-    -- 確定入居者/入居数: Tenants with status [4,5,6,7,9,14,15] by movein_date
+    -- 確定入居者/入居数: Count move-ins where tenant reached eligible status
+    -- Uses tenant_status_history to check historical status (not just current snapshot)
     -- Status: 仮予約(4)、初期賃料(5)、入居説明(6)、入居(7)、居住中(9)、退去通知(14)、退去予定(15)
     SELECT
         DATE(mv.movein_date) as activity_date,
         CASE 
-            WHEN t.contract_type IN (2, 3) THEN 'corporate'
-            WHEN t.contract_type IN (1, 6, 7, 9) THEN 'individual'
+            WHEN h.contract_type IN (2, 3) THEN 'corporate'
+            WHEN h.contract_type IN (1, 6, 7, 9) THEN 'individual'
             ELSE 'unknown'
         END as tenant_type,
-        COUNT(DISTINCT t.id) as movein_count
-    FROM {{ source('staging', 'tenants') }} t
-    INNER JOIN {{ source('staging', 'movings') }} mv ON t.moving_id = mv.id
-    WHERE t.status IN (4, 5, 6, 7, 9, 14, 15)
-      AND mv.movein_date IS NOT NULL
+        COUNT(DISTINCT mv.tenant_id) as movein_count
+    FROM {{ source('staging', 'movings') }} mv
+    INNER JOIN {{ ref('tenant_status_history') }} h 
+        ON mv.tenant_id = h.tenant_id
+    WHERE mv.movein_date IS NOT NULL
       AND mv.movein_date >= '{{ var('min_valid_date') }}'
+      -- Tenant had eligible status on or after move-in date
+      AND h.status IN (4, 5, 6, 7, 9, 14, 15)
+      AND (
+          -- Status period overlaps with or starts after movein_date
+          (h.valid_from <= mv.movein_date AND (h.valid_to IS NULL OR h.valid_to >= mv.movein_date))
+          OR h.valid_from >= mv.movein_date
+      )
     GROUP BY DATE(mv.movein_date), tenant_type
 ),
 
 confirmed_moveout AS (
-    -- 確定退去者: Tenants with status [14,15,16,17] by moveout_date (NOT moveout_plans_date)
+    -- 確定退去者: Count move-outs where tenant reached moveout status
+    -- Uses tenant_status_history to check historical status
     -- Status: 退去通知(14)、退去予定(15)、メンテ待ち(16)、退去済み(17)
     SELECT
         DATE(mv.moveout_date) as activity_date,
         CASE 
-            WHEN t.contract_type IN (2, 3) THEN 'corporate'
-            WHEN t.contract_type IN (1, 6, 7, 9) THEN 'individual'
+            WHEN h.contract_type IN (2, 3) THEN 'corporate'
+            WHEN h.contract_type IN (1, 6, 7, 9) THEN 'individual'
             ELSE 'unknown'
         END as tenant_type,
-        COUNT(DISTINCT t.id) as moveout_count
-    FROM {{ source('staging', 'tenants') }} t
-    INNER JOIN {{ source('staging', 'movings') }} mv ON t.moving_id = mv.id
-    WHERE t.status IN (14, 15, 16, 17)  -- 退去通知、退去予定、メンテ待ち、退去済み
-      AND mv.moveout_date IS NOT NULL  -- Using moveout_date, NOT moveout_plans_date
+        COUNT(DISTINCT mv.tenant_id) as moveout_count
+    FROM {{ source('staging', 'movings') }} mv
+    INNER JOIN {{ ref('tenant_status_history') }} h 
+        ON mv.tenant_id = h.tenant_id
+    WHERE mv.moveout_date IS NOT NULL
       AND mv.moveout_date >= '{{ var('min_valid_date') }}'
+      -- Tenant had moveout status on or after moveout date
+      AND h.status IN (14, 15, 16, 17)  -- 退去通知、退去予定、メンテ待ち、退去済み
+      AND (
+          -- Status period overlaps with or starts after moveout_date
+          (h.valid_from <= mv.moveout_date AND (h.valid_to IS NULL OR h.valid_to >= mv.moveout_date))
+          OR h.valid_from >= mv.moveout_date
+      )
     GROUP BY DATE(mv.moveout_date), tenant_type
 ),
 

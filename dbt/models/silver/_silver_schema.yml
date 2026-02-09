@@ -4,40 +4,67 @@ models:
   - name: tenant_status_history
     description: |
       Slowly Changing Dimension (SCD Type 2) tracking historical changes in tenant status.
-      Creates new records only when key status fields change, enabling time-series analysis.
+      
+      **WIPE-RESILIENT DESIGN:**
+      - Built from staging.tenant_daily_snapshots (loaded from S3 daily)
+      - Fully rebuilt on each run (materialized='table')
+      - S3 is the source of truth - Aurora wipes don't lose history
+      - Historical data back to May 2025 (260+ days of snapshots)
+      
+      Uses LAG() window functions over daily snapshots to detect when status changed,
+      then creates SCD Type 2 records with valid_from/valid_to date ranges.
+      
+      **DATA NOTES:**
+      - ~46% of rows have full_name='*' (from early dumps May-June 2025 where names were masked)
+      - valid_from = The dump date where this status first appeared (this is your "dump file date")
+      - valid_to = Day before status changed (NULL if still current)
     columns:
       - name: tenant_id
         description: Tenant identifier
         tests:
           - not_null
+      - name: full_name
+        description: |
+          Tenant full name (姓名). Note: '*' indicates masked/redacted names from early dumps (May-June 2025)
+      - name: status
+        description: Tenant status code (0-17)
+        tests:
+          - not_null
+      - name: status_label_ja
+        description: Japanese label for status (e.g., 入居中, 退去済み)
+      - name: status_label_en
+        description: English label for status (e.g., Active Tenant, Moved Out)
+      - name: is_active_lease
+        description: Flag indicating tenant has active lease (status 7,9,10,13)
+      - name: contract_type
+        description: Contract type code (1=一般, 2=法人契約, 3=法人契約個人, etc.)
+        tests:
+          - not_null
+      - name: tenant_type
+        description: |
+          Classification: 'individual', 'corporate', or 'unknown'
+          Based on contract_type (2,3=corporate, 1,6,7,9=individual)
+      - name: contract_type_label_ja
+        description: Japanese label for contract type (e.g., 一般, 法人契約)
       - name: valid_from
-        description: Start date of this status period (inclusive)
+        description: |
+          **Start date of this status period** (inclusive).
+          This is the dump file date where this status first appeared.
+          Use this column to know which day's snapshot each row represents.
         tests:
           - not_null
       - name: valid_to
-        description: End date of this status period (inclusive), NULL if current
+        description: |
+          **End date of this status period** (inclusive), NULL if current.
+          This is the day before status changed to something else.
       - name: is_current
-        description: Boolean flag indicating if this is the current/latest record
-      - name: status
-        description: Primary tenant status code
-      - name: contract_type
-        description: Contract type (1=Individual, 2/3=Corporate)
-      - name: affiliation_status
-        description: Employment/affiliation status
-      - name: is_transferred
-        description: Transfer flag
-      - name: is_renewal_ng
-        description: Renewal eligibility flag (1=not eligible)
-      - name: is_paysle_unpaid
-        description: Unpaid Paysle charges flag
-      - name: renewal_priority
-        description: Renewal priority level
-      - name: agreement_type
-        description: Agreement type code
-      - name: moving_id
-        description: Reference to current moving/contract record
+        description: Boolean flag indicating if this is the current/latest status for this tenant
+        tests:
+          - not_null
+      - name: days_in_status
+        description: Number of days in this status (calculated from valid_from to valid_to or today)
       - name: dbt_updated_at
-        description: Timestamp when this record was created by dbt
+        description: Timestamp when this record was created/updated by dbt
   - name: stg_movings
     description: Cleaned contract lifecycle data with semantic code labels
     config:
