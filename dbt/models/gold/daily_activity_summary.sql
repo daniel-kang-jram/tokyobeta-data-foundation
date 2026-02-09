@@ -26,11 +26,13 @@ WITH inquiries AS (
     -- 問い合わせ数: New tenants registered (any status) by creation date
     SELECT
         DATE(t.created_at) as activity_date,
-        COALESCE(ct.tenant_type, 'individual') as tenant_type,
+        CASE 
+            WHEN t.contract_type IN (2, 3) THEN 'corporate'  -- 法人契約, 法人契約個人
+            WHEN t.contract_type IN (1, 6, 7, 9) THEN 'individual'  -- 一般, 定期契約, 一般保証人, 一般2
+            ELSE 'unknown'  -- 未設定, Airbnb
+        END as tenant_type,
         COUNT(DISTINCT t.id) as inquiry_count
     FROM {{ source('staging', 'tenants') }} t
-    LEFT JOIN {{ ref('code_contract_type') }} ct
-        ON t.contract_type = ct.code
     WHERE t.created_at IS NOT NULL
       AND t.created_at >= '{{ var('min_valid_date') }}'
     GROUP BY DATE(t.created_at), tenant_type
@@ -40,11 +42,13 @@ applications AS (
     -- 申し込み数: Tenants with status 仮予約(4) or 初期賃料(5) by updated_at date
     SELECT
         DATE(t.updated_at) as activity_date,
-        COALESCE(ct.tenant_type, 'individual') as tenant_type,
+        CASE 
+            WHEN t.contract_type IN (2, 3) THEN 'corporate'
+            WHEN t.contract_type IN (1, 6, 7, 9) THEN 'individual'
+            ELSE 'unknown'
+        END as tenant_type,
         COUNT(DISTINCT t.id) as application_count
     FROM {{ source('staging', 'tenants') }} t
-    LEFT JOIN {{ ref('code_contract_type') }} ct
-        ON t.contract_type = ct.code
     WHERE t.status IN (4, 5)  -- 4=仮予約, 5=初期賃料
       AND t.updated_at IS NOT NULL
       AND t.updated_at >= '{{ var('min_valid_date') }}'
@@ -70,12 +74,14 @@ confirmed_movein AS (
     -- Status: 仮予約(4)、初期賃料(5)、入居説明(6)、入居(7)、居住中(9)、退去通知(14)、退去予定(15)
     SELECT
         DATE(mv.movein_date) as activity_date,
-        COALESCE(ct.tenant_type, 'individual') as tenant_type,
+        CASE 
+            WHEN t.contract_type IN (2, 3) THEN 'corporate'
+            WHEN t.contract_type IN (1, 6, 7, 9) THEN 'individual'
+            ELSE 'unknown'
+        END as tenant_type,
         COUNT(DISTINCT t.id) as movein_count
     FROM {{ source('staging', 'tenants') }} t
     INNER JOIN {{ source('staging', 'movings') }} mv ON t.moving_id = mv.id
-    LEFT JOIN {{ ref('code_contract_type') }} ct
-        ON t.contract_type = ct.code
     WHERE t.status IN (4, 5, 6, 7, 9, 14, 15)
       AND mv.movein_date IS NOT NULL
       AND mv.movein_date >= '{{ var('min_valid_date') }}'
@@ -87,12 +93,14 @@ confirmed_moveout AS (
     -- Status: 退去通知(14)、退去予定(15)、メンテ待ち(16)、退去済み(17)
     SELECT
         DATE(mv.moveout_date) as activity_date,
-        COALESCE(ct.tenant_type, 'individual') as tenant_type,
+        CASE 
+            WHEN t.contract_type IN (2, 3) THEN 'corporate'
+            WHEN t.contract_type IN (1, 6, 7, 9) THEN 'individual'
+            ELSE 'unknown'
+        END as tenant_type,
         COUNT(DISTINCT t.id) as moveout_count
     FROM {{ source('staging', 'tenants') }} t
     INNER JOIN {{ source('staging', 'movings') }} mv ON t.moving_id = mv.id
-    LEFT JOIN {{ ref('code_contract_type') }} ct
-        ON t.contract_type = ct.code
     WHERE t.status IN (14, 15, 16, 17)  -- 退去通知、退去予定、メンテ待ち、退去済み
       AND mv.moveout_date IS NOT NULL  -- Using moveout_date, NOT moveout_plans_date
       AND mv.moveout_date >= '{{ var('min_valid_date') }}'
