@@ -14,52 +14,45 @@
 -- グラニュラリティ: Daily
 -- データ: 問い合わせ, 申し込み, 契約締結, 確定入居者, 確定退去者, 稼働室数増減 (by 個人 and 法人)
 --
--- METRIC DEFINITIONS:
--- 1. inquiries_count (問い合わせ): Customer inquiries - **HISTORICAL DATA ONLY** (2018-2023)
--- 2. applications_count (申し込み): Tentative Reservations (status=4: 仮予約) by tenant creation date
--- 3. contracts_signed_count (契約締結): Contracts signed by contract_date (契約締結日)
--- 4. confirmed_moveins_count (確定入居者): Move-ins by contract_start_date (入居日)
--- 5. confirmed_moveouts_count (確定退去者): Move-outs by moveout_date (退去日)  
+-- METRIC DEFINITIONS (CORRECTED):
+-- 1. inquiries_count (問い合わせ数): Number of NEW tenants registered with any status that day
+-- 2. applications_count (申し込み数): Tenants with status 仮予約(4) or 初期賃料(5) where updated_at is that day
+-- 3. contracts_signed_count (契約締結): Contracts signed by contract_date
+-- 4. confirmed_moveins_count (確定入居者/入居数): Tenants with status [4,5,6,7,9,14,15] where movein_date is that day
+-- 5. confirmed_moveouts_count (確定退去者): Tenants with status [14,15,16,17] where moveout_date is that day
 -- 6. net_occupancy_delta (稼働室数増減): Move-ins minus move-outs
---
--- DATA QUALITY NOTES:
--- - Inquiries table contains only historical data (2018-2023), not actively updated
--- - Applications only count status=4 (Tentative Reservation), not all new tenants
--- - Contract dates use actual dates from movings table, validated against is_valid_contract flag
 
 WITH inquiries AS (
-    -- 問い合わせ: Customer inquiries by date
-    -- NOTE: Historical data only (2018-2023), not actively collected
-    SELECT
-        inquiry_date as activity_date,
-        'individual' as tenant_type,  -- Default to individual
-        COUNT(*) as inquiry_count
-    FROM {{ ref('stg_inquiries') }}
-    WHERE inquiry_date IS NOT NULL
-      AND inquiry_date >= '{{ var('min_valid_date') }}'
-    GROUP BY inquiry_date
-),
-
-applications AS (
-    -- 申し込み: Tentative Reservations (status=4: 仮予約)
-    -- Counts DISTINCT tenants with "Tentative Reservation" status by creation date
+    -- 問い合わせ数: New tenants registered (any status) by creation date
     SELECT
         DATE(t.created_at) as activity_date,
-        CASE 
-            WHEN t.corporate_name IS NOT NULL THEN 'corporate'
-            ELSE 'individual'
-        END as tenant_type,
-        COUNT(DISTINCT t.id) as application_count
+        COALESCE(ct.tenant_type, 'individual') as tenant_type,
+        COUNT(DISTINCT t.id) as inquiry_count
     FROM {{ source('staging', 'tenants') }} t
-    WHERE t.status = 4  -- Status 4 = Tentative Reservation (仮予約)
-      AND t.created_at IS NOT NULL
+    LEFT JOIN {{ ref('code_contract_type') }} ct
+        ON t.contract_type = ct.code
+    WHERE t.created_at IS NOT NULL
       AND t.created_at >= '{{ var('min_valid_date') }}'
     GROUP BY DATE(t.created_at), tenant_type
 ),
 
+applications AS (
+    -- 申し込み数: Tenants with status 仮予約(4) or 初期賃料(5) by updated_at date
+    SELECT
+        DATE(t.updated_at) as activity_date,
+        COALESCE(ct.tenant_type, 'individual') as tenant_type,
+        COUNT(DISTINCT t.id) as application_count
+    FROM {{ source('staging', 'tenants') }} t
+    LEFT JOIN {{ ref('code_contract_type') }} ct
+        ON t.contract_type = ct.code
+    WHERE t.status IN (4, 5)  -- 4=仮予約, 5=初期賃料
+      AND t.updated_at IS NOT NULL
+      AND t.updated_at >= '{{ var('min_valid_date') }}'
+    GROUP BY DATE(t.updated_at), tenant_type
+),
+
 contracts_signed AS (
-    -- 契約締結: Contracts signed (契約締結日)
-    -- Counts contracts by their contract_date (movein_decided_date)
+    -- 契約締結: Contracts signed by contract_date (契約締結日)
     -- Only includes valid contracts (is_valid_contract = true)
     SELECT
         contract_date as activity_date,
@@ -73,33 +66,37 @@ contracts_signed AS (
 ),
 
 confirmed_movein AS (
-    -- 確定入居者: Confirmed move-ins (契約開始日/入居日)
-    -- Counts contracts by their contract_start_date (actual move-in date)
-    -- Only includes valid contracts
+    -- 確定入居者/入居数: Tenants with status [4,5,6,7,9,14,15] by movein_date
+    -- Status: 仮予約(4)、初期賃料(5)、入居説明(6)、入居(7)、居住中(9)、退去通知(14)、退去予定(15)
     SELECT
-        contract_start_date as activity_date,
-        tenant_type,
-        COUNT(*) as movein_count
-    FROM {{ ref('int_contracts') }}
-    WHERE contract_start_date IS NOT NULL
-      AND is_valid_contract
-      AND contract_start_date >= '{{ var('min_valid_date') }}'
-    GROUP BY contract_start_date, tenant_type
+        DATE(mv.movein_date) as activity_date,
+        COALESCE(ct.tenant_type, 'individual') as tenant_type,
+        COUNT(DISTINCT t.id) as movein_count
+    FROM {{ source('staging', 'tenants') }} t
+    INNER JOIN {{ source('staging', 'movings') }} mv ON t.moving_id = mv.id
+    LEFT JOIN {{ ref('code_contract_type') }} ct
+        ON t.contract_type = ct.code
+    WHERE t.status IN (4, 5, 6, 7, 9, 14, 15)
+      AND mv.movein_date IS NOT NULL
+      AND mv.movein_date >= '{{ var('min_valid_date') }}'
+    GROUP BY DATE(mv.movein_date), tenant_type
 ),
 
 confirmed_moveout AS (
-    -- 確定退去者: Confirmed move-outs (退去日)
-    -- Counts contracts by their moveout_date (actual move-out date)
-    -- Only includes completed move-outs (is_completed_moveout = true)
+    -- 確定退去者: Tenants with status [14,15,16,17] by moveout_date (NOT moveout_plans_date)
+    -- Status: 退去通知(14)、退去予定(15)、メンテ待ち(16)、退去済み(17)
     SELECT
-        moveout_date as activity_date,
-        tenant_type,
-        COUNT(*) as moveout_count
-    FROM {{ ref('int_contracts') }}
-    WHERE moveout_date IS NOT NULL
-      AND is_completed_moveout
-      AND moveout_date >= '{{ var('min_valid_date') }}'
-    GROUP BY moveout_date, tenant_type
+        DATE(mv.moveout_date) as activity_date,
+        COALESCE(ct.tenant_type, 'individual') as tenant_type,
+        COUNT(DISTINCT t.id) as moveout_count
+    FROM {{ source('staging', 'tenants') }} t
+    INNER JOIN {{ source('staging', 'movings') }} mv ON t.moving_id = mv.id
+    LEFT JOIN {{ ref('code_contract_type') }} ct
+        ON t.contract_type = ct.code
+    WHERE t.status IN (14, 15, 16, 17)  -- 退去通知、退去予定、メンテ待ち、退去済み
+      AND mv.moveout_date IS NOT NULL  -- Using moveout_date, NOT moveout_plans_date
+      AND mv.moveout_date >= '{{ var('min_valid_date') }}'
+    GROUP BY DATE(mv.moveout_date), tenant_type
 ),
 
 -- Generate all dates in the range
