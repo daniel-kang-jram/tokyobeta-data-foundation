@@ -47,12 +47,14 @@ SELECT
     SUM(CASE WHEN age_group = '35-44' THEN 1 ELSE 0 END) as age_35_44_count,
     SUM(CASE WHEN age_group = '45-54' THEN 1 ELSE 0 END) as age_45_54_count,
     SUM(CASE WHEN age_group = '55+' THEN 1 ELSE 0 END) as age_55_plus_count,
+    SUM(CASE WHEN age_group = 'Unknown' THEN 1 ELSE 0 END) as age_unknown_count,
     
     -- Tenure category breakdown
     SUM(CASE WHEN tenure_category = 'Short (<6mo)' THEN 1 ELSE 0 END) as tenure_short_count,
     SUM(CASE WHEN tenure_category = 'Medium (6-12mo)' THEN 1 ELSE 0 END) as tenure_medium_count,
     SUM(CASE WHEN tenure_category = 'Long (1-2yr)' THEN 1 ELSE 0 END) as tenure_long_count,
     SUM(CASE WHEN tenure_category = 'Very Long (2yr+)' THEN 1 ELSE 0 END) as tenure_very_long_count,
+    SUM(CASE WHEN tenure_category = 'Unknown' THEN 1 ELSE 0 END) as tenure_unknown_count,
     
     -- Renewal breakdown
     SUM(CASE WHEN renewal_flag = 'Yes' THEN 1 ELSE 0 END) as renewal_yes_count,
