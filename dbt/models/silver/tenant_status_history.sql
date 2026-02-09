@@ -71,7 +71,8 @@ with_previous AS (
 ),
 
 -- Identify transition points (where status or contract_type changed)
-transitions AS (
+-- For forward-fill: use LEAD() on transitions only to get next transition date
+transitions_only AS (
     SELECT
         tenant_id,
         status,
@@ -80,7 +81,6 @@ transitions AS (
         snapshot_date,
         prev_status,
         prev_contract_type,
-        next_snapshot_date,
         
         -- Flag if this is a new status period (first snapshot or status changed)
         CASE
@@ -91,9 +91,10 @@ transitions AS (
         END AS is_transition
         
     FROM with_previous
+    WHERE prev_status IS NULL OR status != prev_status OR contract_type != prev_contract_type
 ),
 
--- Filter to only keep transition points
+-- Now apply LEAD() over transitions only to get proper forward-fill dates
 status_periods AS (
     SELECT
         tenant_id,
@@ -102,24 +103,39 @@ status_periods AS (
         full_name,
         snapshot_date AS valid_from,
         
-        -- valid_to is the day before the next transition
-        CASE
-            WHEN next_snapshot_date IS NOT NULL 
-            THEN DATE_SUB(next_snapshot_date, INTERVAL 1 DAY)
-            ELSE NULL  -- Current status has no end date
-        END AS valid_to,
-        
-        -- is_current if this is the latest status (no next snapshot)
-        CASE
-            WHEN next_snapshot_date IS NULL THEN TRUE
-            ELSE FALSE
-        END AS is_current,
+        -- LEAD to next transition snapshot date
+        LEAD(snapshot_date) OVER (PARTITION BY tenant_id ORDER BY snapshot_date) as next_transition_date,
         
         -- Metadata
         CURRENT_TIMESTAMP AS dbt_updated_at
         
-    FROM transitions
-    WHERE is_transition = TRUE  -- Only keep rows where status actually changed
+    FROM transitions_only
+),
+
+status_periods_with_end AS (
+    SELECT
+        tenant_id,
+        status,
+        contract_type,
+        full_name,
+        valid_from,
+        
+        -- valid_to is the day before the next transition (proper forward-fill)
+        CASE
+            WHEN next_transition_date IS NOT NULL 
+            THEN DATE_SUB(next_transition_date, INTERVAL 1 DAY)
+            ELSE NULL  -- Current status has no end date
+        END AS valid_to,
+        
+        -- is_current if this is the latest status (no next transition)
+        CASE
+            WHEN next_transition_date IS NULL THEN TRUE
+            ELSE FALSE
+        END AS is_current,
+        
+        dbt_updated_at
+        
+    FROM status_periods
 ),
 
 -- Add semantic labels for status and contract_type (inline, no seed join needed)
@@ -174,9 +190,9 @@ final AS (
         END AS days_in_status,
         
         -- Metadata
-        sp.dbt_updated_at
+        sp.        dbt_updated_at
         
-    FROM status_periods sp
+    FROM status_periods_with_end sp
 )
 
 SELECT 
