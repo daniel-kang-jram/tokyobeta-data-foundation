@@ -122,17 +122,31 @@ status_periods AS (
     WHERE is_transition = TRUE  -- Only keep rows where status actually changed
 ),
 
--- Add semantic labels for status and contract_type
+-- Add semantic labels for status and contract_type (inline, no seed join needed)
 final AS (
     SELECT
         sp.tenant_id,
         sp.full_name,
         
-        -- Status information with semantic labels
+        -- Status information with inline semantic labels
         sp.status,
-        ts.label_ja as status_label_ja,
-        ts.label_en as status_label_en,
-        ts.is_active_lease,
+        CASE sp.status
+            WHEN 0 THEN '問い合わせ' WHEN 1 THEN 'DM送付済' WHEN 2 THEN 'DMメール送信済'
+            WHEN 3 THEN '掲載確認中' WHEN 4 THEN '仮予約' WHEN 5 THEN '初期賃料請求済'
+            WHEN 6 THEN '入居説明' WHEN 7 THEN '入居' WHEN 9 THEN '居住中'
+            WHEN 10 THEN '契約解除' WHEN 13 THEN '入居延期' WHEN 14 THEN '退去通知'
+            WHEN 15 THEN '退去予定' WHEN 16 THEN 'メンテ待ち' WHEN 17 THEN '退去済み'
+            ELSE 'Unknown'
+        END as status_label_ja,
+        CASE sp.status
+            WHEN 0 THEN 'Inquiry' WHEN 1 THEN 'DM Sent' WHEN 2 THEN 'DM Email Sent'
+            WHEN 3 THEN 'Under Review' WHEN 4 THEN 'Provisional Reservation' WHEN 5 THEN 'Initial Rent Billed'
+            WHEN 6 THEN 'Move-in Briefing' WHEN 7 THEN 'Moving In' WHEN 9 THEN 'Active Tenant'
+            WHEN 10 THEN 'Contract Cancelled' WHEN 13 THEN 'Move-in Postponed' WHEN 14 THEN 'Notice of Moving Out'
+            WHEN 15 THEN 'Scheduled to Move Out' WHEN 16 THEN 'Maintenance Pending' WHEN 17 THEN 'Moved Out'
+            ELSE 'Unknown'
+        END as status_label_en,
+        CASE WHEN sp.status IN (7, 9, 10, 13) THEN 1 ELSE 0 END as is_active_lease,
         
         -- Contract type with semantic labels
         sp.contract_type,
@@ -141,13 +155,9 @@ final AS (
             WHEN sp.contract_type IN (1, 6, 7, 9) THEN 'individual'
             ELSE 'unknown'
         END as tenant_type,
-        CASE
-            WHEN sp.contract_type = 1 THEN '一般'
-            WHEN sp.contract_type = 2 THEN '法人契約'
-            WHEN sp.contract_type = 3 THEN '法人契約個人'
-            WHEN sp.contract_type = 6 THEN '定期契約'
-            WHEN sp.contract_type = 7 THEN '一般保証人'
-            WHEN sp.contract_type = 9 THEN '一般2'
+        CASE sp.contract_type
+            WHEN 1 THEN '一般' WHEN 2 THEN '法人契約' WHEN 3 THEN '法人契約個人'
+            WHEN 6 THEN '定期契約' WHEN 7 THEN '一般保証人' WHEN 9 THEN '一般2'
             ELSE '未設定'
         END as contract_type_label_ja,
         
@@ -167,8 +177,6 @@ final AS (
         sp.dbt_updated_at
         
     FROM status_periods sp
-    LEFT JOIN {{ ref('code_tenant_status') }} ts
-        ON sp.status = ts.code
 )
 
 SELECT 
