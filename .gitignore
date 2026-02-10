@@ -1,12 +1,3 @@
-# Terraform
-*.tfstate
-*.tfstate.*
-*.tfvars
-.terraform/
-.terraform.lock.hcl
-tfplan
-*.tfplan
-
 # Python
 __pycache__/
 *.py[cod]
@@ -28,52 +19,41 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
-*.log
-
-# Virtual Environment
+.venv/
 venv/
 ENV/
-env/
-.venv
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.venv/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+.terraform.lock.hcl
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 .DS_Store
 
-# Lambda deployment packages
-lambda/**/deployment_package.zip
-lambda/**/package/
-
-# Secrets and credentials
-*.pem
-*.key
-config/secrets.yaml
-terraform/environments/**/terraform.tfvars
+# Environment
+.env
+.envrc.local
 
 # Temporary files
-*.tmp
 tmp/
-.cache/
+temp/
+*.tmp
+*.log
 
-# Data samples (large SQL dumps)
-data/
-
-# AWS
-.aws/credentials
-.aws/config
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-*.cover
-.hypothesis/
-
-# Documentation build
-docs/_build/
-docs/.doctrees/
+# Scripts output
+scripts/*.csv
+scripts/*.xlsx
+scripts/*.sql
