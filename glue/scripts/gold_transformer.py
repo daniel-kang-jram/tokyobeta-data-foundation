@@ -265,9 +265,9 @@ def cleanup_dbt_tmp_tables(connection, schema):
         cursor.execute(f"""
             SELECT TABLE_NAME 
             FROM information_schema.TABLES 
-            WHERE TABLE_SCHEMA = '{schema}' 
-            AND TABLE_NAME LIKE '%__dbt_tmp'
-        """)
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME LIKE '%%__dbt_tmp'
+        """, (schema,))
         
         tmp_tables = [row[0] for row in cursor.fetchall()]
         
@@ -277,9 +277,17 @@ def cleanup_dbt_tmp_tables(connection, schema):
             
         print(f"  Found {len(tmp_tables)} temporary tables: {', '.join(tmp_tables)}")
         
+        import re  # Ensure re is available
         for table_name in tmp_tables:
+            # Validate table name strictly to prevent SQL injection
+            # Only allow alphanumeric and underscore, and must end with __dbt_tmp
+            if not re.match(r'^[a-zA-Z0-9_]+__dbt_tmp$', table_name):
+                print(f"  ⚠ Skipping invalid table name: {table_name}")
+                continue
+                
             print(f"  Dropping {schema}.{table_name}...")
-            cursor.execute(f"DROP TABLE IF EXISTS {schema}.{table_name}")
+            # Use backticks for identifier quoting
+            cursor.execute(f"DROP TABLE IF EXISTS `{schema}`.`{table_name}`")
             dropped_count += 1
             
         connection.commit()
