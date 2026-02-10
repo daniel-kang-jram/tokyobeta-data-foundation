@@ -401,14 +401,14 @@ resource "aws_glue_job" "gold_transformer" {
   }
 }
 
-# Job 4: Silver Test (Separated for Performance)
-resource "aws_glue_job" "silver_test" {
-  name     = "tokyobeta-${var.environment}-silver-test"
+# Job 4: Data Quality Test (Runs after Gold completes)
+resource "aws_glue_job" "data_quality_test" {
+  name     = "tokyobeta-${var.environment}-data-quality-test"
   role_arn = aws_iam_role.glue_service_role.arn
 
   command {
     name            = "glueetl"
-    script_location = "s3://${var.s3_source_bucket}/glue-scripts/silver_test.py"
+    script_location = "s3://${var.s3_source_bucket}/glue-scripts/data_quality_test.py"
     python_version  = "3"
   }
 
@@ -418,8 +418,8 @@ resource "aws_glue_job" "silver_test" {
     "--enable-metrics"                   = "true"
     "--enable-continuous-cloudwatch-log" = "true"
     "--enable-spark-ui"                  = "true"
-    "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/silver-test/"
-    "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/silver-test/"
+    "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/data-quality/"
+    "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/data-quality/"
     "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql"
     
     # Custom parameters
@@ -444,9 +444,8 @@ resource "aws_glue_job" "silver_test" {
   }
 
   tags = {
-    Name        = "tokyobeta-${var.environment}-silver-test"
+    Name        = "tokyobeta-${var.environment}-data-quality-test"
     Environment = var.environment
-    Layer       = "silver"
     Purpose     = "data-quality"
     ManagedBy   = "terraform"
   }
