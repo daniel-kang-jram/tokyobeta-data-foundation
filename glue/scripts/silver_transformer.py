@@ -11,6 +11,7 @@ import boto3
 import json
 import subprocess
 import os
+import re
 from datetime import datetime
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
@@ -32,7 +33,8 @@ args = getResolvedOptions(sys.argv, [
     'AURORA_ENDPOINT',
     'AURORA_DATABASE',
     'AURORA_SECRET_ARN',
-    'ENVIRONMENT'
+    'ENVIRONMENT',
+    'DBT_SELECT'  # Optional: Limit dbt models to run
 ])
 
 job.init(args['JOB_NAME'], args)
@@ -191,6 +193,7 @@ def run_dbt_seed(dbt_project_path, target_env):
 def run_dbt_silver_models(
     dbt_project_path,
     target_env,
+    dbt_select=None,
     aurora_endpoint=None,
     aurora_username=None,
     aurora_password=None
@@ -201,6 +204,7 @@ def run_dbt_silver_models(
     Args:
         dbt_project_path: Path to dbt project
         target_env: Target environment (prod/dev)
+        dbt_select: Optional filter for dbt select (e.g. "silver.tenant_status_history")
         aurora_endpoint: Aurora endpoint (for env var)
         aurora_username: Aurora username (for env var)
         aurora_password: Aurora password (for env var)
@@ -210,6 +214,8 @@ def run_dbt_silver_models(
     """
     print("\n" + "="*60)
     print("RUNNING DBT SILVER MODELS")
+    if dbt_select:
+        print(f"Filter: {dbt_select}")
     print("="*60)
     
     # Set environment variables for dbt profiles
@@ -223,15 +229,19 @@ def run_dbt_silver_models(
     
     dbt_executable = get_dbt_executable_path()
     
-    # Run only silver models with --fail-fast to stop on first error
-    result = subprocess.run([
+    # Determine selection args
+    selection_args = ["--select", dbt_select] if dbt_select else ["--models", "silver.*"]
+    
+    cmd = [
         dbt_executable, "run",
         "--profiles-dir", dbt_project_path,
         "--project-dir", dbt_project_path,
         "--target", target_env,
-        "--models", "silver.*",
         "--fail-fast"
-    ], capture_output=True, text=True)
+    ] + selection_args
+    
+    # Run only silver models with --fail-fast to stop on first error
+    result = subprocess.run(cmd, capture_output=True, text=True)
     
     print(result.stdout)
     if result.stderr:
@@ -250,7 +260,8 @@ def run_dbt_silver_models(
     # Parse model count from output
     models_built = 0
     if "models built" in result.stdout.lower() or "completed successfully" in result.stdout.lower():
-        models_built = len(SILVER_TABLES)  # Approximate count
+        # If specific select, count is 1 or fewer usually
+        models_built = len(SILVER_TABLES) if not dbt_select else 1
     
     return {
         'success': True,
@@ -259,30 +270,37 @@ def run_dbt_silver_models(
     }
 
 
-def run_dbt_silver_tests(dbt_project_path, target_env):
+def run_dbt_silver_tests(dbt_project_path, target_env, dbt_select=None):
     """
     Run dbt tests for silver layer models.
     
     Args:
         dbt_project_path: Path to dbt project
         target_env: Target environment (prod/dev)
+        dbt_select: Optional filter for dbt select
         
     Returns:
         Result dict with test counts
     """
     print("\n" + "="*60)
     print("RUNNING DBT SILVER TESTS")
+    if dbt_select:
+        print(f"Filter: {dbt_select}")
     print("="*60)
     
     dbt_executable = get_dbt_executable_path()
     
-    result = subprocess.run([
+    # Determine selection args
+    selection_args = ["--select", dbt_select] if dbt_select else ["--models", "silver.*"]
+    
+    cmd = [
         dbt_executable, "test",
         "--profiles-dir", dbt_project_path,
         "--project-dir", dbt_project_path,
-        "--target", target_env,
-        "--models", "silver.*"
-    ], capture_output=True, text=True)
+        "--target", target_env
+    ] + selection_args
+    
+    result = subprocess.run(cmd, capture_output=True, text=True)
     
     print(result.stdout)
     
@@ -310,6 +328,63 @@ def run_dbt_silver_tests(dbt_project_path, target_env):
         'tests_failed': tests_failed,
         'output': result.stdout
     }
+
+
+def cleanup_dbt_tmp_tables(connection, schema):
+    """
+    Clean up leftover dbt temporary tables (*__dbt_tmp).
+    
+    Args:
+        connection: pymysql connection
+        schema: Schema name to check
+        
+    Returns:
+        Number of tables dropped
+    """
+    print(f"\n=== Cleaning up dbt temp tables in {schema} ===")
+    
+    cursor = connection.cursor()
+    dropped_count = 0
+    
+    try:
+        # Find all tables ending with __dbt_tmp
+        cursor.execute(f"""
+            SELECT TABLE_NAME 
+            FROM information_schema.TABLES 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME LIKE '%%__dbt_tmp'
+        """, (schema,))
+        
+        tmp_tables = [row[0] for row in cursor.fetchall()]
+        
+        if not tmp_tables:
+            print("  No temporary tables found.")
+            return 0
+            
+        print(f"  Found {len(tmp_tables)} temporary tables: {', '.join(tmp_tables)}")
+        
+        import re  # Ensure re is available
+        for table_name in tmp_tables:
+            # Validate table name strictly to prevent SQL injection
+            # Only allow alphanumeric and underscore, and must end with __dbt_tmp
+            if not re.match(r'^[a-zA-Z0-9_]+__dbt_tmp$', table_name):
+                print(f"  ⚠ Skipping invalid table name: {table_name}")
+                continue
+                
+            print(f"  Dropping {schema}.{table_name}...")
+            # Use backticks for identifier quoting
+            cursor.execute(f"DROP TABLE IF EXISTS `{schema}`.`{table_name}`")
+            dropped_count += 1
+            
+        connection.commit()
+        print(f"  ✓ Dropped {dropped_count} temporary tables")
+        return dropped_count
+        
+    except Exception as e:
+        print(f"  ⚠ Warning: Failed to cleanup temp tables: {str(e)}")
+        return 0
+    finally:
+        cursor.close()
 
 
 def create_table_backups(connection, tables, schema='silver'):
@@ -377,6 +452,8 @@ def main():
         print("="*60)
         print("SILVER TRANSFORMER JOB STARTED")
         print(f"Environment: {args['ENVIRONMENT']}")
+        if 'DBT_SELECT' in args:
+            print(f"DBT Select: {args['DBT_SELECT']}")
         print("="*60)
         
         # Step 1: Download dbt project from S3
@@ -407,7 +484,16 @@ def main():
         )
         
         try:
-            backup_count = create_table_backups(connection, SILVER_TABLES, 'silver')
+            # Clean up potential leftover temp tables from previous failed runs
+            cleanup_dbt_tmp_tables(connection, 'silver')
+            
+            # Only backup tables if running full suite (or specifically requested table)
+            # For simplicity, backup critical tables anyway as it's cheap/fast
+            if not args.get('DBT_SELECT'):
+                backup_count = create_table_backups(connection, SILVER_TABLES, 'silver')
+            else:
+                print("Skipping full table backups for selective run")
+                backup_count = 0
         finally:
             connection.close()
         
@@ -421,13 +507,18 @@ def main():
         silver_result = run_dbt_silver_models(
             dbt_local_path,
             args['ENVIRONMENT'],
+            dbt_select=args.get('DBT_SELECT'),
             aurora_endpoint=args['AURORA_ENDPOINT'],
             aurora_username=username,
             aurora_password=password
         )
         
         # Step 7: Run silver tests
-        test_result = run_dbt_silver_tests(dbt_local_path, args['ENVIRONMENT'])
+        test_result = run_dbt_silver_tests(
+            dbt_local_path, 
+            args['ENVIRONMENT'],
+            dbt_select=args.get('DBT_SELECT')
+        )
         
         # Calculate duration
         duration = (datetime.now() - start_time).total_seconds()

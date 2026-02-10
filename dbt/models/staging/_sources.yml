@@ -217,3 +217,27 @@ sources:
             description: Date of snapshot
             tests:
               - not_null
+      
+      - name: llm_enrichment_cache
+        description: >
+          Persistent cache for LLM-predicted tenant attributes.
+          Survives staging reloads to prevent re-processing same records.
+          Populated by nationality_enricher Glue job embedded in staging_loader.
+        columns:
+          - name: tenant_id
+            description: Tenant ID (primary key)
+            tests:
+              - unique
+              - not_null
+          - name: full_name
+            description: Full name at time of enrichment
+          - name: full_name_hash
+            description: SHA256 hash of full_name for change detection
+          - name: llm_nationality
+            description: LLM-predicted nationality
+          - name: llm_confidence
+            description: Prediction confidence (0-1)
+          - name: enriched_at
+            description: When prediction was made
+          - name: model_version
+            description: Bedrock model used (e.g., claude-3-haiku-20240307)

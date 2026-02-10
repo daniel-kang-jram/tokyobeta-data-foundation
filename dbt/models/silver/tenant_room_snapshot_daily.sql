@@ -1,29 +1,39 @@
 {{
     config(
-        materialized='table',
-        schema='silver'
+        materialized='incremental',
+        unique_key=['snapshot_date', 'tenant_id', 'apartment_id', 'room_id'],
+        on_schema_change='append_new_columns',
+        schema='silver',
+        indexes=[
+            {'columns': ['snapshot_date', 'management_status_code']},
+            {'columns': ['snapshot_date', 'move_in_date']},
+            {'columns': ['snapshot_date', 'moveout_plans_date']},
+            {'columns': ['snapshot_date', 'moveout_date']},
+            {'columns': ['tenant_id', 'apartment_id', 'room_id', 'snapshot_date']}
+        ]
     )
 }}
 
 /*
-Tokyo Beta Tenant-Room Information (Reproduced from Database)
+Daily Tenant-Room Snapshot (Incremental)
 
-This model reproduces the structure of the Excel export "Tokyo Beta テナント情報.xlsx"
-by querying staging tables. It creates one row per tenant-room assignment.
+Captures daily snapshots of all active tenant-room pairs for occupancy tracking and KPI calculation.
+Stores only core fields. Demographic/contact enrichment happens in downstream marts via joins.
 
 Data Sources:
-- staging.tenants: Demographics, contact info, status
-- staging.movings: Tenant-room assignments, dates
-- staging.apartments: Property/building names
+- staging.tenants: Status, tenant info
+- staging.movings: Room assignments, dates
+- staging.apartments: Property names
 - staging.rooms: Room numbers
 
-Expected output: ~12,000 rows (filtered by active status)
+Grain: One row per (snapshot_date, tenant_id, property, room) combination
 
-Corporate tenants naturally get multiple rows (one per unique room).
-Individual tenants get one row (most recent moving per room).
+Incremental Strategy:
+- Daily: append only today's snapshot_date rows
+- No full rebuild needed
+- 12-month retention (older archived monthly)
 
-IMPORTANT: is_moveout flag is unreliable due to historical data entry errors.
-We use ROW_NUMBER() to select the most recent moving per tenant-room combination.
+Expected volume: ~12,000 rows/day (~4.4M rows/year)
 */
 
 WITH all_active_movings AS (
@@ -33,27 +43,12 @@ WITH all_active_movings AS (
         t.id as tenant_id,
         t.status as management_status_code,
         t.full_name as tenant_name,
-        t.full_name_kana as tenant_name_kana,
         m.moving_agreement_type as contract_type,  -- Use moving_agreement_type (original), not tenant.contract_type
-        t.gender_type as gender_code,
-        t.age,
-        t.nationality,
-        -- Contact info (found in schema)
-        t.email_1,
-        t.email_2,
-        t.tel_1,
-        t.tel_2,
-        t.account_number,
-        t.m_language_id_1,
         
         m.rent as fixed_rent,
         m.movein_date as move_in_date,
-        m.moveout_date as moveout_date,  -- 最終賃料日
-        m.moveout_plans_date as moveout_plans_date,  -- 実退去日
-        DATEDIFF(
-            COALESCE(m.moveout_date, CURDATE()),
-            m.movein_date
-        ) as days_stayed,
+        m.moveout_date as moveout_date,  -- 最終賃料日 (forecast)
+        m.moveout_plans_date as moveout_plans_date,  -- 実退去日 (actual)
         m.apartment_id,
         m.room_id,
         m.id as moving_id,
@@ -94,30 +89,10 @@ tenant_room_assignments AS (
         tenant_id,
         management_status_code,
         tenant_name,
-        tenant_name_kana,
-        -- Nickname not in database, will be NULL
-        NULL as nickname,
         contract_type,
-        gender_code,
-        age,
-        nationality,
-        -- Languages
-        m_language_id_1,
-        NULL as language_1, -- Placeholder as m_languages table is missing
-        NULL as language_2,
-        -- Contact info
-        tel_1 as phone_1,
-        tel_2 as phone_2,
-        email_1,
-        email_2,
-        -- Financial
-        account_number,
-        fixed_rent,
-        -- Dates
         move_in_date,
         moveout_date,
         moveout_plans_date,
-        days_stayed,
         -- Foreign keys for joins
         apartment_id,
         room_id,
@@ -141,6 +116,9 @@ with_property_room AS (
 
 final AS (
     SELECT
+        -- Snapshot date (run date)
+        CURDATE() as snapshot_date,
+        
         -- Status
         management_status_code,
         CASE management_status_code
@@ -161,10 +139,10 @@ final AS (
         -- Tenant identification
         tenant_id,
         tenant_name,
-        tenant_name_kana,
-        nickname,
         
         -- Property/Room
+        apartment_id,
+        room_id,
         property,
         room_number,
         
@@ -177,32 +155,10 @@ final AS (
             ELSE '一般2'  -- Default fallback
         END as contract_category,
         
-        -- Demographics
-        CASE gender_code
-            WHEN 1 THEN '男性'
-            WHEN 2 THEN '女性'
-            ELSE NULL
-        END as gender,
-        CONCAT(age, '歳') as age_display,
-        nationality,
-        
-        -- Contact
-        language_1, -- Currently NULL as m_languages missing
-        language_2,
-        phone_1,
-        phone_2,
-        email_1,
-        email_2,
-        
-        -- Financial
-        account_number,
-        fixed_rent,
-        
         -- Dates
         move_in_date,
         moveout_date,
         moveout_plans_date,
-        days_stayed,
         
         -- Metadata
         moving_id,
@@ -212,4 +168,10 @@ final AS (
 )
 
 SELECT * FROM final
-ORDER BY tenant_name, property, room_number
+
+{% if is_incremental() %}
+  -- Only append rows for dates not yet in the table
+  WHERE snapshot_date NOT IN (SELECT DISTINCT snapshot_date FROM {{ this }})
+{% endif %}
+
+ORDER BY snapshot_date, tenant_name, property, room_number

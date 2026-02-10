@@ -362,6 +362,71 @@ def cleanup_old_backups(days_to_keep=3):
         cursor.close()
         connection.close()
 
+def cleanup_dbt_tmp_tables():
+    """
+    Clean up leftover dbt temporary tables (*__dbt_tmp) in silver/gold schemas.
+    
+    Returns:
+        Number of tables dropped
+    """
+    print(f"\n=== Cleaning up dbt temp tables ===")
+    
+    username, password = get_aurora_credentials()
+    connection = pymysql.connect(
+        host=args['AURORA_ENDPOINT'],
+        user=username,
+        password=password,
+        database=args['AURORA_DATABASE'],
+        charset='utf8mb4'
+    )
+    
+    cursor = connection.cursor()
+    dropped_count = 0
+    
+    try:
+        # Check both silver and gold schemas
+        for schema in ['silver', 'gold']:
+            # Find all tables ending with __dbt_tmp
+            cursor.execute(f"""
+                SELECT TABLE_NAME 
+                FROM information_schema.TABLES 
+                WHERE TABLE_SCHEMA = %s 
+                AND TABLE_NAME LIKE '%%__dbt_tmp'
+            """, (schema,))
+            
+            tmp_tables = [row[0] for row in cursor.fetchall()]
+            
+            if not tmp_tables:
+                continue
+                
+            print(f"  Found {len(tmp_tables)} temporary tables in {schema}: {', '.join(tmp_tables)}")
+            
+            import re
+            for table_name in tmp_tables:
+                # Validate table name strictly to prevent SQL injection
+                if not re.match(r'^[a-zA-Z0-9_]+__dbt_tmp$', table_name):
+                    print(f"  ⚠ Skipping invalid table name: {table_name}")
+                    continue
+                    
+                print(f"  Dropping {schema}.{table_name}...")
+                cursor.execute(f"DROP TABLE IF EXISTS `{schema}`.`{table_name}`")
+                dropped_count += 1
+            
+        connection.commit()
+        if dropped_count > 0:
+            print(f"  ✓ Dropped {dropped_count} temporary tables")
+        else:
+            print("  No temporary tables found.")
+            
+        return dropped_count
+        
+    except Exception as e:
+        print(f"  ⚠ Warning: Failed to cleanup temp tables: {str(e)}")
+        return 0
+    finally:
+        cursor.close()
+        connection.close()
+
 def run_dbt_transformations():
     """Execute dbt models to transform staging → analytics."""
     print("\nRunning dbt transformations...")
@@ -960,6 +1025,9 @@ def main():
         
         # Step 8: Clean up old backups (keep last 3 days)
         removed_backups = cleanup_old_backups(days_to_keep=3)
+        
+        # Step 8.5: Clean up dbt temp tables (prevent failures)
+        cleanup_dbt_tmp_tables()
         
         # Step 9: Run dbt transformations
         dbt_success = run_dbt_transformations()

@@ -1,6 +1,84 @@
 version: 2
 
 models:
+  - name: occupancy_daily_metrics
+    description: |
+      Daily occupancy KPI metrics computed from silver.tenant_room_snapshot_daily.
+      Updated incrementally by Glue (not dbt) for target dates only.
+      
+      Grain: One row per snapshot_date.
+      Volume: 1 row/day (365 rows/year).
+      
+      Metrics:
+      - 申込 (applications): First appearance of pairs in status 4 or 5
+      - 新規入居者 (new_moveins): Pairs with move_in_date = snapshot_date
+      - 新規退去者 (new_moveouts): Pairs with moveout date = snapshot_date (past: moveout_plans_date, future: moveout_date)
+      - 稼働室数増減 (occupancy_delta): new_moveins - new_moveouts
+      - 期首稼働室数 (period_start_rooms): Occupied count on previous day
+      - 期末稼働室数 (period_end_rooms): period_start + delta
+      - 稼働率 (occupancy_rate): period_end / 16108
+    
+    config:
+      schema: gold
+    
+    columns:
+      - name: snapshot_date
+        description: Snapshot date
+        tests:
+          - unique
+          - not_null
+      
+      - name: applications
+        description: Number of first-time applications (status 4 or 5)
+        tests:
+          - not_null
+      
+      - name: new_moveins
+        description: Number of new move-ins on this date
+        tests:
+          - not_null
+      
+      - name: new_moveouts
+        description: Number of new move-outs on this date
+        tests:
+          - not_null
+      
+      - name: occupancy_delta
+        description: Net change in occupied rooms (moveins - moveouts)
+        tests:
+          - not_null
+      
+      - name: period_start_rooms
+        description: Occupied rooms at start of day (previous day's end count)
+        tests:
+          - not_null
+      
+      - name: period_end_rooms
+        description: Occupied rooms at end of day
+        tests:
+          - not_null
+      
+      - name: occupancy_rate
+        description: Occupancy rate (period_end_rooms / 16108)
+        tests:
+          - not_null
+    
+    tests:
+      # Arithmetic invariant: period_end = period_start + delta
+      - dbt_utils.expression_is_true:
+          expression: "period_end_rooms = period_start_rooms + occupancy_delta"
+          severity: error
+      
+      # Arithmetic invariant: delta = moveins - moveouts
+      - dbt_utils.expression_is_true:
+          expression: "occupancy_delta = new_moveins - new_moveouts"
+          severity: error
+      
+      # Rate calculation: occupancy_rate = period_end / 16108
+      - dbt_utils.expression_is_true:
+          expression: "ABS(occupancy_rate - (period_end_rooms / 16108.0)) < 0.0001"
+          severity: error
+
   - name: tenant_status_transitions
     description: |
       Analysis-ready view of tenant status changes over time with business-friendly labels.

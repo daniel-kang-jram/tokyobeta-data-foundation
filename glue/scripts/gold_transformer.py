@@ -244,6 +244,63 @@ def run_dbt_gold_tests(dbt_project_path, target_env):
     }
 
 
+def cleanup_dbt_tmp_tables(connection, schema):
+    """
+    Clean up leftover dbt temporary tables (*__dbt_tmp).
+    
+    Args:
+        connection: pymysql connection
+        schema: Schema name to check
+        
+    Returns:
+        Number of tables dropped
+    """
+    print(f"\n=== Cleaning up dbt temp tables in {schema} ===")
+    
+    cursor = connection.cursor()
+    dropped_count = 0
+    
+    try:
+        # Find all tables ending with __dbt_tmp
+        cursor.execute(f"""
+            SELECT TABLE_NAME 
+            FROM information_schema.TABLES 
+            WHERE TABLE_SCHEMA = %s 
+            AND TABLE_NAME LIKE '%%__dbt_tmp'
+        """, (schema,))
+        
+        tmp_tables = [row[0] for row in cursor.fetchall()]
+        
+        if not tmp_tables:
+            print("  No temporary tables found.")
+            return 0
+            
+        print(f"  Found {len(tmp_tables)} temporary tables: {', '.join(tmp_tables)}")
+        
+        import re  # Ensure re is available
+        for table_name in tmp_tables:
+            # Validate table name strictly to prevent SQL injection
+            # Only allow alphanumeric and underscore, and must end with __dbt_tmp
+            if not re.match(r'^[a-zA-Z0-9_]+__dbt_tmp$', table_name):
+                print(f"  ⚠ Skipping invalid table name: {table_name}")
+                continue
+                
+            print(f"  Dropping {schema}.{table_name}...")
+            # Use backticks for identifier quoting
+            cursor.execute(f"DROP TABLE IF EXISTS `{schema}`.`{table_name}`")
+            dropped_count += 1
+            
+        connection.commit()
+        print(f"  ✓ Dropped {dropped_count} temporary tables")
+        return dropped_count
+        
+    except Exception as e:
+        print(f"  ⚠ Warning: Failed to cleanup temp tables: {str(e)}")
+        return 0
+    finally:
+        cursor.close()
+
+
 def create_table_backups(connection, tables, schema='gold'):
     """
     Create backup copies of tables before transformation.
@@ -388,6 +445,9 @@ def main():
         )
         
         try:
+            # Clean up potential leftover temp tables from previous failed runs
+            cleanup_dbt_tmp_tables(connection, 'gold')
+            
             backup_count = create_table_backups(connection, GOLD_TABLES, 'gold')
             
             # Step 5: Run gold models
