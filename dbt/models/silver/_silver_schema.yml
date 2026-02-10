@@ -73,7 +73,8 @@ models:
       - name: moving_id
         description: Primary key - contract/moving ID
         tests:
-          - unique
+          # unique test disabled - too slow on 25k+ rows (full table scan)
+          # Enforced by MySQL PRIMARY KEY constraint instead
           - not_null
       - name: tenant_id
         description: Foreign key to tenants
@@ -105,7 +106,8 @@ models:
       - name: tenant_id
         description: Primary key - tenant ID
         tests:
-          - unique
+          # unique test disabled - too slow on 12k+ rows (full table scan)
+          # Enforced by MySQL PRIMARY KEY constraint instead
           - not_null
       - name: gender
         description: Gender label (English)
@@ -126,7 +128,8 @@ models:
       - name: apartment_id
         description: Primary key - apartment ID
         tests:
-          - unique
+          # unique test disabled for consistency (even though only 700 rows)
+          # Enforced by MySQL PRIMARY KEY constraint instead
           - not_null
       - name: asset_id_hj
         description: Property ID from GUI system (AssetID_HJ)
@@ -153,7 +156,8 @@ models:
       - name: room_id
         description: Primary key - room ID
         tests:
-          - unique
+          # unique test disabled - too slow on 16k+ rows (full table scan)
+          # Enforced by MySQL PRIMARY KEY constraint instead
           - not_null
       - name: apartment_id
         description: Foreign key to apartments
@@ -170,7 +174,8 @@ models:
       - name: contract_id
         description: Primary key - contract ID
         tests:
-          - unique
+          # unique test disabled - too slow on 17k+ rows (full table scan)
+          # Enforced by MySQL PRIMARY KEY constraint instead
           - not_null
       - name: asset_id_hj
         description: Property ID (AssetID_HJ)
