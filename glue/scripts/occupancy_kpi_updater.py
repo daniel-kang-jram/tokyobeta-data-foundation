@@ -30,7 +30,8 @@ args = getResolvedOptions(sys.argv, [
     'AURORA_DATABASE',
     'AURORA_SECRET_ARN',
     'TARGET_DATE',  # Optional: specific date to process (default: today)
-    'LOOKBACK_DAYS'  # Optional: lookback window (default: 3)
+    'LOOKBACK_DAYS',  # Optional: lookback window (default: 3)
+    'FORWARD_DAYS'  # Optional: forward window for projections (default: 90)
 ])
 
 job.init(args['JOB_NAME'], args)
@@ -96,7 +97,10 @@ def ensure_kpi_table_exists(cursor):
 
 def compute_kpi_for_dates(cursor, target_dates):
     """
-    Compute occupancy KPIs for specific dates.
+    Compute occupancy KPIs for specific dates (historical and future projections).
+    
+    For historical dates: Use actual snapshot data for that date.
+    For future dates: Use today's snapshot and filter by scheduled move_in_date/moveout_date.
     
     Args:
         cursor: pymysql cursor
@@ -108,66 +112,78 @@ def compute_kpi_for_dates(cursor, target_dates):
     if not target_dates:
         return 0
         
-    print(f"Computing KPIs for {len(target_dates)} dates...")
+    today = date.today()
+    print(f"Computing KPIs for {len(target_dates)} dates (today: {today})...")
     
     for target_date in target_dates:
-        print(f"  Processing {target_date}...")
+        is_future = target_date > today
+        print(f"  Processing {target_date} ({'FUTURE' if is_future else 'PAST/TODAY'})...")
         
-        # Determine if this is a past/present vs future date
-        is_past_or_today = target_date <= date.today()
+        # For future dates, use today's snapshot as the base
+        snapshot_date_filter = today if is_future else target_date
         
         # --- Metric 1: 申込 (Applications) ---
-        # Count first appearance of (tenant_id, apartment_id, room_id) where status IN (4, 5)
-        cursor.execute("""
-            SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
-            FROM (
-                SELECT 
-                    tenant_id,
-                    apartment_id,
-                    room_id,
-                    MIN(snapshot_date) as first_appearance
-                FROM silver.tenant_room_snapshot_daily
-                WHERE management_status_code IN (4, 5)
-                GROUP BY tenant_id, apartment_id, room_id
-            ) first_apps
-            WHERE first_appearance = %s
-        """, (target_date,))
-        applications = cursor.fetchone()['count']
+        # Cannot predict future applications; only count for past dates
+        if is_future:
+            applications = 0
+        else:
+            # Count first appearance of (tenant_id, apartment_id, room_id) where status IN (4, 5)
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                FROM (
+                    SELECT 
+                        tenant_id,
+                        apartment_id,
+                        room_id,
+                        MIN(snapshot_date) as first_appearance
+                    FROM silver.tenant_room_snapshot_daily
+                    WHERE management_status_code IN (4, 5)
+                    GROUP BY tenant_id, apartment_id, room_id
+                ) first_apps
+                WHERE first_appearance = %s
+            """, (target_date,))
+            applications = cursor.fetchone()['count']
         
         # --- Metric 2: 新規入居者 (New Move-ins) ---
-        # Past/today: status IN (4,5,6,7,9) AND move_in_date = target
-        # Future: status IN (4,5) AND move_in_date = target
-        if is_past_or_today:
-            movein_status_filter = "(4,5,6,7,9)"
-        else:
-            movein_status_filter = "(4,5)"
-            
-        cursor.execute(f"""
-            SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
-            FROM silver.tenant_room_snapshot_daily
-            WHERE snapshot_date = %s
-            AND move_in_date = %s
-            AND management_status_code IN {movein_status_filter}
-        """, (target_date, target_date))
-        new_moveins = cursor.fetchone()['count']
-        
-        # --- Metric 3: 新規退去者 (New Move-outs) ---
-        # Past/today: moveout_plans_date = target
-        # Future: moveout_date = target
-        if is_past_or_today:
+        if is_future:
+            # From today's snapshot, count status 4/5 with scheduled move_in_date
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
                 FROM silver.tenant_room_snapshot_daily
                 WHERE snapshot_date = %s
-                AND moveout_plans_date = %s
-            """, (target_date, target_date))
+                AND move_in_date = %s
+                AND management_status_code IN (4, 5)
+            """, (snapshot_date_filter, target_date))
         else:
+            # For past/today: status IN (4,5,6,7,9) AND move_in_date = target
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                AND move_in_date = %s
+                AND management_status_code IN (4, 5, 6, 7, 9)
+            """, (snapshot_date_filter, target_date))
+        
+        new_moveins = cursor.fetchone()['count']
+        
+        # --- Metric 3: 新規退去者 (New Move-outs) ---
+        if is_future:
+            # From today's snapshot, count scheduled moveout_date
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
                 FROM silver.tenant_room_snapshot_daily
                 WHERE snapshot_date = %s
                 AND moveout_date = %s
-            """, (target_date, target_date))
+            """, (snapshot_date_filter, target_date))
+        else:
+            # For past/today: use moveout_plans_date
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                AND moveout_plans_date = %s
+            """, (snapshot_date_filter, target_date))
+        
         new_moveouts = cursor.fetchone()['count']
         
         # --- Metric 4: 稼働室数増減 (Occupancy Delta) ---
@@ -227,20 +243,21 @@ def main():
         # Parse parameters
         target_date_str = args.get('TARGET_DATE', str(date.today()))
         lookback_days = int(args.get('LOOKBACK_DAYS', 3))
+        forward_days = int(args.get('FORWARD_DAYS', 90))
         
         target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
         
         print(f"Target date: {target_date}")
         print(f"Lookback window: {lookback_days} days")
+        print(f"Forward window: {forward_days} days")
         
-        # Build list of dates to process (target date + lookback)
+        # Build list of dates to process: (target - lookback) to (target + forward)
         dates_to_process = [
-            target_date - timedelta(days=i)
-            for i in range(lookback_days + 1)
+            target_date + timedelta(days=i)
+            for i in range(-lookback_days, forward_days + 1)
         ]
-        dates_to_process.reverse()  # Process oldest to newest
         
-        print(f"Dates to process: {[str(d) for d in dates_to_process]}")
+        print(f"Date range: {min(dates_to_process)} to {max(dates_to_process)} ({len(dates_to_process)} dates)")
         
         # Connect to Aurora
         connection = get_connection()

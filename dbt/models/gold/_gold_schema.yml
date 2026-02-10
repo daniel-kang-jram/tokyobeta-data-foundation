@@ -119,42 +119,6 @@ models:
         description: Formatted payment status change description
       - name: days_in_status
         description: Number of days tenant has been in current status
-  - name: daily_activity_summary
-    description: |
-      Daily aggregated property management activities by tenant type.
-      Tracks new tenant registrations, applications, contracts, move-ins, and move-outs.
-    config:
-      schema: gold
-    columns:
-      - name: activity_date
-        description: Activity date
-        tests:
-          - not_null
-      - name: tenant_type
-        description: Individual or corporate
-        tests:
-          - accepted_values:
-              values: ['individual', 'corporate']
-      - name: inquiries_count
-        description: |
-          問い合わせ数: Number of NEW tenants registered with any status that day (by created_at)
-      - name: applications_count
-        description: |
-          申し込み数: Number of unique tenants with status 仮予約(4) or 初期賃料(5) where updated_at is that day
-      - name: contracts_signed_count
-        description: |
-          契約締結: Contracts signed by contract_date (from movings.movein_decided_date)
-      - name: confirmed_moveins_count
-        description: |
-          入居数: Number of tenants with status [4,5,6,7,9,14,15] where movein_date is that specific date
-          (仮予約、初期賃料、入居説明、入居、居住中、退去通知、退去予定)
-      - name: confirmed_moveouts_count
-        description: |
-          確定退去者: Number of tenants with status [14,15,16,17] where moveout_date (NOT moveout_plans_date) is that specific date
-          (退去通知、退去予定、メンテ待ち、退去済み)
-      - name: net_occupancy_delta
-        description: |
-          稼働室数増減: Net change in occupied rooms (confirmed_moveins_count - confirmed_moveouts_count)
   
   - name: new_contracts
     description: New contract records with full demographics and geolocation

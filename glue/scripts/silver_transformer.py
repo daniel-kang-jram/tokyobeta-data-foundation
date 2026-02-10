@@ -26,16 +26,26 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 
 # Get job parameters
-args = getResolvedOptions(sys.argv, [
+required_args = [
     'JOB_NAME',
     'S3_SOURCE_BUCKET',
     'DBT_PROJECT_PATH',
     'AURORA_ENDPOINT',
     'AURORA_DATABASE',
     'AURORA_SECRET_ARN',
-    'ENVIRONMENT',
-    'DBT_SELECT'  # Optional: Limit dbt models to run
-])
+    'ENVIRONMENT'
+]
+
+optional_args = ['DBT_SELECT', 'SKIP_TESTS']  # Optional: Limit models and skip tests
+
+args = getResolvedOptions(sys.argv, required_args)
+
+# Get optional args with defaults
+for arg in optional_args:
+    if f'--{arg}' in sys.argv:
+        idx = sys.argv.index(f'--{arg}')
+        if idx + 1 < len(sys.argv):
+            args[arg] = sys.argv[idx + 1]
 
 job.init(args['JOB_NAME'], args)
 
@@ -513,12 +523,25 @@ def main():
             aurora_password=password
         )
         
-        # Step 7: Run silver tests
-        test_result = run_dbt_silver_tests(
-            dbt_local_path, 
-            args['ENVIRONMENT'],
-            dbt_select=args.get('DBT_SELECT')
-        )
+        # Step 7: Run silver tests (optional - can be skipped for performance)
+        skip_tests = args.get('SKIP_TESTS', 'false').lower() == 'true'
+        
+        if skip_tests:
+            print("\n" + "="*60)
+            print("SKIPPING DBT TESTS (SKIP_TESTS=true)")
+            print("Run tokyobeta-prod-silver-test job separately for validation")
+            print("="*60)
+            test_result = {
+                'tests_passed': 0,
+                'tests_failed': 0,
+                'output': 'Tests skipped'
+            }
+        else:
+            test_result = run_dbt_silver_tests(
+                dbt_local_path, 
+                args['ENVIRONMENT'],
+                dbt_select=args.get('DBT_SELECT')
+            )
         
         # Calculate duration
         duration = (datetime.now() - start_time).total_seconds()
