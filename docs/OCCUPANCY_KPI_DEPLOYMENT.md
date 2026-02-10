@@ -2,18 +2,21 @@
 
 ## Overview
 
-Incremental daily snapshot and KPI pipeline for occupancy tracking with future projections.
+**INTEGRATED ARCHITECTURE (as of Feb 2026):**
+
+The occupancy KPI pipeline is now **fully integrated into the `gold_transformer` Glue job**. There is NO separate `occupancy_kpi_updater` job.
 
 **Components:**
 - `silver.tenant_room_snapshot_daily` - Incremental daily snapshot (dbt)
-- `gold.occupancy_daily_metrics` - Daily KPI table with 90-day forward projections (Glue SQL)
+- `gold.occupancy_daily_metrics` - Daily KPI table with 90-day forward projections (SQL in gold_transformer.py)
 - `scripts/backfill_occupancy_snapshots.py` - One-time backfill
-- `glue/scripts/occupancy_kpi_updater.py` - Daily KPI updater (past + future)
+- `glue/scripts/gold_transformer.py` - Unified gold job (dbt models + occupancy KPIs + tests)
 
 **Key Features:**
 - Historical metrics from actual snapshots (Oct 2025 - today)
 - Future projections (today + 90 days) based on scheduled move-ins/move-outs
-- Constant runtime (~2 minutes daily regardless of history size)
+- **Single job execution**: dbt gold models → occupancy KPIs → dbt tests
+- Runtime: ~10 minutes (includes all gold models + KPIs + tests)
 
 ## Deployment Steps
 
@@ -30,24 +33,25 @@ aws s3 sync . s3://jram-gghouse/dbt-project/ \
   --profile gghouse
 ```
 
-### 2. Create Glue Job for KPI Updater
+### 2. Update Gold Transformer Job
 
-Upload the KPI updater script:
+**The KPI logic is now integrated into `gold_transformer.py`.** No separate job needed.
+
+Upload the updated gold_transformer script:
 
 ```bash
-aws s3 cp glue/scripts/occupancy_kpi_updater.py \
-  s3://jram-gghouse/glue-scripts/occupancy_kpi_updater.py \
+aws s3 cp glue/scripts/gold_transformer.py \
+  s3://jram-gghouse/glue-scripts/gold_transformer.py \
   --profile gghouse
 ```
 
-Create Glue job (via AWS Console or Terraform):
+Update Glue job parameters (via AWS Console or Terraform):
 
 ```bash
-# Option A: AWS CLI
-aws glue create-job \
-  --name tokyobeta-prod-occupancy-kpi-updater \
-  --role arn:aws:iam::343881458651:role/tokyobeta-prod-glue-service-role \
-  --command '{
+# Option A: AWS CLI (update existing job)
+aws glue update-job \
+  --job-name tokyobeta-prod-gold-transformer \
+  --job-update '{
     "Name": "glueetl",
     "ScriptLocation": "s3://jram-gghouse/glue-scripts/occupancy_kpi_updater.py",
     "PythonVersion": "3"
@@ -94,61 +98,53 @@ python3 scripts/backfill_occupancy_snapshots.py \
 After backfill completes, compute initial KPI values (historical + future projections):
 
 ```bash
+# KPI computation now integrated into gold_transformer
 aws glue start-job-run \
-  --job-name tokyobeta-prod-occupancy-kpi-updater \
-  --arguments='--TARGET_DATE=2026-02-10,--LOOKBACK_DAYS=120,--FORWARD_DAYS=90' \
+  --job-name tokyobeta-prod-gold-transformer \
+  --arguments='{"--LOOKBACK_DAYS":"120","--FORWARD_DAYS":"90"}' \
   --profile gghouse
 ```
 
-This will compute:
-- Historical metrics: Oct 2025 - Feb 2026 (from actual snapshots)
-- Future projections: Feb 2026 - May 2026 (90 days forward)
+This will:
+1. Build all dbt gold models
+2. Compute KPIs for Oct 2025 - May 2026 (historical + 90-day projections)
+3. Run dbt gold tests
 
 ### 4. Daily Schedule
 
-Modify existing EventBridge schedule or create new:
+**SIMPLIFIED (Integrated Architecture):**
 
 ```bash
-# Option A: Extend daily_etl schedule
-# After daily_etl completes, trigger:
-# 1. silver snapshot append
-# 2. KPI updater
-
-# Option B: Create separate schedule for occupancy pipeline
-# 8:00 AM JST daily:
-# 1. dbt snapshot append (via silver_transformer with --DBT_SELECT)
-# 2. KPI updater
-```
-
-Example daily trigger sequence:
-
-```bash
-# Step 1: Append today's snapshot
+# Single daily trigger: gold_transformer (includes KPI computation)
 aws glue start-job-run \
-  --job-name tokyobeta-prod-silver-transformer \
-  --arguments='--DBT_SELECT=silver.tenant_room_snapshot_daily' \
+  --job-name tokyobeta-prod-gold-transformer \
   --profile gghouse
 
-# Step 2: Compute KPIs (3-day lookback + 90-day forward)
-aws glue start-job-run \
-  --job-name tokyobeta-prod-occupancy-kpi-updater \
-  --arguments='--TARGET_DATE='$(date +%Y-%m-%d)',--LOOKBACK_DAYS=3,--FORWARD_DAYS=90' \
-  --profile gghouse
+# Default arguments (set in job definition):
+# --LOOKBACK_DAYS=3
+# --FORWARD_DAYS=90
 ```
+
+**EventBridge schedule:**
+- Trigger `tokyobeta-prod-gold-transformer` after staging/silver jobs complete
+- Frequency: Daily at 8:00 AM JST (after staging is fresh)
+- No need for separate KPI job or orchestration
 
 ## Operational Notes
 
 ### Daily Runtime
 
-- **Snapshot append:** ~30 seconds (12k rows)
-- **KPI computation:** ~10-15 minutes (~94 dates: 3 lookback + 90 forward + 1 today)
-- **Total:** ~12-15 minutes (constant time regardless of history size)
+**Integrated `gold_transformer` job:**
+- **dbt gold models:** ~10 seconds (6 models)
+- **KPI computation:** ~8 minutes (~94 dates: 3 lookback + 90 forward + 1 today)
+- **dbt tests:** ~1 minute
+- **Total:** ~10 minutes (constant time regardless of history size)
 
 **Note:** Runtime scales with `LOOKBACK_DAYS + FORWARD_DAYS`, not with total history.
 
 ### Future Projections
 
-The KPI updater computes 90-day forward projections using today's snapshot:
+The `gold_transformer` job computes 90-day forward projections using today's snapshot:
 
 **For future dates (> today):**
 - **申込 (Applications):** Set to 0 (cannot predict)
