@@ -324,11 +324,12 @@ resource "aws_glue_job" "silver_transformer" {
     "--AURORA_DATABASE"   = var.aurora_database
     "--AURORA_SECRET_ARN" = var.aurora_secret_arn
     "--ENVIRONMENT"       = var.environment
+    "--SKIP_TESTS"        = "true"  # Tests run in separate silver_test job for performance
   }
 
   glue_version      = "4.0"
   max_retries       = 0  # Retries handled by Step Functions
-  timeout           = 60 # 60 minutes max (dbt deps + seed + models + tests + backups)
+  timeout           = 60 # 60 minutes max (reduced to ~3 min with tests skipped)
   worker_type       = "G.1X"
   number_of_workers = 2
   
@@ -396,6 +397,57 @@ resource "aws_glue_job" "gold_transformer" {
     Name        = "tokyobeta-${var.environment}-gold-transformer"
     Environment = var.environment
     Layer       = "gold"
+    ManagedBy   = "terraform"
+  }
+}
+
+# Job 4: Silver Test (Separated for Performance)
+resource "aws_glue_job" "silver_test" {
+  name     = "tokyobeta-${var.environment}-silver-test"
+  role_arn = aws_iam_role.glue_service_role.arn
+
+  command {
+    name            = "glueetl"
+    script_location = "s3://${var.s3_source_bucket}/glue-scripts/silver_test.py"
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--job-language"                     = "python"
+    "--job-bookmark-option"              = "job-bookmark-disable"
+    "--enable-metrics"                   = "true"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-spark-ui"                  = "true"
+    "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/silver-test/"
+    "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/silver-test/"
+    "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql"
+    
+    # Custom parameters
+    "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
+    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
+    "--AURORA_ENDPOINT"   = var.aurora_endpoint
+    "--AURORA_DATABASE"   = var.aurora_database
+    "--AURORA_SECRET_ARN" = var.aurora_secret_arn
+    "--ENVIRONMENT"       = var.environment
+  }
+
+  glue_version      = "4.0"
+  max_retries       = 0
+  timeout           = 30 # 30 minutes max (tests only, no transformation)
+  worker_type       = "G.1X"
+  number_of_workers = 2
+  
+  connections = [aws_glue_connection.aurora.name]
+
+  execution_property {
+    max_concurrent_runs = 1
+  }
+
+  tags = {
+    Name        = "tokyobeta-${var.environment}-silver-test"
+    Environment = var.environment
+    Layer       = "silver"
+    Purpose     = "data-quality"
     ManagedBy   = "terraform"
   }
 }
