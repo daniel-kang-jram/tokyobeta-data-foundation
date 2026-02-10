@@ -1,14 +1,15 @@
 # Aurora MySQL Module
 # Creates Aurora MySQL cluster for analytics data warehouse
 
-# DB Subnet Group
+# DB Subnet Group (Public subnets for Glue access)
 resource "aws_db_subnet_group" "aurora" {
-  name       = "tokyobeta-${var.environment}-aurora-subnet-group"
+  name       = "tokyobeta-${var.environment}-aurora-public-subnet-group"
   subnet_ids = var.subnet_ids
 
   tags = {
-    Name        = "tokyobeta-${var.environment}-aurora-subnet-group"
+    Name        = "tokyobeta-${var.environment}-aurora-public-subnet-group"
     Environment = var.environment
+    Description = "Public subnets for temporary public access"
   }
 }
 
@@ -61,9 +62,9 @@ resource "aws_db_parameter_group" "aurora" {
   }
 }
 
-# Aurora Cluster
+# Aurora Cluster (Public endpoint for Glue access)
 resource "aws_rds_cluster" "aurora" {
-  cluster_identifier              = "tokyobeta-${var.environment}-aurora-cluster"
+  cluster_identifier              = "tokyobeta-${var.environment}-aurora-cluster-public"
   engine                          = "aurora-mysql"
   engine_version                  = "8.0.mysql_aurora.3.11.1"
   database_name                   = "tokyobeta"
@@ -87,13 +88,14 @@ resource "aws_rds_cluster" "aurora" {
   tags = {
     Name        = "tokyobeta-${var.environment}-aurora-cluster-public"
     Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }
 
-# Aurora Cluster Instances
+# Aurora Cluster Instances (Public for Glue connectivity)
 resource "aws_rds_cluster_instance" "aurora" {
   count              = var.instance_count
-  identifier         = "tokyobeta-${var.environment}-aurora-instance-${count.index + 1}"
+  identifier         = "tokyobeta-${var.environment}-aurora-public-instance-${count.index + 1}"
   cluster_identifier = aws_rds_cluster.aurora.id
   instance_class     = var.instance_class
   engine             = aws_rds_cluster.aurora.engine
@@ -109,6 +111,7 @@ resource "aws_rds_cluster_instance" "aurora" {
   tags = {
     Name        = "tokyobeta-${var.environment}-aurora-public-instance-${count.index + 1}"
     Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }
 
