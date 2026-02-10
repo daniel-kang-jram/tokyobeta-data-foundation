@@ -17,7 +17,7 @@ Data Sources:
 - staging.apartments: Property/building names
 - staging.rooms: Room numbers
 
-Expected output: ~12,000-15,000 rows (database is updated continuously)
+Expected output: ~12,000 rows (filtered by active status)
 
 Corporate tenants naturally get multiple rows (one per unique room).
 Individual tenants get one row (most recent moving per room).
@@ -38,6 +38,14 @@ WITH all_active_movings AS (
         t.gender_type as gender_code,
         t.age,
         t.nationality,
+        -- Contact info (found in schema)
+        t.email_1,
+        t.email_2,
+        t.tel_1,
+        t.tel_2,
+        t.account_number,
+        t.m_language_id_1,
+        
         m.rent as fixed_rent,
         m.movein_date as move_in_date,
         m.moveout_date as moveout_date,  -- 最終賃料日
@@ -93,16 +101,17 @@ tenant_room_assignments AS (
         gender_code,
         age,
         nationality,
-        -- Languages not in database schema
-        NULL as language_1,
+        -- Languages
+        m_language_id_1,
+        NULL as language_1, -- Placeholder as m_languages table is missing
         NULL as language_2,
         -- Contact info
-        NULL as phone_1,  -- Not in current schema
-        NULL as phone_2,
-        NULL as email_1,
-        NULL as email_2,
+        tel_1 as phone_1,
+        tel_2 as phone_2,
+        email_1,
+        email_2,
         -- Financial
-        NULL as account_number,  -- Not in current schema
+        account_number,
         fixed_rent,
         -- Dates
         move_in_date,
@@ -177,8 +186,8 @@ final AS (
         CONCAT(age, '歳') as age_display,
         nationality,
         
-        -- Contact (mostly NULL from database)
-        language_1,
+        -- Contact
+        language_1, -- Currently NULL as m_languages missing
         language_2,
         phone_1,
         phone_2,

@@ -43,10 +43,10 @@ SELECT
         ELSE 'その他'
     END as nationality,
     
-    -- LLM-predicted nationality (for transparency)
-    -- NOTE: This column is added by nationality_enricher Glue job
-    -- Will be NULL until enrichment runs
-    NULL as llm_nationality,
+    -- LLM-predicted nationality (from cache table)
+    llm_cache.llm_nationality,
+    llm_cache.llm_confidence,
+    llm_cache.enriched_at as llm_enriched_at,
     
     -- Data quality flag for nationality (matches priority order above)
     CASE 
@@ -103,5 +103,9 @@ LEFT JOIN {{ ref('code_affiliation_type') }} at
 LEFT JOIN {{ ref('code_moveout_reason') }} mr
     ON t.reason_moveout = mr.code
 LEFT JOIN {{ source('staging', 'm_nationalities') }} n
+    ON t.m_nationality_id = n.id
+-- Join with LLM enrichment cache (persistent across staging reloads)
+LEFT JOIN {{ source('staging', 'llm_enrichment_cache') }} llm_cache
+    ON t.id = llm_cache.tenant_id
     ON t.m_nationality_id = n.id
 WHERE t.id IS NOT NULL

@@ -173,29 +173,42 @@ Respond with ONLY the nationality, nothing else."""
             # 2. NULL nationality
             # 3. Empty string nationality
             # Prioritize active residents (status 9, 11, 14, 15, 16)
-            cursor.execute(f"""
+            query = f"""
                 SELECT 
-                    id,
-                    full_name,
-                    nationality,
-                    m_nationality_id,
-                    status
-                FROM staging.tenants
+                    t.id,
+                    t.full_name,
+                    t.nationality,
+                    t.m_nationality_id,
+                    t.status
+                FROM staging.tenants t
+                LEFT JOIN staging.llm_enrichment_cache c ON t.id = c.tenant_id
                 WHERE (
-                    nationality = 'レソト'
-                    OR nationality IS NULL
-                    OR nationality = ''
+                    t.nationality = 'レソト'
+                    OR t.nationality IS NULL
+                    OR t.nationality = ''
                 )
-                AND llm_nationality IS NULL  -- Don't re-process already enriched
+                AND (
+                    c.tenant_id IS NULL  -- Not in cache yet
+                    -- Check for name changes, handling NULL/empty names as 'UNKNOWN' to match save logic
+                    OR c.full_name_hash != SHA2(
+                        CASE 
+                            WHEN t.full_name IS NULL OR t.full_name = '' THEN 'UNKNOWN'
+                            ELSE t.full_name 
+                        END, 
+                        256
+                    )
+                )
                 ORDER BY 
                     -- Prioritize active residents
                     CASE 
-                        WHEN status IN (9, 11, 14, 15, 16) THEN 0
+                        WHEN t.status IN (9, 11, 14, 15, 16) THEN 0
                         ELSE 1
                     END,
-                    updated_at DESC
+                    t.updated_at DESC
                 LIMIT {self.max_batch_size}
-            """)
+            """
+            logger.info(f"Executing query: {query}")
+            cursor.execute(query)
             
             tenants = cursor.fetchall()
             
@@ -332,11 +345,28 @@ Respond with ONLY the nationality, nothing else."""
                         # Skip failed predictions
                         continue
                     
+                    # Write to persistent cache table (UPSERT)
                     cursor.execute("""
-                        UPDATE staging.tenants
-                        SET llm_nationality = %s
-                        WHERE id = %s
-                    """, (pred['predicted_nationality'], pred['tenant_id']))
+                        INSERT INTO staging.llm_enrichment_cache
+                            (tenant_id, full_name, full_name_hash, 
+                             llm_nationality, llm_confidence, 
+                             enriched_at, model_version)
+                        VALUES (%s, %s, SHA2(%s, 256), %s, %s, NOW(), %s)
+                        ON DUPLICATE KEY UPDATE
+                            full_name = VALUES(full_name),
+                            full_name_hash = VALUES(full_name_hash),
+                            llm_nationality = VALUES(llm_nationality),
+                            llm_confidence = VALUES(llm_confidence),
+                            enriched_at = VALUES(enriched_at),
+                            model_version = VALUES(model_version)
+                    """, (
+                        pred['tenant_id'],
+                        pred.get('original_name') or 'UNKNOWN',  # Handle NULL names
+                        pred.get('original_name') or 'UNKNOWN',
+                        pred['predicted_nationality'],
+                        pred.get('confidence', 0.8),
+                        self.BEDROCK_MODEL_ID
+                    ))
                     
                     successful_updates += 1
                 
@@ -348,6 +378,7 @@ Respond with ONLY the nationality, nothing else."""
             conn.commit()
             
             logger.info(f"✓ Saved {successful_updates} predictions")
+            
             if failed_updates > 0:
                 logger.warning(f"⚠ {failed_updates} updates failed")
         
