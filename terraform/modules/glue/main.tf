@@ -324,8 +324,8 @@ resource "aws_glue_job" "silver_transformer" {
     "--AURORA_DATABASE"   = var.aurora_database
     "--AURORA_SECRET_ARN" = var.aurora_secret_arn
     "--ENVIRONMENT"       = var.environment
-    "--SKIP_TESTS"        = "true"                                            # Tests run in separate silver_test job for performance
-    "--DBT_SELECT"        = "silver.* --exclude silver.tenant_status_history" # Exclude slow history model (15+ min)
+    "--SKIP_TESTS"        = "true"  # Tests run in separate silver_test job for performance
+    "--DBT_SELECT"        = "silver.stg_apartments silver.stg_inquiries silver.stg_movings silver.stg_rooms silver.stg_tenants silver.tenant_room_snapshot_daily silver.tokyo_beta_tenant_room_info silver.int_contracts" # Explicit list to avoid parsing issues with --exclude
   }
 
   glue_version      = "4.0"
