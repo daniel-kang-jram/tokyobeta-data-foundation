@@ -20,7 +20,7 @@ variable "alert_email" {
 variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to access Aurora MySQL (external access)"
   type        = list(string)
-  default     = [
-    "85.115.98.80/32"  # Current admin IP - update if your IP changes
+  default = [
+    "85.115.98.80/32" # Current admin IP - update if your IP changes
   ]
 }

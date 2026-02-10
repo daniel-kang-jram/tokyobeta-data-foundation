@@ -29,13 +29,13 @@ variable "cpu_threshold" {
 variable "storage_threshold_bytes" {
   description = "Free storage threshold in bytes"
   type        = number
-  default     = 10737418240  # 10 GB
+  default     = 10737418240 # 10 GB
 }
 
 variable "job_duration_threshold_ms" {
   description = "Glue job duration threshold in milliseconds"
   type        = number
-  default     = 1800000  # 30 minutes
+  default     = 1800000 # 30 minutes
 }
 
 variable "project_name" {

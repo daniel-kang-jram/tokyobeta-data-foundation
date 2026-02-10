@@ -42,7 +42,7 @@ output "sns_alert_topic_arn" {
 
 output "deployment_instructions" {
   description = "Next steps for completing deployment"
-  value = <<-EOT
+  value       = <<-EOT
   
   ✅ Infrastructure deployed successfully!
   

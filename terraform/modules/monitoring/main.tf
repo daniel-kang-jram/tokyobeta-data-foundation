@@ -50,7 +50,7 @@ resource "aws_cloudwatch_metric_alarm" "glue_job_duration" {
   namespace           = "Glue"
   period              = "300"
   statistic           = "Maximum"
-  threshold           = "1800000"  # 30 minutes in milliseconds
+  threshold           = "1800000" # 30 minutes in milliseconds
   alarm_description   = "Alert when Glue job takes longer than 30 minutes"
   alarm_actions       = [aws_sns_topic.etl_alerts.arn]
 
@@ -96,7 +96,7 @@ resource "aws_cloudwatch_metric_alarm" "aurora_storage" {
   namespace           = "AWS/RDS"
   period              = "300"
   statistic           = "Average"
-  threshold           = "10737418240"  # 10 GB in bytes
+  threshold           = "10737418240" # 10 GB in bytes
   alarm_description   = "Alert when Aurora free storage < 10GB"
   alarm_actions       = [aws_sns_topic.etl_alerts.arn]
 

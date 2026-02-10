@@ -4,20 +4,20 @@
 
 # Lambda function to trigger Glue
 resource "aws_lambda_function" "glue_trigger" {
-  filename      = data.archive_file.lambda_zip.output_path
-  function_name = "tokyobeta-${var.environment}-glue-trigger"
-  role          = aws_iam_role.lambda_glue_trigger.arn
-  handler       = "trigger_glue.handler"
-  runtime       = "python3.11"
-  timeout       = 60
+  filename         = data.archive_file.lambda_zip.output_path
+  function_name    = "tokyobeta-${var.environment}-glue-trigger"
+  role             = aws_iam_role.lambda_glue_trigger.arn
+  handler          = "trigger_glue.handler"
+  runtime          = "python3.11"
+  timeout          = 60
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
-  
+
   environment {
     variables = {
       GLUE_JOB_NAME = var.glue_job_name
     }
   }
-  
+
   tags = {
     Name        = "tokyobeta-${var.environment}-glue-trigger"
     Environment = var.environment
@@ -94,7 +94,7 @@ resource "aws_cloudwatch_event_rule" "daily_etl_trigger" {
   name                = "tokyobeta-${var.environment}-daily-etl-trigger"
   description         = "Trigger Lambda to start Glue ETL job daily at 7:00 AM JST"
   schedule_expression = var.schedule_expression
-  
+
   tags = {
     Name        = "tokyobeta-${var.environment}-daily-trigger"
     Environment = var.environment

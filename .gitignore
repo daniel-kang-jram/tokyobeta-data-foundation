@@ -64,3 +64,11 @@ data/
 
 # Scripts output
 scripts/*.sql
+
+# Evidence.dev POC
+# Keep local credentials and generated assets out of git
+evidence/.env
+evidence/node_modules/
+evidence/build/
+evidence/.evidence/
+evidence/sources/**/connection.options.yaml

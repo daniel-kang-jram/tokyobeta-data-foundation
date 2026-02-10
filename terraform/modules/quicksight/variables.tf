@@ -52,7 +52,7 @@ variable "enable_spice_refresh" {
 variable "spice_refresh_schedule" {
   type        = string
   description = "CloudWatch Events schedule for SPICE refresh (cron format)"
-  default     = "cron(0 23 * * ? *)"  # 8:00 AM JST = 23:00 UTC
+  default     = "cron(0 23 * * ? *)" # 8:00 AM JST = 23:00 UTC
 }
 
 variable "spice_dataset_ids" {
