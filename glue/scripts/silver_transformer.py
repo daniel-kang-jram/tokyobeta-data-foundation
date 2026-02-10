@@ -135,7 +135,8 @@ def install_dbt_dependencies(dbt_project_path):
     Returns:
         True if successful
     """
-    print("\nInstalling dbt dependencies...")
+    print(f"\n[{datetime.now().isoformat()}] Installing dbt dependencies...")
+    sys.stdout.flush()
     
     dbt_executable = get_dbt_executable_path()
     
@@ -143,17 +144,17 @@ def install_dbt_dependencies(dbt_project_path):
         dbt_executable, "deps",
         "--profiles-dir", dbt_project_path,
         "--project-dir", dbt_project_path
-    ], capture_output=True, text=True)
+    ], check=False)
     
-    print(result.stdout)
+    print(f"[{datetime.now().isoformat()}] dbt deps completed with returncode: {result.returncode}")
+    
     if result.returncode != 0:
-        print("=== DBT DEPS ERRORS ===")
-        print(result.stderr)
+        print("=== DBT DEPS FAILED ===")
         raise subprocess.CalledProcessError(
             result.returncode,
             result.args,
-            result.stdout,
-            result.stderr
+            None,
+            None
         )
     
     return True
@@ -172,7 +173,9 @@ def run_dbt_seed(dbt_project_path, target_env):
     """
     print("\n" + "="*60)
     print("RUNNING DBT SEED")
+    print(f"Timestamp: {datetime.now().isoformat()}")
     print("="*60)
+    sys.stdout.flush()
     
     dbt_executable = get_dbt_executable_path()
     
@@ -181,22 +184,22 @@ def run_dbt_seed(dbt_project_path, target_env):
         "--profiles-dir", dbt_project_path,
         "--project-dir", dbt_project_path,
         "--target", target_env
-    ], capture_output=True, text=True)
+    ], check=False)
     
-    print(result.stdout)
+    print(f"\n[{datetime.now().isoformat()}] dbt seed completed with returncode: {result.returncode}")
+    
     if result.returncode != 0:
-        print("=== DBT SEED ERRORS ===")
-        print(result.stderr)
+        print("=== DBT SEED FAILED ===")
         raise subprocess.CalledProcessError(
             result.returncode,
             result.args,
-            result.stdout,
-            result.stderr
+            None,
+            None
         )
     
     return {
         'success': True,
-        'output': result.stdout
+        'output': 'Completed (streamed logs above)'
     }
 
 
@@ -224,6 +227,7 @@ def run_dbt_silver_models(
     """
     print("\n" + "="*60)
     print("RUNNING DBT SILVER MODELS")
+    print(f"Timestamp: {datetime.now().isoformat()}")
     if dbt_select:
         print(f"Filter: {dbt_select}")
     print("="*60)
@@ -250,33 +254,32 @@ def run_dbt_silver_models(
         "--fail-fast"
     ] + selection_args
     
-    # Run only silver models with --fail-fast to stop on first error
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    print(f"Starting dbt run at {datetime.now().isoformat()}")
+    print(f"Command: {' '.join(cmd)}")
+    sys.stdout.flush()  # Force flush to CloudWatch
     
-    print(result.stdout)
-    if result.stderr:
-        print("=== DBT RUN WARNINGS ===")
-        print(result.stderr)
+    # Run with stdout/stderr streaming (NOT captured) for real-time logs
+    result = subprocess.run(cmd, check=False)
+    
+    print(f"\nCompleted dbt run at {datetime.now().isoformat()}")
+    print(f"Return code: {result.returncode}")
     
     if result.returncode != 0:
         print("=== DBT RUN FAILED ===")
         raise subprocess.CalledProcessError(
             result.returncode,
             result.args,
-            result.stdout,
-            result.stderr
+            None,
+            None
         )
     
-    # Parse model count from output
-    models_built = 0
-    if "models built" in result.stdout.lower() or "completed successfully" in result.stdout.lower():
-        # If specific select, count is 1 or fewer usually
-        models_built = len(SILVER_TABLES) if not dbt_select else 1
+    # Assume success if returncode is 0
+    models_built = len(SILVER_TABLES) if not dbt_select else 1
     
     return {
         'success': True,
         'models_built': models_built,
-        'output': result.stdout
+        'output': 'Completed (streamed logs above)'
     }
 
 
@@ -460,21 +463,32 @@ def main():
     
     try:
         print("="*60)
-        print("SILVER TRANSFORMER JOB STARTED")
+        print(f"SILVER TRANSFORMER JOB STARTED: {start_time.isoformat()}")
         print(f"Environment: {args['ENVIRONMENT']}")
         if 'DBT_SELECT' in args:
             print(f"DBT Select: {args['DBT_SELECT']}")
         print("="*60)
+        sys.stdout.flush()
         
         # Step 1: Download dbt project from S3
+        step_start = datetime.now()
+        print(f"\n[STEP 1 - {step_start.isoformat()}] Downloading dbt project from S3...")
+        sys.stdout.flush()
+        
         dbt_local_path = "/tmp/dbt-project"
         download_dbt_project(
             args['S3_SOURCE_BUCKET'],
             args['DBT_PROJECT_PATH'].replace(f"s3://{args['S3_SOURCE_BUCKET']}/", ""),
             dbt_local_path
         )
+        print(f"[STEP 1 COMPLETE - Duration: {(datetime.now() - step_start).total_seconds():.1f}s]")
+        sys.stdout.flush()
         
         # Step 2: Get database credentials
+        step_start = datetime.now()
+        print(f"\n[STEP 2 - {step_start.isoformat()}] Getting database credentials...")
+        sys.stdout.flush()
+        
         username, password = get_aurora_credentials(secretsmanager, args['AURORA_SECRET_ARN'])
         
         # Set environment variables for dbt
@@ -484,7 +498,14 @@ def main():
         os.environ['AURORA_PASSWORD'] = password
         os.environ['DBT_TARGET'] = args['ENVIRONMENT']
         
+        print(f"[STEP 2 COMPLETE - Duration: {(datetime.now() - step_start).total_seconds():.1f}s]")
+        sys.stdout.flush()
+        
         # Step 3: Create backups of existing silver tables
+        step_start = datetime.now()
+        print(f"\n[STEP 3 - {step_start.isoformat()}] Database cleanup and backups...")
+        sys.stdout.flush()
+        
         connection = pymysql.connect(
             host=args['AURORA_ENDPOINT'],
             user=username,
@@ -507,13 +528,34 @@ def main():
         finally:
             connection.close()
         
+        print(f"[STEP 3 COMPLETE - Duration: {(datetime.now() - step_start).total_seconds():.1f}s]")
+        sys.stdout.flush()
+        
         # Step 4: Install dbt dependencies
+        step_start = datetime.now()
+        print(f"\n[STEP 4 - {step_start.isoformat()}] Installing dbt dependencies...")
+        sys.stdout.flush()
+        
         install_dbt_dependencies(dbt_local_path)
         
+        print(f"[STEP 4 COMPLETE - Duration: {(datetime.now() - step_start).total_seconds():.1f}s]")
+        sys.stdout.flush()
+        
         # Step 5: Load seed files
+        step_start = datetime.now()
+        print(f"\n[STEP 5 - {step_start.isoformat()}] Loading seed files...")
+        sys.stdout.flush()
+        
         seed_result = run_dbt_seed(dbt_local_path, args['ENVIRONMENT'])
         
+        print(f"[STEP 5 COMPLETE - Duration: {(datetime.now() - step_start).total_seconds():.1f}s]")
+        sys.stdout.flush()
+        
         # Step 6: Run silver models
+        step_start = datetime.now()
+        print(f"\n[STEP 6 - {step_start.isoformat()}] Running silver models (THIS MAY TAKE SEVERAL MINUTES)...")
+        sys.stdout.flush()
+        
         silver_result = run_dbt_silver_models(
             dbt_local_path,
             args['ENVIRONMENT'],
@@ -522,6 +564,9 @@ def main():
             aurora_username=username,
             aurora_password=password
         )
+        
+        print(f"[STEP 6 COMPLETE - Duration: {(datetime.now() - step_start).total_seconds():.1f}s]")
+        sys.stdout.flush()
         
         # Step 7: Run silver tests (optional - can be skipped for performance)
         skip_tests = args.get('SKIP_TESTS', 'false').lower() == 'true'
