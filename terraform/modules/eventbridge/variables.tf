@@ -18,5 +18,5 @@ variable "glue_job_arn" {
 variable "schedule_expression" {
   description = "Cron expression for daily trigger (JST 7:00 AM = UTC 22:00 previous day)"
   type        = string
-  default     = "cron(0 22 * * ? *)"  # 7:00 AM JST = 10:00 PM UTC (UTC+9)
+  default     = "cron(0 22 * * ? *)" # 7:00 AM JST = 10:00 PM UTC (UTC+9)
 }

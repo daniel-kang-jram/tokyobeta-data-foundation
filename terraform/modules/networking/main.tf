@@ -128,11 +128,11 @@ resource "aws_security_group" "aurora" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    from_port   = 3306
-    to_port     = 3306
-    protocol    = "tcp"
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
     security_groups = [aws_security_group.lambda.id]
-    description = "MySQL from Lambda"
+    description     = "MySQL from Lambda"
   }
 
   # Allow external access from specific IPs (optional)

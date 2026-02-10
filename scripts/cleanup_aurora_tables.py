@@ -6,7 +6,8 @@ Removes unused tables and excessive backups from Aurora MySQL.
 Actions:
 1. Drop silver.tenant_status_history (not used, slow to build)
 2. Drop gold.tenant_status_transitions (depends on history table)
-3. Clean up old backup tables (keep only last 3 per table)
+3. Delete all old _backup_ naming tables
+4. Clean up _bak_ tables (keep only last 3 per table)
 """
 
 import pymysql
@@ -63,9 +64,42 @@ def drop_unused_tables(connection):
     return dropped
 
 
+def drop_old_backup_naming(connection):
+    """
+    Drop all tables with old _backup_YYYYMMDD_HHMMSS naming convention.
+    New convention is _bak_YYYYMMDD_HHMMSS.
+    """
+    cursor = connection.cursor()
+    
+    print("\n=== Deleting Old _backup_ Naming Tables ===")
+    
+    removed = 0
+    for schema in ['silver', 'gold']:
+        cursor.execute(f"""
+            SELECT TABLE_NAME 
+            FROM information_schema.TABLES 
+            WHERE TABLE_SCHEMA = '{schema}' 
+            AND TABLE_NAME LIKE '%_backup_%'
+            ORDER BY TABLE_NAME
+        """)
+        old_backups = [row[0] for row in cursor.fetchall()]
+        
+        for table_name in old_backups:
+            try:
+                cursor.execute(f"DROP TABLE IF EXISTS {schema}.{table_name}")
+                print(f"  ✓ Dropped {schema}.{table_name}")
+                removed += 1
+            except Exception as e:
+                print(f"  ✗ Failed to drop {table_name}: {str(e)}")
+    
+    connection.commit()
+    cursor.close()
+    return removed
+
+
 def cleanup_backup_tables(connection, keep_count=3):
     """
-    Clean up backup tables, keeping only the last N backups per table.
+    Clean up _bak_ backup tables, keeping only the last N per table.
     
     Args:
         connection: pymysql connection
@@ -73,17 +107,17 @@ def cleanup_backup_tables(connection, keep_count=3):
     """
     cursor = connection.cursor()
     
-    print(f"\n=== Cleaning Up Backup Tables (keeping last {keep_count}) ===")
+    print(f"\n=== Cleaning Up _bak_ Backup Tables (keeping last {keep_count}) ===")
     
     removed_count = 0
     
     for schema in ['silver', 'gold']:
-        # Get all backup tables
+        # Get only _bak_ tables (new naming)
         cursor.execute(f"""
             SELECT TABLE_NAME 
             FROM information_schema.TABLES 
             WHERE TABLE_SCHEMA = '{schema}' 
-            AND (TABLE_NAME LIKE '%_backup_%' OR TABLE_NAME LIKE '%_bak_%')
+            AND TABLE_NAME LIKE '%_bak_%'
             ORDER BY TABLE_NAME
         """)
         
@@ -92,14 +126,7 @@ def cleanup_backup_tables(connection, keep_count=3):
         # Group by base table name
         backup_groups = {}
         for backup_name in all_backups:
-            # Extract base name (before _backup_ or _bak_)
-            if '_backup_' in backup_name:
-                base_name = backup_name.split('_backup_')[0]
-            elif '_bak_' in backup_name:
-                base_name = backup_name.split('_bak_')[0]
-            else:
-                continue
-            
+            base_name = backup_name.split('_bak_')[0]
             if base_name not in backup_groups:
                 backup_groups[base_name] = []
             backup_groups[base_name].append(backup_name)
@@ -169,8 +196,19 @@ def main():
                 if cursor.fetchone():
                     print(f"  - {schema}.{table_name}")
             
+            # Show old naming deletion
+            print("\n=== Would Delete Old _backup_ Tables ===")
+            for schema in ['silver', 'gold']:
+                cursor.execute(f"""
+                    SELECT TABLE_NAME FROM information_schema.TABLES 
+                    WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME LIKE '%_backup_%'
+                """)
+                old = [row[0] for row in cursor.fetchall()]
+                for t in old:
+                    print(f"  - {schema}.{t}")
+            
             # Show backup cleanup
-            print(f"\n=== Would Clean Up Backups (keep last {args.keep_backups}) ===")
+            print(f"\n=== Would Clean Up _bak_ Backups (keep last {args.keep_backups}) ===")
             for schema in ['silver', 'gold']:
                 cursor.execute(f"""
                     SELECT TABLE_NAME 
@@ -187,12 +225,15 @@ def main():
         else:
             # Perform actual cleanup
             dropped = drop_unused_tables(connection)
-            removed = cleanup_backup_tables(connection, keep_count=args.keep_backups)
+            old_naming_removed = drop_old_backup_naming(connection)
+            bak_removed = cleanup_backup_tables(connection, keep_count=args.keep_backups)
             
             print("\n" + "="*60)
             print("CLEANUP COMPLETE")
-            print(f"Tables dropped: {len(dropped)}")
-            print(f"Old backups removed: {removed}")
+            print(f"Unused tables dropped: {len(dropped)}")
+            print(f"Old _backup_ tables removed: {old_naming_removed}")
+            print(f"_bak_ excess removed: {bak_removed}")
+            print(f"Total backups removed: {old_naming_removed + bak_removed}")
             print("="*60)
     
     finally:

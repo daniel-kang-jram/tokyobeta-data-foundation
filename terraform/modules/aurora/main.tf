@@ -73,16 +73,16 @@ resource "aws_rds_cluster" "aurora" {
   db_subnet_group_name            = aws_db_subnet_group.aurora.name
   vpc_security_group_ids          = [var.security_group_id]
   db_cluster_parameter_group_name = aws_rds_cluster_parameter_group.aurora.name
-  
+
   backup_retention_period      = 7
   preferred_backup_window      = "03:00-04:00"
   preferred_maintenance_window = "mon:04:00-mon:05:00"
-  
+
   enabled_cloudwatch_logs_exports = ["error", "general", "slowquery"]
-  
+
   skip_final_snapshot       = var.environment == "dev" ? true : false
   final_snapshot_identifier = var.environment == "dev" ? null : "tokyobeta-${var.environment}-final-snapshot-${formatdate("YYYY-MM-DD-hhmm", timestamp())}"
-  
+
   deletion_protection = var.environment == "prod" ? true : false
 
   tags = {
@@ -100,12 +100,12 @@ resource "aws_rds_cluster_instance" "aurora" {
   instance_class     = var.instance_class
   engine             = aws_rds_cluster.aurora.engine
   engine_version     = aws_rds_cluster.aurora.engine_version
-  
+
   db_parameter_group_name = aws_db_parameter_group.aurora.name
-  
+
   publicly_accessible = var.publicly_accessible
-  
-  performance_insights_enabled    = true
+
+  performance_insights_enabled          = true
   performance_insights_retention_period = 7
 
   tags = {

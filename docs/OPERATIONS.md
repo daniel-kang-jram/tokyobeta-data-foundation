@@ -1,6 +1,6 @@
 # Operations & Runbooks
 
-**Last Updated:** February 10, 2026
+**Last Updated:** February 11, 2026
 
 This document consolidates all operational procedures, setup guides, and troubleshooting runbooks for the TokyoBeta Data Consolidation project.
 
@@ -10,9 +10,10 @@ This document consolidates all operational procedures, setup guides, and trouble
 1. [Setup Guide](#setup-guide)
 2. [AWS Profile Management](#aws-profile-management)
 3. [Daily Operations](#daily-operations)
-4. [Backup & Recovery](#backup--recovery)
-5. [Dump Generation](#dump-generation)
-6. [Troubleshooting](#troubleshooting)
+4. [Evidence Gold Reporting POC](#evidence-gold-reporting-poc)
+5. [Backup & Recovery](#backup--recovery)
+6. [Dump Generation](#dump-generation)
+7. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -137,6 +138,54 @@ aws glue start-job-run --job-name tokyobeta-prod-silver-transformer
 # Gold transformer
 aws glue start-job-run --job-name tokyobeta-prod-gold-transformer
 ```
+
+---
+
+## Evidence Gold Reporting POC
+
+### Scope
+The Evidence proof-of-concept starts with:
+- `gold.occupancy_daily_metrics` for occupancy trend and net movement drivers
+- `gold.new_contracts` for move-in profiling
+- `gold.moveouts` for move-out profiling
+
+Dimensions covered in the POC:
+- tenant type (`tenant_type`: corporate/individual)
+- nationality
+- property (`apartment_name`)
+- municipality
+
+### Runbook (Local)
+```bash
+cd /Users/danielkang/tokyobeta-data-consolidation/evidence
+npm install
+cp .env.example .env
+# Fill EVIDENCE_SOURCE__aurora_gold__* values with read-only Aurora credentials
+npm run dev
+npm run sources
+```
+
+### Security & Access
+- Use a dedicated read-only DB user limited to `gold.*`.
+- Keep Aurora credentials in `.env` (not committed).
+- Use SSL setting `Amazon RDS` in the source connection.
+
+### Success Criteria (Hobby Feasibility)
+1. **Connectivity:** Aurora connection is stable over repeated source runs.
+2. **Performance:** `npm run sources` completes within agreed window.
+3. **Usability:** key pages load fast enough for analyst workflow.
+4. **Analytical fit:** required breakdowns are accurate and actionable.
+
+### Decision Gate: Move to Self-Hosted Evidence on AWS When
+- Cloud-hosted access cannot reach private Aurora network.
+- Source extraction or page interactivity does not meet team SLA.
+- You need tighter security controls (private VPC-only traffic, AWS-native secrets).
+
+### Self-Hosted Target Pattern
+- Deploy Evidence app on AWS (same VPC or peered VPC with Aurora).
+- Keep Aurora private; allow security-group to security-group access only.
+- Store source credentials in Secrets Manager and inject as env vars.
+- Reuse the same `evidence/` project and source SQL files.
 
 ---
 

@@ -5,25 +5,25 @@
 resource "aws_lambda_function" "check_table_freshness" {
   filename         = data.archive_file.freshness_checker_zip.output_path
   function_name    = "${var.project_name}-${var.environment}-table-freshness-checker"
-  role            = aws_iam_role.freshness_checker_role.arn
-  handler         = "freshness_checker.lambda_handler"
+  role             = aws_iam_role.freshness_checker_role.arn
+  handler          = "freshness_checker.lambda_handler"
   source_code_hash = data.archive_file.freshness_checker_zip.output_base64sha256
-  runtime         = "python3.11"
-  timeout         = 60
-  
+  runtime          = "python3.11"
+  timeout          = 60
+
   environment {
     variables = {
-      AURORA_ENDPOINT  = var.aurora_endpoint
+      AURORA_ENDPOINT   = var.aurora_endpoint
       AURORA_SECRET_ARN = var.aurora_secret_arn
-      SNS_TOPIC_ARN    = aws_sns_topic.etl_alerts.arn
+      SNS_TOPIC_ARN     = aws_sns_topic.etl_alerts.arn
     }
   }
-  
+
   vpc_config {
     subnet_ids         = var.private_subnet_ids
     security_group_ids = [var.security_group_id]
   }
-  
+
   tags = {
     Name        = "${var.project_name}-${var.environment}-freshness-checker"
     Environment = var.environment
@@ -34,7 +34,7 @@ resource "aws_lambda_function" "check_table_freshness" {
 data "archive_file" "freshness_checker_zip" {
   type        = "zip"
   output_path = "${path.module}/freshness_checker.zip"
-  
+
   source {
     content = templatefile("${path.module}/lambda/freshness_checker.py", {
       tables = ["movings", "tenants", "rooms", "inquiries", "apartments"]
@@ -109,8 +109,8 @@ resource "aws_iam_role_policy" "freshness_checker_policy" {
 resource "aws_cloudwatch_event_rule" "check_freshness_daily" {
   name                = "${var.project_name}-${var.environment}-check-freshness-daily"
   description         = "Check staging table freshness daily"
-  schedule_expression = "cron(0 0 * * ? *)"  # 9 AM JST
-  
+  schedule_expression = "cron(0 0 * * ? *)" # 9 AM JST
+
   tags = {
     Name        = "${var.project_name}-${var.environment}-freshness-checker"
     Environment = var.environment
@@ -140,13 +140,13 @@ resource "aws_cloudwatch_metric_alarm" "staging_movings_stale" {
   evaluation_periods  = 1
   metric_name         = "StagingMovingsDaysOld"
   namespace           = "TokyoBeta/DataQuality"
-  period              = 3600  # Check every hour
+  period              = 3600 # Check every hour
   statistic           = "Maximum"
-  threshold           = 2  # Alert if > 2 days old
+  threshold           = 2 # Alert if > 2 days old
   alarm_description   = "Staging movings table is more than 2 days old"
   alarm_actions       = [aws_sns_topic.etl_alerts.arn]
-  treat_missing_data  = "breaching"  # Treat missing data as stale
-  
+  treat_missing_data  = "breaching" # Treat missing data as stale
+
   tags = {
     Name        = "${var.project_name}-${var.environment}-staging-freshness"
     Environment = var.environment
@@ -166,7 +166,7 @@ resource "aws_cloudwatch_metric_alarm" "staging_tenants_stale" {
   alarm_description   = "Staging tenants table is more than 2 days old"
   alarm_actions       = [aws_sns_topic.etl_alerts.arn]
   treat_missing_data  = "breaching"
-  
+
   tags = {
     Name        = "${var.project_name}-${var.environment}-staging-freshness"
     Environment = var.environment

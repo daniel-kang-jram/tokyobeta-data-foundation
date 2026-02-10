@@ -21,7 +21,7 @@ variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to access Aurora (external access)"
   type        = list(string)
   default     = []
-  
+
   validation {
     condition     = alltrue([for cidr in var.allowed_cidr_blocks : can(cidrhost(cidr, 0))])
     error_message = "All entries must be valid CIDR blocks (e.g., 192.168.1.1/32)"

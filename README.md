@@ -86,6 +86,17 @@ aws glue start-job-run --job-name tokyobeta-prod-gold-transformer --profile ggho
 python3 scripts/validate_full_system.py
 ```
 
+### Evidence Reporting POC (Optional)
+```bash
+cd evidence
+npm install
+cp .env.example .env  # fill Aurora read-only credentials
+npm run dev
+npm run sources
+```
+
+POC pages are under `evidence/pages/` and source SQL is under `evidence/sources/aurora_gold/`.
+
 ## Project Structure
 
 ```

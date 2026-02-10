@@ -3,8 +3,8 @@
 
 # Generate random password for Aurora
 resource "random_password" "aurora_password" {
-  length  = 32
-  special = true
+  length           = 32
+  special          = true
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
@@ -34,9 +34,9 @@ resource "aws_secretsmanager_secret_version" "aurora_credentials" {
 
 # Generate random password for RDS cron access (if creating new credentials)
 resource "random_password" "rds_cron_password" {
-  count   = var.create_rds_cron_secret ? 1 : 0
-  length  = 32
-  special = true
+  count            = var.create_rds_cron_secret ? 1 : 0
+  length           = 32
+  special          = true
   override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 

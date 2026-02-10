@@ -4,14 +4,14 @@
 
 terraform {
   required_version = ">= 1.5.0"
-  
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
   }
-  
+
   # Local backend for testing (not production)
   backend "local" {
     path = "terraform.tfstate"
@@ -21,7 +21,7 @@ terraform {
 provider "aws" {
   region  = "ap-northeast-1"
   profile = "gghouse"
-  
+
   default_tags {
     tags = {
       Project     = "TokyoBeta-DataConsolidation"
@@ -42,7 +42,7 @@ locals {
 resource "aws_secretsmanager_secret" "test_rds_cron" {
   name        = "tokyobeta/test/rds/cron-credentials"
   description = "TEST ONLY - RDS credentials for EC2 cron jobs"
-  
+
   tags = {
     Name        = "tokyobeta-test-rds-cron-creds"
     Environment = "test"
@@ -64,7 +64,7 @@ resource "aws_secretsmanager_secret_version" "test_rds_cron" {
 # Module: EC2 IAM Role
 module "ec2_iam_role" {
   source = "../../modules/ec2_iam_role"
-  
+
   environment     = local.environment
   s3_dumps_bucket = local.s3_dumps_bucket
   rds_secret_arn  = aws_secretsmanager_secret.test_rds_cron.arn
