@@ -64,7 +64,7 @@ resource "aws_db_parameter_group" "aurora" {
 
 # Aurora Cluster (Public endpoint for Glue access)
 resource "aws_rds_cluster" "aurora" {
-  cluster_identifier              = "tokyobeta-${var.environment}-aurora-cluster-public"
+  cluster_identifier              = "tokyobeta-${var.environment}-aurora-cluster"
   engine                          = "aurora-mysql"
   engine_version                  = "8.0.mysql_aurora.3.11.1"
   database_name                   = "tokyobeta"
@@ -95,7 +95,7 @@ resource "aws_rds_cluster" "aurora" {
 # Aurora Cluster Instances (Public for Glue connectivity)
 resource "aws_rds_cluster_instance" "aurora" {
   count              = var.instance_count
-  identifier         = "tokyobeta-${var.environment}-aurora-public-instance-${count.index + 1}"
+  identifier         = "tokyobeta-${var.environment}-aurora-instance-${count.index + 1}"
   cluster_identifier = aws_rds_cluster.aurora.id
   instance_class     = var.instance_class
   engine             = aws_rds_cluster.aurora.engine
