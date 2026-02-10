@@ -154,6 +154,36 @@ Respond with ONLY the nationality, nothing else."""
         finally:
             cursor.close()
             conn.close()
+
+    def ensure_cache_table_exists(self):
+        """Ensure staging.llm_enrichment_cache table exists."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            logger.info("Ensuring staging.llm_enrichment_cache table exists...")
+            
+            create_sql = """
+                CREATE TABLE IF NOT EXISTS staging.llm_enrichment_cache (
+                    tenant_id INT NOT NULL,
+                    full_name VARCHAR(191),
+                    full_name_hash CHAR(64),
+                    llm_nationality VARCHAR(128),
+                    llm_confidence FLOAT,
+                    enriched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    model_version VARCHAR(64),
+                    PRIMARY KEY (tenant_id),
+                    INDEX idx_enriched_at (enriched_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                COMMENT='Persistent cache for LLM-predicted tenant attributes'
+            """
+            cursor.execute(create_sql)
+            conn.commit()
+            logger.info("✓ staging.llm_enrichment_cache table verified/created")
+            
+        finally:
+            cursor.close()
+            conn.close()
     
     def identify_tenants_needing_enrichment(self) -> List[Dict]:
         """
@@ -416,6 +446,7 @@ Respond with ONLY the nationality, nothing else."""
         try:
             # Step 1: Ensure schema exists
             self.ensure_llm_nationality_column_exists()
+            self.ensure_cache_table_exists()
             
             # Step 2: Identify tenants needing enrichment
             tenants = self.identify_tenants_needing_enrichment()

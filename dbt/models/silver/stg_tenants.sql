@@ -107,5 +107,4 @@ LEFT JOIN {{ source('staging', 'm_nationalities') }} n
 -- Join with LLM enrichment cache (persistent across staging reloads)
 LEFT JOIN {{ source('staging', 'llm_enrichment_cache') }} llm_cache
     ON t.id = llm_cache.tenant_id
-    ON t.m_nationality_id = n.id
 WHERE t.id IS NOT NULL

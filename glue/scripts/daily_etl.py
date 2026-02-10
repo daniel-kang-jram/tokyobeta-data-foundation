@@ -362,17 +362,23 @@ def cleanup_old_backups(days_to_keep=3):
         cursor.close()
         connection.close()
 
-def cleanup_dbt_tmp_tables(connection):
+def cleanup_dbt_tmp_tables():
     """
     Clean up leftover dbt temporary tables (*__dbt_tmp) in silver/gold schemas.
     
-    Args:
-        connection: pymysql connection
-        
     Returns:
         Number of tables dropped
     """
     print(f"\n=== Cleaning up dbt temp tables ===")
+    
+    username, password = get_aurora_credentials()
+    connection = pymysql.connect(
+        host=args['AURORA_ENDPOINT'],
+        user=username,
+        password=password,
+        database=args['AURORA_DATABASE'],
+        charset='utf8mb4'
+    )
     
     cursor = connection.cursor()
     dropped_count = 0
@@ -419,6 +425,7 @@ def cleanup_dbt_tmp_tables(connection):
         return 0
     finally:
         cursor.close()
+        connection.close()
 
 def run_dbt_transformations():
     """Execute dbt models to transform staging → analytics."""
@@ -1020,7 +1027,7 @@ def main():
         removed_backups = cleanup_old_backups(days_to_keep=3)
         
         # Step 8.5: Clean up dbt temp tables (prevent failures)
-        cleanup_dbt_tmp_tables(connection)
+        cleanup_dbt_tmp_tables()
         
         # Step 9: Run dbt transformations
         dbt_success = run_dbt_transformations()
