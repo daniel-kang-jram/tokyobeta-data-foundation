@@ -1,0 +1,100 @@
+version: 2
+
+models:
+  - name: tenant_room_snapshot_daily
+    description: |
+      Daily incremental snapshot of active tenant-room pairs for occupancy tracking.
+      
+      Grain: One row per (snapshot_date, tenant_id, apartment_id, room_id).
+      Materialization: Incremental (append-only by snapshot_date).
+      Retention: 12 months in Aurora, older archived to S3.
+      
+      Volume: ~12,000 rows/day (~4.4M rows/year).
+      
+      Used by:
+      - gold.occupancy_daily_metrics (KPI computation)
+      - Analysis queries requiring tenant-level daily history
+    
+    config:
+      materialized: incremental
+      unique_key: ['snapshot_date', 'tenant_id', 'apartment_id', 'room_id']
+    
+    columns:
+      - name: snapshot_date
+        description: Date of snapshot
+        tests:
+          - not_null
+          - relationships:
+              to: source('staging', 'tenant_daily_snapshots')
+              field: snapshot_date
+              severity: warn
+      
+      - name: tenant_id
+        description: Tenant ID
+        tests:
+          - not_null
+      
+      - name: apartment_id
+        description: Apartment/property ID
+        tests:
+          - not_null
+      
+      - name: room_id
+        description: Room ID
+        tests:
+          - not_null
+      
+      - name: management_status_code
+        description: Tenant status code (numeric)
+        tests:
+          - not_null
+          - accepted_values:
+              values: [4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]
+      
+      - name: management_status
+        description: Tenant status (Japanese label)
+        tests:
+          - not_null
+      
+      - name: tenant_name
+        description: Tenant full name
+      
+      - name: property
+        description: Apartment/building name
+      
+      - name: room_number
+        description: Room number
+      
+      - name: contract_category
+        description: Contract type category
+        tests:
+          - accepted_values:
+              values: ['一般', '法人契約', '法人契約（個人）', '一般（保証会社）', '一般2']
+      
+      - name: move_in_date
+        description: Move-in date
+      
+      - name: moveout_date
+        description: Planned/scheduled moveout date (forecast)
+      
+      - name: moveout_plans_date
+        description: Actual moveout date (past only)
+      
+      - name: moving_id
+        description: Moving record ID
+        tests:
+          - not_null
+      
+      - name: dbt_updated_at
+        description: Timestamp when dbt last updated this row
+        tests:
+          - not_null
+    
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - snapshot_date
+            - tenant_id
+            - apartment_id
+            - room_id
+          severity: error
