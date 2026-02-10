@@ -374,6 +374,10 @@ resource "aws_glue_job" "gold_transformer" {
     "--AURORA_DATABASE"   = var.aurora_database
     "--AURORA_SECRET_ARN" = var.aurora_secret_arn
     "--ENVIRONMENT"       = var.environment
+    
+    # Occupancy KPI parameters (integrated into gold job)
+    "--LOOKBACK_DAYS"     = "3"
+    "--FORWARD_DAYS"      = "90"
   }
 
   glue_version      = "4.0"

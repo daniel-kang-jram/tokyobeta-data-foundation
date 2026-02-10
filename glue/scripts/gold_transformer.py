@@ -32,7 +32,9 @@ args = getResolvedOptions(sys.argv, [
     'AURORA_ENDPOINT',
     'AURORA_DATABASE',
     'AURORA_SECRET_ARN',
-    'ENVIRONMENT'
+    'ENVIRONMENT',
+    'LOOKBACK_DAYS',  # For occupancy KPI incremental update
+    'FORWARD_DAYS'    # For occupancy future projections
 ])
 
 job.init(args['JOB_NAME'], args)
@@ -43,13 +45,17 @@ secretsmanager = boto3.client('secretsmanager')
 
 # Gold tables to backup before transformation
 GOLD_TABLES = [
-    'daily_activity_summary',
     'new_contracts',
     'moveouts',
     'moveout_notices',
     'moveout_analysis',
-    'moveout_summary'
+    'moveout_summary',
+    'occupancy_daily_metrics'  # Replaced daily_activity_summary
 ]
+
+# Constants for occupancy KPI
+TOTAL_PHYSICAL_ROOMS = 16108
+OCCUPIED_STATUS_CODES = [4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15]
 
 
 def get_aurora_credentials(secretsmanager_client, secret_arn):
@@ -404,6 +410,183 @@ def cleanup_old_backups(connection, days_to_keep=3):
         cursor.close()
 
 
+def ensure_occupancy_kpi_table_exists(cursor):
+    """Create gold.occupancy_daily_metrics table if not exists."""
+    print("Ensuring gold.occupancy_daily_metrics table exists...")
+    
+    create_sql = """
+        CREATE TABLE IF NOT EXISTS gold.occupancy_daily_metrics (
+            snapshot_date DATE NOT NULL,
+            applications INT COMMENT '申込: First appearance of pairs in status 4 or 5',
+            new_moveins INT COMMENT '新規入居者: Pairs with move_in_date = snapshot_date',
+            new_moveouts INT COMMENT '新規退去者: Pairs with moveout date = snapshot_date',
+            occupancy_delta INT COMMENT '稼働室数増減: new_moveins - new_moveouts',
+            period_start_rooms INT COMMENT '期首稼働室数: Occupied count on previous day',
+            period_end_rooms INT COMMENT '期末稼働室数: period_start + delta',
+            occupancy_rate DECIMAL(5,4) COMMENT '稼働率: period_end / 16108',
+            
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            
+            PRIMARY KEY (snapshot_date),
+            INDEX idx_snapshot_date (snapshot_date),
+            INDEX idx_occupancy_rate (occupancy_rate)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        COMMENT='Daily occupancy KPI metrics (incremental upsert)'
+    """
+    
+    cursor.execute(create_sql)
+    print("✓ gold.occupancy_daily_metrics table verified/created")
+
+
+def compute_occupancy_kpis(connection, lookback_days=3, forward_days=90):
+    """
+    Compute occupancy KPIs for today + lookback/forward window.
+    
+    Args:
+        connection: pymysql connection
+        lookback_days: Days to look back (default: 3)
+        forward_days: Days to project forward (default: 90)
+        
+    Returns:
+        Number of dates processed
+    """
+    from datetime import date, timedelta
+    
+    cursor = connection.cursor(pymysql.cursors.DictCursor)
+    
+    try:
+        print("\n" + "="*60)
+        print("COMPUTING OCCUPANCY KPIs")
+        print("="*60)
+        
+        today = date.today()
+        
+        # Build date range: (today - lookback) to (today + forward)
+        dates_to_process = [
+            today + timedelta(days=i)
+            for i in range(-lookback_days, forward_days + 1)
+        ]
+        
+        print(f"Date range: {min(dates_to_process)} to {max(dates_to_process)} ({len(dates_to_process)} dates)")
+        print(f"  Past/today: {lookback_days + 1} dates")
+        print(f"  Future: {forward_days} dates")
+        
+        # Ensure table exists
+        ensure_occupancy_kpi_table_exists(cursor)
+        connection.commit()
+        
+        # Process each date
+        for target_date in dates_to_process:
+            is_future = target_date > today
+            snapshot_date_filter = today if is_future else target_date
+            
+            # Metric 1: 申込 (Applications) - only for past dates
+            if is_future:
+                applications = 0
+            else:
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                    FROM (
+                        SELECT 
+                            tenant_id, apartment_id, room_id,
+                            MIN(snapshot_date) as first_appearance
+                        FROM silver.tenant_room_snapshot_daily
+                        WHERE management_status_code IN (4, 5)
+                        GROUP BY tenant_id, apartment_id, room_id
+                    ) first_apps
+                    WHERE first_appearance = %s
+                """, (target_date,))
+                applications = cursor.fetchone()['count']
+            
+            # Metric 2: 新規入居者 (New Move-ins)
+            if is_future:
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                    FROM silver.tenant_room_snapshot_daily
+                    WHERE snapshot_date = %s
+                    AND move_in_date = %s
+                    AND management_status_code IN (4, 5)
+                """, (snapshot_date_filter, target_date))
+            else:
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                    FROM silver.tenant_room_snapshot_daily
+                    WHERE snapshot_date = %s
+                    AND move_in_date = %s
+                    AND management_status_code IN (4, 5, 6, 7, 9)
+                """, (snapshot_date_filter, target_date))
+            
+            new_moveins = cursor.fetchone()['count']
+            
+            # Metric 3: 新規退去者 (New Move-outs)
+            if is_future:
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                    FROM silver.tenant_room_snapshot_daily
+                    WHERE snapshot_date = %s
+                    AND moveout_date = %s
+                """, (snapshot_date_filter, target_date))
+            else:
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                    FROM silver.tenant_room_snapshot_daily
+                    WHERE snapshot_date = %s
+                    AND moveout_plans_date = %s
+                """, (snapshot_date_filter, target_date))
+            
+            new_moveouts = cursor.fetchone()['count']
+            
+            # Metric 4: 稼働室数増減 (Occupancy Delta)
+            occupancy_delta = new_moveins - new_moveouts
+            
+            # Metric 5: 期首稼働室数 (Period Start Rooms)
+            previous_date = target_date - timedelta(days=1)
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
+            """, (previous_date,))
+            result = cursor.fetchone()
+            period_start_rooms = result['count'] if result else 0
+            
+            # Metric 6: 期末稼働室数 (Period End Rooms)
+            period_end_rooms = period_start_rooms + occupancy_delta
+            
+            # Metric 7: 稼働率 (Occupancy Rate)
+            occupancy_rate = period_end_rooms / TOTAL_PHYSICAL_ROOMS
+            
+            # Upsert
+            cursor.execute("""
+                INSERT INTO gold.occupancy_daily_metrics
+                (snapshot_date, applications, new_moveins, new_moveouts, 
+                 occupancy_delta, period_start_rooms, period_end_rooms, occupancy_rate)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    applications = VALUES(applications),
+                    new_moveins = VALUES(new_moveins),
+                    new_moveouts = VALUES(new_moveouts),
+                    occupancy_delta = VALUES(occupancy_delta),
+                    period_start_rooms = VALUES(period_start_rooms),
+                    period_end_rooms = VALUES(period_end_rooms),
+                    occupancy_rate = VALUES(occupancy_rate),
+                    updated_at = CURRENT_TIMESTAMP
+            """, (target_date, applications, new_moveins, new_moveouts, 
+                  occupancy_delta, period_start_rooms, period_end_rooms, occupancy_rate))
+            
+            if (dates_to_process.index(target_date) + 1) % 10 == 0:
+                print(f"  Progress: {dates_to_process.index(target_date) + 1}/{len(dates_to_process)} dates")
+        
+        connection.commit()
+        
+        print(f"✓ Computed KPIs for {len(dates_to_process)} dates")
+        return len(dates_to_process)
+        
+    finally:
+        cursor.close()
+
+
 def main():
     """Main gold transformer workflow."""
     start_time = datetime.now()
@@ -459,6 +642,15 @@ def main():
                 aurora_password=password
             )
             
+            # Step 5b: Compute occupancy KPIs (incremental + forward projections)
+            lookback_days = int(args.get('LOOKBACK_DAYS', 3))
+            forward_days = int(args.get('FORWARD_DAYS', 90))
+            kpi_dates_processed = compute_occupancy_kpis(
+                connection,
+                lookback_days=lookback_days,
+                forward_days=forward_days
+            )
+            
             # Step 6: Run gold tests
             test_result = run_dbt_gold_tests(dbt_local_path, args['ENVIRONMENT'])
             
@@ -476,6 +668,7 @@ def main():
             'status': 'SUCCESS',
             'models_built': gold_result['models_built'],
             'backup_count': backup_count,
+            'kpi_dates_processed': kpi_dates_processed,
             'tests_passed': test_result['tests_passed'],
             'tests_failed': test_result['tests_failed'],
             'old_backups_removed': removed_backups,
@@ -487,6 +680,7 @@ def main():
         print(f"Duration: {duration:.2f} seconds")
         print(f"Models built: {gold_result['models_built']}")
         print(f"Backups created: {backup_count}")
+        print(f"Occupancy KPIs: {kpi_dates_processed} dates processed")
         print(f"Tests passed: {test_result['tests_passed']}")
         print(f"Tests failed: {test_result['tests_failed']}")
         print(f"Old backups removed: {removed_backups}")
