@@ -163,7 +163,7 @@ resource "aws_glue_crawler" "s3_dumps" {
     path = "s3://${var.s3_source_bucket}/${var.s3_source_prefix}"
   }
 
-  schedule = "cron(0 6 * * ? *)"  # Run at 6:00 AM JST daily
+  schedule = "cron(0 6 * * ? *)" # Run at 6:00 AM JST daily
 
   schema_change_policy {
     delete_behavior = "LOG"
@@ -209,15 +209,15 @@ resource "aws_glue_job" "daily_etl" {
     "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/"
     "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/"
     "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql,boto3>=1.34.51,botocore>=1.34.51"
-    
+
     # Custom parameters
-    "--S3_SOURCE_BUCKET"     = var.s3_source_bucket
-    "--S3_SOURCE_PREFIX"     = var.s3_source_prefix
-    "--AURORA_ENDPOINT"      = var.aurora_endpoint
-    "--AURORA_DATABASE"      = var.aurora_database
-    "--AURORA_SECRET_ARN"    = var.aurora_secret_arn
-    "--ENVIRONMENT"          = var.environment
-    "--DBT_PROJECT_PATH"     = "s3://${var.s3_source_bucket}/dbt-project/"
+    "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
+    "--S3_SOURCE_PREFIX"  = var.s3_source_prefix
+    "--AURORA_ENDPOINT"   = var.aurora_endpoint
+    "--AURORA_DATABASE"   = var.aurora_database
+    "--AURORA_SECRET_ARN" = var.aurora_secret_arn
+    "--ENVIRONMENT"       = var.environment
+    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
   }
 
   glue_version      = "4.0"
@@ -225,7 +225,7 @@ resource "aws_glue_job" "daily_etl" {
   timeout           = 60
   worker_type       = "G.1X"
   number_of_workers = 2
-  
+
   # VPC connection for Aurora access
   connections = [aws_glue_connection.aurora.name]
 
@@ -266,7 +266,7 @@ resource "aws_glue_job" "staging_loader" {
     "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/staging/"
     "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/staging/"
     "--additional-python-modules"        = "pymysql"
-    
+
     # Custom parameters
     "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
     "--S3_SOURCE_PREFIX"  = var.s3_source_prefix
@@ -281,7 +281,7 @@ resource "aws_glue_job" "staging_loader" {
   timeout           = 30 # 30 minutes max
   worker_type       = "G.1X"
   number_of_workers = 2
-  
+
   connections = [aws_glue_connection.aurora.name]
 
   execution_property {
@@ -316,7 +316,7 @@ resource "aws_glue_job" "silver_transformer" {
     "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/silver/"
     "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/silver/"
     "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql"
-    
+
     # Custom parameters
     "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
     "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
@@ -324,7 +324,8 @@ resource "aws_glue_job" "silver_transformer" {
     "--AURORA_DATABASE"   = var.aurora_database
     "--AURORA_SECRET_ARN" = var.aurora_secret_arn
     "--ENVIRONMENT"       = var.environment
-    "--SKIP_TESTS"        = "true"  # Tests run in separate silver_test job for performance
+    "--SKIP_TESTS"        = "true"                                            # Tests run in separate silver_test job for performance
+    "--DBT_SELECT"        = "silver.* --exclude silver.tenant_status_history" # Exclude slow history model (15+ min)
   }
 
   glue_version      = "4.0"
@@ -332,7 +333,7 @@ resource "aws_glue_job" "silver_transformer" {
   timeout           = 60 # 60 minutes max (reduced to ~3 min with tests skipped)
   worker_type       = "G.1X"
   number_of_workers = 2
-  
+
   connections = [aws_glue_connection.aurora.name]
 
   execution_property {
@@ -367,7 +368,7 @@ resource "aws_glue_job" "gold_transformer" {
     "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/gold/"
     "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/gold/"
     "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql"
-    
+
     # Custom parameters
     "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
     "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
@@ -375,10 +376,10 @@ resource "aws_glue_job" "gold_transformer" {
     "--AURORA_DATABASE"   = var.aurora_database
     "--AURORA_SECRET_ARN" = var.aurora_secret_arn
     "--ENVIRONMENT"       = var.environment
-    
+
     # Occupancy KPI parameters (integrated into gold job)
-    "--LOOKBACK_DAYS"     = "3"
-    "--FORWARD_DAYS"      = "90"
+    "--LOOKBACK_DAYS" = "3"
+    "--FORWARD_DAYS"  = "90"
   }
 
   glue_version      = "4.0"
@@ -386,7 +387,7 @@ resource "aws_glue_job" "gold_transformer" {
   timeout           = 60 # 60 minutes max (dbt deps + seed + models + tests + backups)
   worker_type       = "G.1X"
   number_of_workers = 2
-  
+
   connections = [aws_glue_connection.aurora.name]
 
   execution_property {
@@ -421,7 +422,7 @@ resource "aws_glue_job" "silver_test" {
     "--spark-event-logs-path"            = "s3://${var.s3_source_bucket}/glue-logs/silver-test/"
     "--TempDir"                          = "s3://${var.s3_source_bucket}/glue-temp/silver-test/"
     "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql"
-    
+
     # Custom parameters
     "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
     "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
@@ -436,7 +437,7 @@ resource "aws_glue_job" "silver_test" {
   timeout           = 30 # 30 minutes max (tests only, no transformation)
   worker_type       = "G.1X"
   number_of_workers = 2
-  
+
   connections = [aws_glue_connection.aurora.name]
 
   execution_property {
