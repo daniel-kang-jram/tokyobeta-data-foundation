@@ -53,7 +53,10 @@ temp/
 *.tmp
 *.log
 
+# Data files (exclude from version control)
+*.csv
+*.xlsx
+*.xls
+
 # Scripts output
-scripts/*.csv
-scripts/*.xlsx
 scripts/*.sql
