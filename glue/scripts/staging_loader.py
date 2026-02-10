@@ -439,7 +439,7 @@ def enrich_nationality_data():
             aurora_database=args['AURORA_DATABASE'],
             secret_arn=args['AURORA_SECRET_ARN'],
             bedrock_region='us-east-1',
-            max_batch_size=1000,  # Process up to 1000 per day
+            max_batch_size=2500,  # Process up to 2500 per day (covers all 2,001 target records)
             requests_per_second=5,  # Rate limit for Bedrock API
             dry_run=False
         )

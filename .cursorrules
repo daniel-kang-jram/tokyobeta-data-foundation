@@ -187,6 +187,12 @@ def transform_daily_summary(data):
   }
   ```
 
+### Glue Job Configuration - STRICTLY ENFORCED
+- **ALWAYS** explicitly set `glue_version` to "4.0" (or higher)
+- **ALWAYS** explicitly set `worker_type` (e.g., "G.1X" or "G.2X")
+- **NEVER** leave these undefined, as Terraform defaults to legacy Glue 0.9
+- **NEVER** update job parameters via CLI without updating Terraform (causes "Invalid Input" drift)
+
 ### State Management
 - Never commit `terraform.tfstate` files
 - Always use S3 backend with DynamoDB locking
@@ -297,15 +303,112 @@ Examples:
 
 ## Documentation Standards
 
+### Documentation Philosophy: UPDATE, DON'T CREATE
+
+**CRITICAL RULE:** Always update existing documentation files instead of creating new ones.
+
+**Before creating ANY .md file:**
+1. ✅ Check if similar documentation already exists
+2. ✅ Update the existing file with new information
+3. ✅ Only create new file if topic is completely unrelated
+4. ❌ NEVER create date-stamped files (e.g., `REPORT_20260210.md`)
+5. ❌ NEVER create duplicate/overlapping documentation
+
+### Standard Documentation Files (DO NOT MULTIPLY)
+
+**Root Level (update these, don't create similar):**
+- `README.md` - Project overview, quick start
+- `SETUP.md` - Complete setup instructions
+- `CHANGELOG.md` - Version history and changes
+
+**docs/ Directory:**
+- `docs/ARCHITECTURE.md` - System architecture, decisions
+- `docs/OPERATIONS.md` - Runbooks, troubleshooting, common tasks
+- `docs/INCIDENTS.md` - All incident reports (append new incidents here)
+- `docs/AWS_SETUP.md` - AWS configuration, profiles, authentication
+- `docs/DATA_MODEL.md` - Database schema, table relationships
+- `docs/DEPLOYMENT.md` - Deployment procedures, rollback plans
+
+**Per-Module Documentation:**
+- Each major directory (terraform/, dbt/, glue/) should have ONE `README.md`
+- Update that README.md, don't create supplementary docs
+
+### How to Document Incidents
+
+**WRONG (what I did):** ❌
+```
+docs/GLUE_JOB_STATUS_REPORT_20260210.md
+docs/STAGING_STALENESS_INVESTIGATION.md
+docs/DEPLOYMENT_SUMMARY_20260210.md
+docs/FIX_COMPLETE_SUMMARY.md
+docs/LESSONS_LEARNED_FEB2026.md
+(5 overlapping files for one incident!)
+```
+
+**RIGHT:** ✅
+```
+docs/INCIDENTS.md  (append to this one file)
+
+## Incident: Staging Table Staleness
+**Date:** 2026-02-10
+**Severity:** High
+**Status:** Resolved
+
+### Summary
+[Brief description]
+
+### Timeline
+[Key events]
+
+### Root Cause
+[What went wrong]
+
+### Resolution
+[What fixed it]
+
+### Prevention
+[Changes made to prevent recurrence]
+
+---
+(Next incident appended below)
+```
+
+### Documentation Update Workflow
+
+When documenting work:
+
+1. **Check existing docs first:**
+   ```bash
+   grep -r "relevant keyword" docs/
+   find docs/ -name "*.md" -exec head -5 {} \;
+   ```
+
+2. **Update existing file:**
+   - Add new section at appropriate location
+   - Update table of contents if present
+   - Add "Last updated: DATE" at top
+
+3. **Only create new file if:**
+   - Topic is completely unrelated to existing docs
+   - New major component being added (e.g., new service)
+   - Explicitly requested by user
+
+4. **Never create:**
+   - Date-stamped files (`REPORT_20260210.md`)
+   - Status reports (update `docs/OPERATIONS.md` instead)
+   - Multiple incident files (use `docs/INCIDENTS.md`)
+   - Summary files (update main documentation)
+
 ### Code Documentation
 - README.md in each major directory explaining its purpose
-- Architecture decisions documented in `docs/`
+- Architecture decisions documented in `docs/ARCHITECTURE.md`
 - Inline comments for complex business logic only (code should be self-documenting)
 
 ### Operational Documentation
-- Runbooks for common tasks (manual ETL triggers, troubleshooting)
-- Deployment guides with step-by-step commands
-- User guides for QuickSight dashboard usage
+- Runbooks in `docs/OPERATIONS.md` (one file, multiple sections)
+- Deployment procedures in `docs/DEPLOYMENT.md`
+- Troubleshooting in `docs/OPERATIONS.md` under "Troubleshooting" section
+- User guides for QuickSight in `docs/QUICKSIGHT_USER_GUIDE.md`
 
 ## Project-Specific Business Rules
 
@@ -319,6 +422,85 @@ Examples:
 - Validate all date fields are not NULL before transformations
 - Geocoding: fallback to prefecture centroid if exact address fails
 - Log all data quality issues but don't fail ETL (partial success)
+
+### Critical Data Model Rules (DISCOVERED FEB 2026)
+
+#### 1. Tenant-Moving Relationship
+**The join method depends on the query purpose!**
+
+**A. For CURRENT tenant-room assignments (snapshot queries):**
+```sql
+-- Example: active_tenant_count, current occupancy, tenant_room_info
+FROM staging.tenants t
+INNER JOIN staging.movings m ON t.moving_id = m.id  -- Use tenant.moving_id!
+WHERE t.status IN (target_statuses)
+```
+
+**Why**: 
+- `tenant.moving_id` points to the PRIMARY/CURRENT room assignment
+- One-to-one relationship: 1 tenant → 1 current moving
+- No deduplication needed (tenant.moving_id is already the "latest")
+- **Validation**: Matches Excel export logic (-7.0% deviation, much better than -7.3%)
+
+**B. For ALL movings/contracts (historical event queries):**
+```sql
+-- Example: daily_activity_summary (move-ins/outs by date), int_contracts (all contracts)
+FROM staging.movings m
+INNER JOIN staging.tenants t ON m.tenant_id = t.id  -- Use moving.tenant_id
+WHERE <date_filters>
+```
+
+**Why**:
+- `moving.tenant_id` enables one-to-many: 1 tenant → many movings over time
+- Captures ALL historical room assignments
+- **MUST deduplicate** using ROW_NUMBER() to handle duplicate data entry errors (see below)
+
+**Summary**:
+- **Current snapshot** → Use `tenant.moving_id = moving.id`
+- **Historical events** → Use `moving.tenant_id = tenant.id` + deduplicate
+
+#### 2. Duplicate Moving Records - ALWAYS Deduplicate!
+The `staging.movings` table has ~3,500 duplicate historical records where `is_moveout = 0` but they're old contracts that weren't properly closed.
+
+**MANDATORY deduplication pattern:**
+```sql
+WITH deduplicated_movings AS (
+    SELECT 
+        m.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY m.tenant_id, m.apartment_id, m.room_id 
+            ORDER BY m.movein_date DESC, m.updated_at DESC, m.id DESC
+        ) as rn
+    FROM staging.movings m
+    WHERE <your_filters>
+)
+SELECT * FROM deduplicated_movings WHERE rn = 1
+```
+
+**Why**: 
+- Individual tenants have up to 6 duplicate "active" records for the SAME ROOM
+- Corporate tenants correctly have multiple records for MULTIPLE UNIQUE ROOMS
+- ROW_NUMBER() selects most recent moving per tenant-room combination
+
+#### 3. Contract Type Field - Use moving_agreement_type!
+**NEVER use `tenant.contract_type` for analytics!**
+
+```sql
+-- ❌ WRONG - tenant.contract_type was consolidated (only codes 1,2 remain)
+SELECT contract_type FROM staging.tenants;  
+
+-- ✅ CORRECT - moving_agreement_type preserves original 5-code system
+SELECT moving_agreement_type FROM staging.movings;
+```
+
+**Contract type mapping (moving_agreement_type):**
+- Code 1: 一般 (General)
+- Code 2: 法人契約 (Corporate multi-room)
+- Code 3: 法人契約（個人）(Corporate individual)
+- Code 7: 一般（保証会社）(General with guarantor)
+- Code 9: 一般2 (General 2)
+
+**Why**: Database underwent schema consolidation on Sept 29, 2025 where tenant.contract_type codes 3,7,9 were merged into code 1. Use `moving.moving_agreement_type` to preserve historical accuracy.
 
 ### Timing & Scheduling
 - ETL runs daily at 7:00 AM JST (after dump generation at 5:30 AM)
@@ -369,6 +551,9 @@ Examples:
 ❌ Skipping `terraform plan` review
 ❌ Testing in production first
 ❌ Ignoring linter warnings
+❌ **Creating new .md files instead of updating existing ones**
+❌ **Creating date-stamped documentation files**
+❌ **Creating multiple overlapping documentation files**
 
 ## Questions to Ask Before Making Changes
 
@@ -382,6 +567,141 @@ Examples:
 8. Are all secrets properly managed?
 9. Will this change impact costs or performance?
 10. Have I followed the TDD cycle completely?
+11. **Am I about to create a new .md file? Should I update an existing one instead?**
+12. **Have I checked docs/ for existing documentation on this topic?**
+
+---
+
+## AWS Account & Profile Management
+
+### Mandatory: Always Use `gghouse` Profile
+
+This repository ONLY works with AWS account `343881458651` (gghouse profile).
+
+**Setup (One-time):**
+```bash
+# Install direnv (if not installed)
+brew install direnv  # macOS
+# OR: apt-get install direnv  # Linux
+
+# Enable direnv for your shell
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc  # for zsh
+# OR: echo 'eval "$(direnv hook bash)"' >> ~/.bashrc  # for bash
+
+# Allow direnv for this repo
+cd /path/to/tokyobeta-data-consolidation
+direnv allow
+```
+
+**Verify Correct Profile:**
+```bash
+# Should show Account: 343881458651
+aws sts get-caller-identity
+
+# If wrong account, run:
+aws sso login --profile gghouse
+```
+
+**Why This Matters:**
+- Using wrong AWS account (018014110453) causes AccessDenied errors
+- All infrastructure (Glue, RDS, S3) is in account 343881458651
+- `.envrc` file automatically sets `AWS_PROFILE=gghouse` when you `cd` into this repo
+
+---
+
+## Data Quality & Monitoring - CRITICAL
+
+### Lessons Learned (Feb 2026 Incident)
+
+**Incident:** Staging tables became 8 days stale, causing downstream data quality issues.
+
+**Root Cause:** Glue ETL jobs existed but weren't being triggered automatically.
+
+**Prevention Measures Implemented:**
+
+1. **Data Freshness Monitoring** (CloudWatch + Lambda)
+   - Automated daily checks at 9 AM JST
+   - CloudWatch alarms if any table > 2 days old
+   - SNS alerts sent to dashboard-etl-alerts topic
+   - Metrics published: `TokyoBeta/DataQuality` namespace
+
+2. **dbt Freshness Tests** (Add to all staging sources)
+   ```yaml
+   sources:
+     - name: staging
+       freshness:
+         warn_after: {count: 1, period: day}
+         error_after: {count: 2, period: day}
+       tables:
+         - name: movings
+         - name: tenants
+         - name: rooms
+         - name: inquiries
+   ```
+
+3. **Manual Recovery Scripts**
+   - `scripts/emergency_staging_fix.py` - Download and load from S3
+   - `scripts/load_full_dump_to_staging.py` - Load full dumps
+   - `scripts/emergency_staging_fix.py --check-only` - Check freshness
+
+4. **ETL Pipeline Validation**
+   - Always verify FULL pipeline: Dump generation → S3 storage → Glue loading → Table freshness
+   - Don't assume one part working means all parts working
+   - EC2 cron dumps ≠ Glue ETL loads ≠ Fresh database tables
+
+### Critical Checks Before Assuming Data Issues
+
+**When tables appear stale:**
+1. ✅ Check S3 dumps are current: `aws s3 ls s3://jram-gghouse/dumps/ --profile gghouse | tail`
+2. ✅ Check Glue job status: `aws glue get-job-runs --job-name tokyobeta-prod-staging-loader --profile gghouse --max-items 1`
+3. ✅ Check EventBridge schedule: `aws events list-rules --profile gghouse | grep staging`
+4. ✅ Check CloudWatch logs for errors
+
+**If dumps are fresh but tables are stale:**
+- Problem is Glue ETL (our problem)
+- Run: `python3 scripts/emergency_staging_fix.py --tables movings tenants rooms`
+
+**If dumps are stale:**
+- Problem is EC2 cron job (external stakeholder problem)
+- Contact: External stakeholders managing EC2 dump generation
+
+### Data Freshness SLA
+
+| Table | Max Age (Days) | Alert Level | Action |
+|-------|----------------|-------------|--------|
+| staging.movings | 1 | WARN → 2 = CRITICAL | Check Glue staging_loader |
+| staging.tenants | 1 | WARN → 2 = CRITICAL | Check Glue staging_loader |
+| staging.rooms | 2 | WARN → 3 = CRITICAL | Check Glue staging_loader |
+| staging.inquiries | 2 | WARN → 3 = CRITICAL | Check Glue staging_loader |
+| silver.* tables | 1 | WARN → 2 = CRITICAL | Check Glue silver_transformer |
+| gold.* tables | 1 | WARN → 2 = CRITICAL | Check Glue gold_transformer |
+
+### Emergency Response Runbook
+
+**If alerted about stale data:**
+
+```bash
+# 1. Assess situation
+python3 scripts/emergency_staging_fix.py --check-only
+
+# 2. Check if S3 dumps are current
+aws s3 ls s3://jram-gghouse/dumps/ --profile gghouse --recursive | grep $(date +%Y%m%d)
+
+# 3. If dumps exist, load immediately
+python3 scripts/emergency_staging_fix.py --tables movings tenants rooms inquiries
+
+# 4. Trigger downstream transforms
+aws glue start-job-run --job-name tokyobeta-prod-silver-transformer --profile gghouse
+aws glue start-job-run --job-name tokyobeta-prod-gold-transformer --profile gghouse
+
+# 5. Verify fix
+python3 scripts/emergency_staging_fix.py --check-only
+
+# 6. Investigate root cause
+aws glue get-job-runs --job-name tokyobeta-prod-staging-loader --profile gghouse --max-items 5
+```
+
+**Expected Resolution Time:** < 15 minutes
 
 ---
 

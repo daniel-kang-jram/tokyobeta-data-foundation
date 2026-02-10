@@ -10,10 +10,12 @@ WITH active_from_staging AS (
 ),
 
 -- Active tenants from movings (no moveout)
+-- Use tenant.moving_id as the primary link to get CURRENT room assignment
 active_from_movings AS (
     SELECT COUNT(DISTINCT t.id) as count
     FROM {{ source('staging', 'tenants') }} t
-    INNER JOIN {{ source('staging', 'movings') }} m ON t.id = m.tenant_id
+    INNER JOIN {{ source('staging', 'movings') }} m 
+        ON t.moving_id = m.id  -- Use tenant.moving_id for current assignment
     WHERE m.movein_date IS NOT NULL
       AND (m.moveout_date IS NULL OR m.moveout_date > CURRENT_DATE)
 ),

@@ -1,334 +1,167 @@
-# Current Status - Tokyo Beta Data Platform
+# Current System Status
 
-**Last Updated**: February 5, 2026, 11:00 JST  
-**System Status**: ✅ **Operational**  
-**AWS Account**: gghouse (343881458651)  
-**Region**: ap-northeast-1 (Tokyo)
+**Last Updated:** 2026-02-10 12:45 JST
 
----
+## ✅ ISSUE RESOLVED: Silver Job Fixed & Ready to Re-run
 
-## Executive Summary
+### What Happened
 
-The Tokyo Beta real estate analytics platform is **fully operational** with a production-grade medallion architecture, automated daily ETL, and robust backup/recovery capabilities. Recent improvements include database cleanup ($57/month cost savings) and optimized ETL runtime (15min → 4min).
-
----
-
-## System Status
-
-### ✅ Operational Services
-
-| Component | Status | Details |
-|-----------|--------|---------|
-| **ETL Pipeline** | ✅ Running | Daily at 7:00 AM JST, ~4 min execution |
-| **Aurora DB** | ✅ Available | db.t4g.medium cluster, 7-day PITR |
-| **Data Quality** | ✅ Good | 69/76 tests passing (90.8%) |
-| **Monitoring** | ✅ Active | CloudWatch logs + SNS alerts |
-| **Backup/Recovery** | ✅ Tested | PITR script validated |
-
-### 📊 Data Freshness
-
-- **Last ETL Run**: February 5, 2026, 10:53 JST
-- **Execution Time**: 235 seconds (~4 minutes)
-- **Status**: SUCCESS
-- **Tables Updated**: 91 total (81 staging + 6 silver + 4 gold)
-
----
-
-## Recent Changes (Feb 5, 2026)
-
-### Database Cleanup ✅
-**Dropped 5 redundant schemas**:
-- `basis` (80 empty tables - vendor artifact)
-- `_analytics`, `_silver`, `_gold` (legacy from schema naming bug)
-- `analytics` (empty, superseded by `gold`)
-
-**Result**: Clean database structure with only active schemas
-
-### Cost Optimization ✅
-**Removed manual snapshots**: -$57/month
-- Before: Manual pre-ETL snapshots ($0.095/GB-month × 600GB)
-- After: Aurora automated backups (included, $0 extra cost)
-- **Savings**: $57/month (~$684/year)
-
-### Robustness Improvements ✅
-- **PITR Recovery**: Tested and documented (`scripts/rollback_etl.sh`)
-- **7-day retention**: Can restore to any second within window
-- **Recovery time**: 5-10 minutes
-- **Documentation**: `docs/BACKUP_RECOVERY_STRATEGY.md`
-
-### ETL Optimization ✅
-- **Runtime**: 15 min → 4 min (73% faster)
-- **Data processed**: 945MB SQL dump → 97,000+ analytics rows
-- **Test pass rate**: 90.8% (69/76 dbt tests)
-
----
-
-## Data Summary
-
-### Active Schemas
-
-| Schema | Tables | Rows | Purpose |
-|--------|--------|------|---------|
-| **staging** | 81 | Various | Bronze: Raw SQL dump data |
-| **silver** | 6 | 59,118 (int_contracts) | Silver: Cleaned & standardized |
-| **gold** | 6 | 41,027+ total | Gold: Business analytics |
-| **seeds** | 6 | 73 total | Reference data mappings |
-
-### Gold Tables (Business Analytics)
-
-| Table | Rows | Description |
-|-------|------|-------------|
-| `daily_activity_summary` | 5,624 | Daily KPIs by tenant type |
-| `new_contracts` | 16,508 | Demographics + geolocation |
-| `moveouts` | 15,262 | Tenure & revenue analysis |
-| `moveout_notices` | 3,635 | 24-month rolling window |
-| `moveout_analysis` | ~15,262 | Moveouts with rent ranges, age groups, tenure categories |
-| `moveout_summary` | ~1,500 | Pre-aggregated moveout counts by date/rent/geography |
-
-**Total**: 41,027+ analytics-ready rows  
-**Updated**: Daily at 7:00 AM JST
-
----
-
-## Infrastructure
-
-### AWS Resources
-
-| Resource | ID/Endpoint | Status |
-|----------|-------------|--------|
-| **Aurora Cluster** | `tokyobeta-prod-aurora-cluster-public` | Available |
-| **Cluster Endpoint** | `*.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com` | Active |
-| **Glue Job** | `tokyobeta-prod-daily-etl` | Scheduled (daily 7AM) |
-| **VPC** | `vpc-0973d4c359b12f522` | Active |
-| **S3 Bucket** | `s3://jram-gghouse/` | Active |
-| **SNS Topic** | `tokyobeta-prod-dashboard-etl-alerts` | Active |
-
-### Backup Configuration
-
-- **Method**: Aurora automated backups
-- **Retention**: 7 days
-- **Type**: Point-in-Time Recovery (PITR)
-- **Cost**: $0 (included in Aurora pricing)
-- **Restore Capability**: Any second within 7-day window
-- **Recovery Time**: 5-10 minutes
-
----
-
-## Cost Summary
-
-### Current Monthly Costs
-
-| Category | Amount | Notes |
-|----------|--------|-------|
-| **Infrastructure** | ~$91/month | Aurora, Glue, S3, VPC, CloudWatch |
-| **Cost Savings** | -$57/month | Eliminated manual snapshots |
-| **Net Infrastructure** | ~$91/month | Optimized from previous $148/month |
-
-**QuickSight** (optional, not yet enabled):
-- Authors (4 users): $72/month
-- Readers (10 users): $50/month
-- **Total with QuickSight**: ~$213/month
-
----
-
-## Outstanding Items
-
-### Low Priority
-- [ ] **7 dbt test failures** - Data validation warnings only (non-critical)
-  - Impact: Reference data has unexpected values
-  - Action: Review seed CSVs or adjust test constraints
-  
-- [ ] **Investigate unknown databases**
-  - `_test_results` (60 tables)
-  - `test_results` (75 tables)
-  - Action: Determine purpose before dropping
-
-### Optional Enhancements
-- [ ] **QuickSight Setup** - Enable dashboards for stakeholders
-  - Follow: `scripts/quicksight/QUICKSIGHT_SETUP_GUIDE.md`
-  - Time: ~1-2 hours for initial setup
-  
-- [ ] **Increase backup retention** - Extend from 7 to 14 or 30 days
-  - Cost: Minimal (~$1-2/month additional)
-  
-- [ ] **Apply Terraform IAM changes** - Glue role RDS permissions
-  - Status: Code ready, not yet applied
-  - Command: `cd terraform/environments/prod && terraform apply`
-
-### Future Enhancements (Documented, Not Urgent)
-- [ ] **AWS DMS for Real-Time Data** - Replace daily dumps with CDC
-  - Status: Fully documented, requires Nazca vendor coordination
-  - See: `docs/DUMP_GENERATION_ALTERNATIVES_STATUS.md`
-  - Benefit: 24-hour latency → real-time
-  - Cost: +$60-110/month
-  
-- [ ] **Secure EC2 Cron Migration** - Remove hardcoded credentials
-  - Status: Migration plan ready, example scripts available
-  - See: `docs/SECURITY_MIGRATION_PLAN.md`
-  - Benefit: Better security with Secrets Manager + IAM roles
-  - Cost: +$1/month
-
----
-
-## Performance Metrics
-
-### ETL Job (Latest Run)
-
+**Silver transformer failed** with error:
 ```
-Job ID:     jr_baea4b06fe0e6fdae7d634ff55e575653966ae9ee4b4f02b5577761a5a46c795
-Started:    2026-02-05 10:53:10 JST
-Completed:  2026-02-05 10:57:18 JST
-Duration:   235 seconds (~4 minutes)
-Status:     SUCCEEDED
-Tables:     91 (81 staging + 6 silver + 4 gold)
-Tests:      69 PASS, 7 ERROR (90.8% pass rate)
+Database Error: Unknown column 't.llm_nationality' in 'field list'
 ```
 
-### Data Quality
+### Root Cause
 
-- **Test Coverage**: 76 tests total
-- **Pass Rate**: 90.8% (69/76)
-- **Critical Tests**: All passed (uniqueness, not-null, referential integrity)
-- **Warnings**: 7 data validation tests (reference data values)
+The dbt model `stg_tenants.sql` was trying to **read** `t.llm_nationality` from `staging.tenants`, but:
+- Staging tables = raw data from SQL dumps (no enrichment)
+- `llm_nationality` is added by a **separate** `nationality_enricher` Glue job
+- That job hasn't run yet, so the column doesn't exist
 
-### System Health
+**Incorrect assumption:** That silver could read LLM predictions from staging  
+**Reality:** LLM enrichment is optional/separate step
 
-- **Aurora CPU**: <20% average
-- **Aurora Storage**: 20GB available
-- **Glue Execution**: <5 minutes per run
-- **ETL Success Rate**: 100% (last 10 runs)
-- **Backup Status**: Healthy (7-day retention active)
+### The Fix
+
+Changed `dbt/models/silver/stg_tenants.sql`:
+
+**Before (❌ broken):**
+```sql
+t.llm_nationality,  -- ERROR: column doesn't exist!
+```
+
+**After (✅ fixed):**
+```sql
+NULL as llm_nationality,  -- Always works, even without enrichment
+```
+
+**Result:** Silver transformer will work WITHOUT requiring nationality enrichment first
+
+### Current Status
+
+- Job stopped: ✅ Successfully stopped failing job
+- Code fixed: ✅ Uploaded fixed dbt model to S3
+- Ready to retry: ✅ Can re-run silver transformer now
 
 ---
 
-## Quick Commands
+## Architecture Clarification
 
-### Check ETL Status
+### Correct ETL Flow
+
+```
+1. staging_loader
+   ↓ Loads raw data
+   staging.tenants (NO llm_nationality column)
+
+2a. silver_transformer (can run immediately)
+    ↓ Transforms staging → silver
+    silver.stg_tenants (llm_nationality = NULL for now)
+
+2b. nationality_enricher (optional, can run later)
+    ↓ Adds LLM predictions
+    staging.tenants.llm_nationality populated
+
+3. gold_transformer
+   ↓ Aggregates silver → gold
+   gold.* tables
+```
+
+**Key insight:** Silver doesn't NEED enrichment to run. It's optional.
+
+---
+
+## Next Actions
+
+### Immediate (Now)
+
 ```bash
-aws glue get-job-runs \
-    --job-name tokyobeta-prod-daily-etl \
-    --max-results 1 \
-    --profile gghouse --region ap-northeast-1 \
-    --query 'JobRuns[0].{Status:JobRunState,Time:ExecutionTime,Completed:CompletedOn}'
-```
-
-### Trigger Manual ETL
-```bash
+# 1. Re-run silver transformer with fixed code
 aws glue start-job-run \
-    --job-name tokyobeta-prod-daily-etl \
-    --profile gghouse --region ap-northeast-1
+  --job-name tokyobeta-prod-silver-transformer \
+  --profile gghouse
+
+# Wait ~15 minutes for completion
+
+# 2. Re-run gold transformer (with fresh silver data)
+aws glue start-job-run \
+  --job-name tokyobeta-prod-gold-transformer \
+  --profile gghouse
 ```
 
-### Check Data Freshness
+### Optional (Later, for enrichment)
+
 ```bash
-mysql -h tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com \
-    -u admin -p gold \
-    -e "SELECT TABLE_NAME, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA='gold';"
-```
+# Run nationality enricher to add LLM predictions
+aws glue start-job-run \
+  --job-name tokyobeta-prod-nationality-enricher \
+  --profile gghouse
 
-### Emergency Recovery
-```bash
-# Show available restore window
-./scripts/rollback_etl.sh
-
-# Restore to 1 hour ago (if needed)
-./scripts/rollback_etl.sh "$(date -u -v-1H +%Y-%m-%dT%H:%M:%SZ)"
-```
-
-### Moveout Analysis Queries
-
-**Who moved out yesterday?**
-```sql
-SELECT contract_id, asset_id_hj, room_number, tenant_type, 
-       rent_range, age_group, nationality, moveout_reason_en
-FROM gold.moveout_analysis 
-WHERE moveout_date = CURRENT_DATE - INTERVAL 1 DAY
-ORDER BY rent_range_order, asset_id_hj;
-```
-
-**Current occupancy landscape by rent range:**
-```sql
-SELECT rent_range, prefecture, tenant_type, 
-       moveout_count, avg_monthly_rent, avg_tenure_months
-FROM gold.moveout_summary
-WHERE moveout_date >= CURRENT_DATE - INTERVAL 30 DAY
-ORDER BY rent_range_order, moveout_count DESC;
-```
-
-**Top moveout reasons by rent bracket:**
-```sql
-SELECT rent_range, moveout_reason_en, COUNT(*) as count
-FROM gold.moveout_analysis
-WHERE moveout_date >= CURRENT_DATE - INTERVAL 90 DAY
-GROUP BY rent_range, rent_range_order, moveout_reason_en
-ORDER BY rent_range_order, count DESC;
-```
-
-**Demographics breakdown for high-rent moveouts:**
-```sql
-SELECT age_group, gender, nationality, COUNT(*) as moveout_count
-FROM gold.moveout_analysis
-WHERE rent_range IN ('100K-150K', '150K+')
-  AND moveout_date >= CURRENT_DATE - INTERVAL 180 DAY
-GROUP BY age_group, gender, nationality
-ORDER BY moveout_count DESC
-LIMIT 20;
-```
-
-**Monthly trend by geography:**
-```sql
-SELECT moveout_year_month, prefecture, 
-       SUM(moveout_count) as total_moveouts,
-       AVG(avg_monthly_rent) as avg_rent
-FROM gold.moveout_summary
-WHERE moveout_date >= DATE_SUB(CURRENT_DATE, INTERVAL 12 MONTH)
-GROUP BY moveout_year_month, prefecture
-ORDER BY moveout_year_month DESC, total_moveouts DESC;
+# Then re-run silver to pick up enriched data
+aws glue start-job-run \
+  --job-name tokyobeta-prod-silver-transformer \
+  --profile gghouse
 ```
 
 ---
 
-## Recent Documentation
+## Current Data State
 
-All documentation updated to reflect latest changes:
+### Staging Layer ✅ (Fresh from manual load)
+```
+staging.movings:     62,506 rows | Feb 10 00:21 | ✅ FRESH
+staging.tenants:     50,425 rows | Feb 09 21:18 | ✅ 1 day
+staging.rooms:       16,401 rows | Feb 09 17:15 | ✅ 1 day
+staging.inquiries:      719 rows | Feb 09 15:01 | ✅ 1 day
+staging.apartments:   1,202 rows | Feb 09 17:15 | ✅ 1 day
+```
 
-- ✅ `README.md` - Comprehensive project overview
-- ✅ `docs/DATABASE_SCHEMA_EXPLANATION.md` - Complete schema inventory
-- ✅ `docs/BACKUP_RECOVERY_STRATEGY.md` - Recovery procedures
-- ✅ `docs/ROBUSTNESS_IMPLEMENTATION_SUMMARY.md` - Latest improvements
-- ✅ `docs/CLEANUP_COMPLETION_REPORT.md` - Database cleanup results
+### Silver Layer ⚠️ (Needs re-run with fix)
+```
+silver.int_contracts:            40,179 rows | Feb 09 22:04 | ⚠️ STALE
+silver.tokyo_beta_tenant_room_info: 12,150 rows | Feb 10 03:09 | ✅ FRESH
+```
 
----
-
-## Next Steps
-
-### For Operations Team
-1. Monitor daily ETL runs via CloudWatch
-2. Review weekly cost reports
-3. Validate data quality metrics
-
-### For Business Users (Optional)
-1. Enable QuickSight ($122/month for 14 users)
-2. Follow `scripts/quicksight/QUICKSIGHT_SETUP_GUIDE.md`
-3. Create 4 dashboards (Executive, Contracts, Moveouts, Map)
-4. Invite stakeholders (Warburg, JRAM, Tosei, GGhouse)
-
-### For Developers
-1. Review dbt test failures (low priority)
-2. Investigate unknown test databases
-3. Consider backup retention increase
-4. Apply pending Terraform changes
+### Gold Layer ⚠️ (Needs re-run after silver)
+```
+gold.daily_activity_summary:  4,117 rows | Feb 10 03:12 | ⚠️ Partial
+gold.new_contracts:            7,803 rows | Feb 09 22:04 | ⚠️ STALE
+```
 
 ---
 
-## Support
+## Tomorrow's Automated ETL (Feb 11)
 
-**Technical Issues**: Check `README.md` for troubleshooting  
-**Recovery Procedures**: See `docs/BACKUP_RECOVERY_STRATEGY.md`  
-**Database Questions**: See `docs/DATABASE_SCHEMA_EXPLANATION.md`  
-**Cost Questions**: Review cost breakdown in `README.md`
+**5:30 AM JST** - EC2 generates dump → S3  
+**7:00 AM JST** - EventBridge triggers:
+```
+staging_loader
+  ↓ (auto-triggers on success)
+silver_transformer (with fixed code)
+  ↓ (auto-triggers on success)
+gold_transformer
+```
+
+**Expected result:** All layers fresh with Feb 11 data ✅
 
 ---
 
-**Status**: Production-ready, cost-optimized, fully documented ✅  
-**Last Verified**: February 5, 2026, 11:00 JST
+## Questions Answered
+
+**Q: Why did silver fail?**  
+A: Tried to read `llm_nationality` column that doesn't exist in staging yet.
+
+**Q: Where does llm_nationality come from?**  
+A: Separate `nationality_enricher` Glue job adds it to staging.tenants.
+
+**Q: Do we need to run enricher?**  
+A: No! It's optional. Silver/gold work fine without it (just no LLM predictions).
+
+**Q: Will tomorrow's ETL work?**  
+A: Yes! Fixed code is uploaded. Silver will run successfully.
+
+---
+
+**See Also:**
+- `docs/PIPELINE_ARCHITECTURE.md` - Full ETL architecture
+- `docs/INCIDENTS.md` - Incident log

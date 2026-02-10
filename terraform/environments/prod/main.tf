@@ -138,7 +138,13 @@ module "monitoring" {
   source = "../../modules/monitoring"
   
   environment        = local.environment
+  project_name       = local.project_name
   glue_job_name      = module.glue.glue_job_name
   aurora_cluster_id  = module.aurora.cluster_id
   alert_email        = local.alert_email
+  
+  aurora_endpoint    = module.aurora.cluster_endpoint
+  aurora_secret_arn  = module.secrets.aurora_secret_arn
+  private_subnet_ids = module.networking.private_subnet_ids
+  security_group_id  = module.networking.lambda_security_group_id
 }

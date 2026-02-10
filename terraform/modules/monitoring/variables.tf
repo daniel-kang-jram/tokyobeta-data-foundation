@@ -37,3 +37,29 @@ variable "job_duration_threshold_ms" {
   type        = number
   default     = 1800000  # 30 minutes
 }
+
+variable "project_name" {
+  description = "Project name"
+  type        = string
+  default     = "tokyobeta"
+}
+
+variable "aurora_endpoint" {
+  description = "Aurora cluster endpoint"
+  type        = string
+}
+
+variable "aurora_secret_arn" {
+  description = "ARN of the secret containing Aurora credentials"
+  type        = string
+}
+
+variable "private_subnet_ids" {
+  description = "List of private subnet IDs for Lambda"
+  type        = list(string)
+}
+
+variable "security_group_id" {
+  description = "Security group ID for Lambda"
+  type        = string
+}

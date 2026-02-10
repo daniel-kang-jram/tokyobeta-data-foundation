@@ -1,0 +1,89 @@
+version: 2
+
+models:
+  - name: tokyo_beta_tenant_room_info
+    description: |
+      Reproduces the Tokyo Beta テナント情報.xlsx structure by querying the database.
+      
+      Logic:
+      - Filters tenants by CURRENT status (4,5,6,7,9,10,11,12,13,14,15)
+      - Joins to ACTIVE room assignments only (is_moveout = 0)
+      - One row per tenant-room combination
+      - Corporate tenants naturally get multiple rows (one per active room)
+      
+      Row count: ~14,500+ (grows as new tenants/rooms added)
+      - Excel export had 12,070 rows (historical snapshot)
+      - Current database has 14,549 rows (as of Feb 9, 2026)
+      - Growth expected as database is actively maintained
+      
+      Data sources:
+      - staging.tenants: Demographics, current status
+      - staging.movings: Room assignments, dates
+      - staging.apartments: Property names
+      - staging.rooms: Room numbers
+    
+    columns:
+      - name: management_status
+        description: Tenant management status in Japanese (管理ステータス)
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['仮予約', '初回家賃入金', '入居説明', '入居', '入居中',
+                       '移動届受領', '移動手続き', '移動', '契約更新', '退去届受領', '退去予定']
+      
+      - name: tenant_id
+        description: Tenant ID from staging.tenants
+        tests:
+          - not_null
+      
+      - name: tenant_name
+        description: Full tenant name (テナント名)
+        tests:
+          - not_null
+      
+      - name: property
+        description: Property/apartment name (物件)
+        tests:
+          - not_null
+      
+      - name: room_number
+        description: Room/unit number (部屋番号)
+        tests:
+          - not_null
+      
+      - name: contract_category
+        description: Contract category - corporate vs individual (テナント契約区分)
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['法人契約', '法人契約（個人）', '一般', '一般2', '一般（保証会社）']
+      
+      - name: fixed_rent
+        description: Monthly rent amount (固定賃料)
+      
+      - name: move_in_date
+        description: Move-in date (入居日)
+      
+      - name: moveout_date
+        description: Final rent date (最終賃料日)
+      
+      - name: moveout_plans_date
+        description: Actual moveout date - historical only (実退去日)
+      
+      - name: days_stayed
+        description: Number of days stayed (滞在日数)
+      
+      - name: moving_id
+        description: Moving record ID for traceability
+        tests:
+          - not_null
+    
+    tests:
+      # Row count validation - database grows over time
+      # Historical Excel had 12,070, current DB has 14,549 (Feb 2026)
+      - dbt_utils.expression_is_true:
+          expression: "(select count(*) from {{ ref('tokyo_beta_tenant_room_info') }}) between 12000 and 20000"
+          config:
+            severity: warn
+            error_if: ">0"
+            warn_if: "<12000 or >20000"

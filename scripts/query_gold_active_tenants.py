@@ -109,11 +109,12 @@ def query_active_tenant_count(conn):
         print(f"   {status:6} | {label_ja or 'N/A':15} | {label_en or 'N/A':20} | {active_flag:6} | {count:,}")
     
     # Query 4: Count distinct active tenants with move-in but no move-out
-    print("\n4. Active tenants with move-in but no move-out")
+    # Use tenant.moving_id as primary link to get CURRENT room assignment
+    print("\n4. Active tenants with move-in but no move-out (using tenant.moving_id)")
     query4 = """
     SELECT COUNT(DISTINCT t.id) as active_tenant_count
     FROM staging.tenants t
-    INNER JOIN staging.movings m ON t.id = m.tenant_id
+    INNER JOIN staging.movings m ON t.moving_id = m.id
     WHERE m.movein_date IS NOT NULL
       AND (m.moveout_date IS NULL OR m.moveout_date > CURRENT_DATE)
     """

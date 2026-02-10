@@ -14,6 +14,9 @@
 -- グラニュラリティ: Daily
 -- データ: 問い合わせ, 申し込み, 契約締結, 確定入居者, 確定退去者, 稼働室数増減 (by 個人 and 法人)
 --
+-- JOIN STRATEGY: Uses staging.movings with tenant_id to capture ALL historical move-in/out events
+-- DEDUPLICATION: ROW_NUMBER() per tenant-room to eliminate duplicate historical records
+--
 -- METRIC DEFINITIONS (CORRECTED):
 -- 1. inquiries_count (問い合わせ数): Number of NEW tenants registered with any status that day
 -- 2. applications_count (申し込み数): Tenants with status 仮予約(4) or 初期賃料(5) where updated_at is that day
@@ -74,6 +77,18 @@ confirmed_movein AS (
     -- 確定入居者/入居数: Count move-ins where tenant had eligible status ON the move-in date
     -- Point-in-time check: tenant's status on that specific date
     -- Status: 仮予約(4)、初期賃料(5)、入居説明(6)、入居(7)、居住中(9)、退去通知(14)、退去予定(15)
+    -- DEDUPLICATION: Use ROW_NUMBER() to get most recent moving per tenant-room (handles duplicate historical records)
+    WITH deduplicated_movings AS (
+        SELECT 
+            mv.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY mv.tenant_id, mv.apartment_id, mv.room_id 
+                ORDER BY mv.movein_date DESC, mv.updated_at DESC, mv.id DESC
+            ) as rn
+        FROM {{ source('staging', 'movings') }} mv
+        WHERE mv.movein_date IS NOT NULL
+          AND mv.movein_date >= '{{ var('min_valid_date') }}'
+    )
     SELECT
         DATE(mv.movein_date) as activity_date,
         CASE 
@@ -81,12 +96,11 @@ confirmed_movein AS (
             WHEN h.contract_type IN (1, 6, 7, 9) THEN 'individual'
             ELSE 'unknown'
         END as tenant_type,
-        COUNT(DISTINCT mv.tenant_id) as movein_count
-    FROM {{ source('staging', 'movings') }} mv
+        COUNT(DISTINCT CONCAT(mv.tenant_id, '-', mv.apartment_id, '-', mv.room_id)) as movein_count
+    FROM deduplicated_movings mv
     INNER JOIN {{ ref('tenant_status_history') }} h 
         ON mv.tenant_id = h.tenant_id
-    WHERE mv.movein_date IS NOT NULL
-      AND mv.movein_date >= '{{ var('min_valid_date') }}'
+    WHERE mv.rn = 1  -- Only most recent moving per tenant-room
       -- Tenant had eligible status ON the move-in date (status period overlaps with that date)
       AND h.status IN (4, 5, 6, 7, 9, 14, 15)
       AND h.valid_from <= mv.movein_date 
@@ -98,6 +112,18 @@ confirmed_moveout AS (
     -- 確定退去者: Count move-outs where tenant had moveout status ON the moveout date
     -- Point-in-time check: tenant's status on that specific date
     -- Status: 退去通知(14)、退去予定(15)、メンテ待ち(16)、退去済み(17)
+    -- DEDUPLICATION: Use ROW_NUMBER() to get most recent moving per tenant-room (handles duplicate historical records)
+    WITH deduplicated_movings AS (
+        SELECT 
+            mv.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY mv.tenant_id, mv.apartment_id, mv.room_id 
+                ORDER BY mv.movein_date DESC, mv.updated_at DESC, mv.id DESC
+            ) as rn
+        FROM {{ source('staging', 'movings') }} mv
+        WHERE mv.moveout_date IS NOT NULL
+          AND mv.moveout_date >= '{{ var('min_valid_date') }}'
+    )
     SELECT
         DATE(mv.moveout_date) as activity_date,
         CASE 
@@ -105,12 +131,11 @@ confirmed_moveout AS (
             WHEN h.contract_type IN (1, 6, 7, 9) THEN 'individual'
             ELSE 'unknown'
         END as tenant_type,
-        COUNT(DISTINCT mv.tenant_id) as moveout_count
-    FROM {{ source('staging', 'movings') }} mv
+        COUNT(DISTINCT CONCAT(mv.tenant_id, '-', mv.apartment_id, '-', mv.room_id)) as moveout_count
+    FROM deduplicated_movings mv
     INNER JOIN {{ ref('tenant_status_history') }} h 
         ON mv.tenant_id = h.tenant_id
-    WHERE mv.moveout_date IS NOT NULL
-      AND mv.moveout_date >= '{{ var('min_valid_date') }}'
+    WHERE mv.rn = 1  -- Only most recent moving per tenant-room
       -- Tenant had moveout status ON the moveout date (status period overlaps with that date)
       AND h.status IN (14, 15, 16, 17)  -- 退去通知、退去予定、メンテ待ち、退去済み
       AND h.valid_from <= mv.moveout_date

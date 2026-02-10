@@ -13,7 +13,24 @@
 
 -- Silver Layer: Intermediate Contracts Fact Table
 -- Denormalized contract data with all semantic values - single source of truth for analytics
+-- 
+-- JOIN STRATEGY: Uses stg_movings (which has tenant_id) to capture ALL contracts
+-- DEDUPLICATION: ROW_NUMBER() per tenant-room to eliminate duplicate historical records
+--   - Handles data entry errors where same tenant-room has multiple "active" movings
+--   - Selects most recent moving per tenant-room combination
+--
+-- NOTE: This captures ALL movings (not just current). For current snapshot, 
+--       use tenant.moving_id join (see tokyo_beta_tenant_room_info.sql)
 
+WITH deduplicated_movings AS (
+    SELECT 
+        m.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY m.tenant_id, m.apartment_id, m.room_id 
+            ORDER BY m.contract_start_date DESC, m.updated_at DESC, m.moving_id DESC
+        ) as rn
+    FROM {{ ref('stg_movings') }} m
+)
 SELECT
     m.moving_id as contract_id,
     
@@ -90,10 +107,11 @@ SELECT
     CURRENT_TIMESTAMP as created_at,
     CURRENT_TIMESTAMP as updated_at
 
-FROM {{ ref('stg_movings') }} m
+FROM deduplicated_movings m
 INNER JOIN {{ ref('stg_tenants') }} t
     ON m.tenant_id = t.tenant_id
 INNER JOIN {{ ref('stg_apartments') }} a
     ON m.apartment_id = a.apartment_id
 INNER JOIN {{ ref('stg_rooms') }} r
     ON m.room_id = r.room_id
+WHERE m.rn = 1  -- Only most recent moving per tenant-room

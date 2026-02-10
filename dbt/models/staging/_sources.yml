@@ -7,6 +7,9 @@ sources:
   - name: staging
     description: Raw data loaded from daily SQL dumps via AWS Glue
     schema: staging
+    freshness:
+      warn_after: {count: 1, period: day}
+      error_after: {count: 2, period: day}
     
     tables:
       - name: movings
