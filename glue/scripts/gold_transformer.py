@@ -310,6 +310,7 @@ def cleanup_dbt_tmp_tables(connection, schema):
 def create_table_backups(connection, tables, schema='gold'):
     """
     Create backup copies of tables before transformation.
+    Keeps only the last 3 backups per table.
     
     Args:
         connection: pymysql connection
@@ -328,9 +329,10 @@ def create_table_backups(connection, tables, schema='gold'):
     
     try:
         for table_name in tables:
-            backup_name = f"{table_name}_backup_{backup_suffix}"
+            backup_name = f"{table_name}_bak_{backup_suffix}"
             
             try:
+                # 1. Create new backup
                 cursor.execute(f"SHOW TABLES FROM {schema} LIKE '{table_name}'")
                 if cursor.fetchone():
                     cursor.execute(f"SELECT COUNT(*) FROM {schema}.{table_name}")
@@ -345,6 +347,23 @@ def create_table_backups(connection, tables, schema='gold'):
                     
                     print(f"    ✓ Created {schema}.{backup_name}")
                     backup_count += 1
+                    
+                    # 2. Cleanup old backups (Keep last 3)
+                    cursor.execute(f"""
+                        SELECT TABLE_NAME 
+                        FROM information_schema.TABLES 
+                        WHERE TABLE_SCHEMA = '{schema}' 
+                        AND TABLE_NAME LIKE '{table_name}_bak_%'
+                        ORDER BY TABLE_NAME DESC
+                    """)
+                    
+                    backups = [row[0] for row in cursor.fetchall()]
+                    
+                    if len(backups) > 3:
+                        for old_backup in backups[3:]:
+                            print(f"    Removing old backup: {schema}.{old_backup}")
+                            cursor.execute(f"DROP TABLE IF EXISTS {schema}.{old_backup}")
+                            
                 else:
                     print(f"  ⊘ Skipping {table_name} (table does not exist)")
                     
@@ -362,52 +381,10 @@ def create_table_backups(connection, tables, schema='gold'):
 
 def cleanup_old_backups(connection, days_to_keep=3):
     """
-    Remove backup tables older than N days.
-    
-    Args:
-        connection: pymysql connection
-        days_to_keep: Number of days to retain backups
-        
-    Returns:
-        Number of backups removed
+    Deprecated: Backup cleanup is now handled inline in create_table_backups.
+    Kept for compatibility but does nothing.
     """
-    print(f"\n=== Cleaning Up Old Backups (keeping last {days_to_keep} days) ===")
-    
-    cutoff_date = (datetime.now() - timedelta(days=days_to_keep)).strftime('%Y%m%d')
-    
-    removed_count = 0
-    cursor = connection.cursor()
-    
-    try:
-        for schema in ['silver', 'gold']:
-            cursor.execute(f"""
-                SELECT TABLE_NAME 
-                FROM information_schema.TABLES 
-                WHERE TABLE_SCHEMA = '{schema}' 
-                AND TABLE_NAME LIKE '%_backup_%'
-                ORDER BY TABLE_NAME
-            """)
-            
-            backup_tables = [row[0] for row in cursor.fetchall()]
-            
-            for table_name in backup_tables:
-                if '_backup_' in table_name:
-                    try:
-                        date_part = table_name.split('_backup_')[1][:8]
-                        if date_part < cutoff_date:
-                            print(f"  Removing old backup: {schema}.{table_name} (date: {date_part})")
-                            cursor.execute(f"DROP TABLE IF EXISTS {schema}.{table_name}")
-                            removed_count += 1
-                    except (IndexError, ValueError) as e:
-                        print(f"  Warning: Could not parse date from {table_name}: {e}")
-                        continue
-        
-        connection.commit()
-        print(f"Cleanup complete: {removed_count} old backups removed")
-        return removed_count
-        
-    finally:
-        cursor.close()
+    return 0
 
 
 def ensure_occupancy_kpi_table_exists(cursor):
@@ -542,14 +519,27 @@ def compute_occupancy_kpis(connection, lookback_days=3, forward_days=90):
             
             # Metric 5: 期首稼働室数 (Period Start Rooms)
             previous_date = target_date - timedelta(days=1)
-            cursor.execute("""
-                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
-            """, (previous_date,))
-            result = cursor.fetchone()
-            period_start_rooms = result['count'] if result else 0
+            
+            if is_future:
+                # For future dates, use the period_end_rooms from the previous day's GOLD record
+                # This ensures continuity from the last actual data point
+                cursor.execute("""
+                    SELECT period_end_rooms 
+                    FROM gold.occupancy_daily_metrics 
+                    WHERE snapshot_date = %s
+                """, (previous_date,))
+                result = cursor.fetchone()
+                period_start_rooms = result['period_end_rooms'] if result else 0
+            else:
+                # For past/today, calculate from snapshot as before
+                cursor.execute("""
+                    SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
+                    FROM silver.tenant_room_snapshot_daily
+                    WHERE snapshot_date = %s
+                    AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
+                """, (previous_date,))
+                result = cursor.fetchone()
+                period_start_rooms = result['count'] if result else 0
             
             # Metric 6: 期末稼働室数 (Period End Rooms)
             period_end_rooms = period_start_rooms + occupancy_delta

@@ -35,6 +35,16 @@ variable "gold_transformer_arn" {
   type        = string
 }
 
+variable "data_quality_test_name" {
+  description = "Name of data quality test Glue job"
+  type        = string
+}
+
+variable "data_quality_test_arn" {
+  description = "ARN of data quality test Glue job"
+  type        = string
+}
+
 variable "sns_topic_arn" {
   description = "ARN of SNS topic for notifications"
   type        = string

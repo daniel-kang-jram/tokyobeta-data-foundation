@@ -65,3 +65,13 @@ output "gold_transformer_arn" {
   description = "ARN of the gold transformer Glue job"
   value       = aws_glue_job.gold_transformer.arn
 }
+
+output "data_quality_test_name" {
+  description = "Name of the data quality test Glue job"
+  value       = aws_glue_job.data_quality_test.name
+}
+
+output "data_quality_test_arn" {
+  description = "ARN of the data quality test Glue job"
+  value       = aws_glue_job.data_quality_test.arn
+}

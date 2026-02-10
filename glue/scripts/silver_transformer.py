@@ -400,6 +400,7 @@ def cleanup_dbt_tmp_tables(connection, schema):
 def create_table_backups(connection, tables, schema='silver'):
     """
     Create backup copies of tables before transformation.
+    Keeps only the last 3 backups per table.
     
     Args:
         connection: pymysql connection
@@ -418,19 +419,17 @@ def create_table_backups(connection, tables, schema='silver'):
     
     try:
         for table_name in tables:
-            backup_name = f"{table_name}_backup_{backup_suffix}"
+            backup_name = f"{table_name}_bak_{backup_suffix}"
             
             try:
-                # Check if table exists
+                # 1. Create new backup
                 cursor.execute(f"SHOW TABLES FROM {schema} LIKE '{table_name}'")
                 if cursor.fetchone():
-                    # Get row count
                     cursor.execute(f"SELECT COUNT(*) FROM {schema}.{table_name}")
                     row_count = cursor.fetchone()[0]
                     
                     print(f"  Backing up {schema}.{table_name} ({row_count} rows)...")
                     
-                    # Create backup
                     cursor.execute(f"""
                         CREATE TABLE {schema}.{backup_name} 
                         AS SELECT * FROM {schema}.{table_name}
@@ -438,12 +437,28 @@ def create_table_backups(connection, tables, schema='silver'):
                     
                     print(f"    ✓ Created {schema}.{backup_name}")
                     backup_count += 1
+                    
+                    # 2. Cleanup old backups (Keep last 3)
+                    cursor.execute(f"""
+                        SELECT TABLE_NAME 
+                        FROM information_schema.TABLES 
+                        WHERE TABLE_SCHEMA = '{schema}' 
+                        AND TABLE_NAME LIKE '{table_name}_bak_%'
+                        ORDER BY TABLE_NAME DESC
+                    """)
+                    
+                    backups = [row[0] for row in cursor.fetchall()]
+                    
+                    if len(backups) > 3:
+                        for old_backup in backups[3:]:
+                            print(f"    Removing old backup: {schema}.{old_backup}")
+                            cursor.execute(f"DROP TABLE IF EXISTS {schema}.{old_backup}")
+                            
                 else:
                     print(f"  ⊘ Skipping {table_name} (table does not exist)")
                     
             except Exception as e:
                 print(f"  ✗ Failed to backup {table_name}: {str(e)[:200]}")
-                # Continue with other backups
                 continue
         
         connection.commit()

@@ -43,7 +43,8 @@ resource "aws_iam_role_policy" "step_functions_policy" {
         Resource = [
           var.staging_loader_arn,
           var.silver_transformer_arn,
-          var.gold_transformer_arn
+          var.gold_transformer_arn,
+          var.data_quality_test_arn
         ]
       },
       {
@@ -164,6 +165,31 @@ resource "aws_sfn_state_machine" "etl_orchestrator" {
           }
         ]
         ResultPath = "$.gold"
+        Next       = "DataQualityTest"
+      }
+
+      DataQualityTest = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::glue:startJobRun.sync"
+        Parameters = {
+          JobName = var.data_quality_test_name
+        }
+        Retry = [
+          {
+            ErrorEquals     = ["States.TaskFailed"]
+            IntervalSeconds = 30
+            MaxAttempts     = 1
+            BackoffRate     = 1.0
+          }
+        ]
+        Catch = [
+          {
+            ErrorEquals = ["States.ALL"]
+            ResultPath  = "$.error"
+            Next        = "NotifyTestFailure"
+          }
+        ]
+        ResultPath = "$.quality_test"
         Next       = "NotifySuccess"
       }
 
@@ -207,6 +233,17 @@ resource "aws_sfn_state_machine" "etl_orchestrator" {
           TopicArn = var.sns_topic_arn
           Subject  = "ETL Failed - Gold Layer"
           Message  = "Gold transformer failed after 3 retries. Staging and Silver completed successfully. You can manually retry gold layer only."
+        }
+        End = true
+      }
+
+      NotifyTestFailure = {
+        Type     = "Task"
+        Resource = "arn:aws:states:::sns:publish"
+        Parameters = {
+          TopicArn = var.sns_topic_arn
+          Subject  = "ETL Warning - Data Quality Tests Failed"
+          Message  = "Data quality tests failed after ETL completed. Data transformations succeeded but quality checks detected issues. Review test logs."
         }
         End = true
       }
