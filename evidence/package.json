@@ -1,0 +1,23 @@
+{
+  "name": "tokyobeta-evidence-poc",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Evidence.dev POC for TokyoBeta gold reporting",
+  "type": "module",
+  "engines": {
+    "node": ">=18.13 <23"
+  },
+  "scripts": {
+    "dev": "evidence dev",
+    "sources": "evidence sources",
+    "build": "evidence build",
+    "preview": "evidence preview"
+  },
+  "devDependencies": {
+    "@evidence-dev/evidence": "latest"
+  },
+  "dependencies": {
+    "@evidence-dev/core-components": "^5.4.2",
+    "@evidence-dev/mysql": "^1.1.6"
+  }
+}

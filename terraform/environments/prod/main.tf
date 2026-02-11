@@ -9,6 +9,7 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+
     random = {
       source  = "hashicorp/random"
       version = "~> 3.5"
@@ -42,6 +43,20 @@ provider "aws" {
 
 provider "random" {}
 
+# CloudFront ACM certificates must be created in us-east-1
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+
+  default_tags {
+    tags = {
+      Project     = "TokyoBeta-DataConsolidation"
+      ManagedBy   = "Terraform"
+      Environment = "production"
+    }
+  }
+}
+
 # Local variables
 locals {
   environment  = "prod"
@@ -71,9 +86,10 @@ module "secrets" {
 module "aurora" {
   source = "../../modules/aurora"
 
-  environment         = local.environment
-  vpc_id              = module.networking.vpc_id
-  subnet_ids          = module.networking.private_subnet_ids
+  environment = local.environment
+  vpc_id      = module.networking.vpc_id
+  # Keep Aurora in the public subnets (do not move subnets)
+  subnet_ids          = module.networking.public_subnet_ids
   security_group_id   = module.networking.aurora_security_group_id
   db_username         = module.secrets.aurora_username
   db_password         = module.secrets.aurora_password
@@ -149,4 +165,32 @@ module "monitoring" {
   aurora_secret_arn  = module.secrets.aurora_secret_arn
   private_subnet_ids = module.networking.private_subnet_ids
   security_group_id  = module.networking.lambda_security_group_id
+}
+
+# Module: Evidence Hosting (CloudFront + S3 + Cognito MFA)
+# Note: DNS (Sakura) is managed manually; Terraform outputs the CNAME records.
+module "evidence_hosting" {
+  source = "../../modules/evidence_hosting"
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  environment           = local.environment
+  project_name          = local.project_name
+  custom_domain_name    = var.evidence_custom_domain
+  auth_base_url         = var.evidence_auth_base_url
+  enable_auth           = var.evidence_enable_auth
+  auth_users            = var.evidence_auth_users
+  enable_custom_domain  = var.evidence_enable_custom_domain
+  cognito_domain_prefix = var.evidence_cognito_domain_prefix
+
+  vpc_id                      = module.networking.vpc_id
+  private_subnet_ids          = module.networking.private_subnet_ids
+  codebuild_security_group_id = module.networking.lambda_security_group_id
+
+  evidence_repo_connection_arn = var.evidence_codestar_connection_arn
+  evidence_repo_full_name      = var.evidence_repo_full_name
+  evidence_repo_branch         = var.evidence_repo_branch
 }

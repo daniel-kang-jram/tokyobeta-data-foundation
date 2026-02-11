@@ -1,0 +1,19 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - node --version
+      - npm --version
+  build:
+    commands:
+      - echo "Building Evidence"
+      - cd evidence
+      - npm ci
+      - |
+        SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$EVIDENCE_SECRET_ID" --query SecretString --output text)
+        python3 -c 'import json,sys; s=json.loads(sys.stdin.read()); print("EVIDENCE_SOURCE__aurora_gold__host="+s["host"]); print("EVIDENCE_SOURCE__aurora_gold__port="+str(s.get("port",3306))); print("EVIDENCE_SOURCE__aurora_gold__database="+(s.get("dbname") or s.get("database") or "gold")); print("EVIDENCE_SOURCE__aurora_gold__user="+s["username"]); print("EVIDENCE_SOURCE__aurora_gold__password="+s["password"]); print("EVIDENCE_SOURCE__aurora_gold__ssl=Amazon RDS"); print("EVIDENCE_VAR__lookback_days=730");' <<< "$SECRET_JSON" > .env
+      - NODE_OPTIONS="--max-old-space-size=4096" npm run sources -- --sources aurora_gold
+      - npm run build
+      - aws s3 sync build/ "s3://$EVIDENCE_S3_BUCKET/" --delete
+      - aws cloudfront create-invalidation --distribution-id "$EVIDENCE_CF_DISTRIBUTION_ID" --paths "/*"

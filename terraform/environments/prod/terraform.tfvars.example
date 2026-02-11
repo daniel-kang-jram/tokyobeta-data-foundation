@@ -15,3 +15,9 @@ allowed_cidr_blocks = [
 # S3 source configuration (default values shown)
 # s3_source_bucket = "jram-gghouse"
 # s3_source_prefix = "dumps/"
+
+# Evidence HTTP Basic Auth (CloudFront Functions)
+# evidence_enable_auth = true
+# evidence_auth_users = {
+#   "admin" = "your-secure-password"
+# }

@@ -1,0 +1,8 @@
+# This file was automatically generated for the Evidence POC.
+# To update interactively, you can run: npx evidence config
+
+plugins:
+  components:
+    @evidence-dev/core-components: {}
+  datasources:
+    @evidence-dev/mysql: {}

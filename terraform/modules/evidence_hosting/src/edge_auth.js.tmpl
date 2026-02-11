@@ -1,0 +1,418 @@
+'use strict';
+
+// Lambda@Edge viewer-request auth gate.
+//
+// - Uses Cognito Hosted UI with Authorization Code + PKCE.
+// - Stores id_token in a secure cookie.
+// - On each request, validates JWT signature + expiry against Cognito JWKs.
+//
+// This is intentionally self-contained (no npm deps).
+
+const crypto = require('crypto');
+const https = require('https');
+
+const COGNITO_DOMAIN = '${cognito_domain}';
+const COGNITO_REGION = '${cognito_region}';
+const USER_POOL_ID = '${user_pool_id}';
+const CLIENT_ID = '${client_id}';
+const REDIRECT_URI = '${redirect_uri}';
+const LOGOUT_REDIRECT = '${logout_redirect}';
+
+const COOKIE_ID_TOKEN = 'evidence_id_token';
+const COOKIE_PKCE_VERIFIER = 'evidence_pkce_verifier';
+const COOKIE_RETURN_TO = 'evidence_return_to';
+const COOKIE_STATE = 'evidence_state';
+
+let jwksCache = null;
+let jwksCacheAtMs = 0;
+const JWKS_TTL_MS = 60 * 60 * 1000;
+
+function base64UrlEncode(buf) {
+  return buf
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function sha256Base64Url(input) {
+  const hash = crypto.createHash('sha256').update(input).digest();
+  return base64UrlEncode(hash);
+}
+
+function randomString(len) {
+  // PKCE verifier allowed chars: ALPHA / DIGIT / "-" / "." / "_" / "~"
+  const n = len || 64;
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+  const bytes = crypto.randomBytes(n);
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    out += chars[bytes[i] % chars.length];
+  }
+  return out;
+}
+
+function parseCookies(headers) {
+  const cookieHeader = headers.cookie && headers.cookie[0] && headers.cookie[0].value;
+  const cookies = {};
+  if (!cookieHeader) return cookies;
+  cookieHeader.split(';').forEach((part) => {
+    const idx = part.indexOf('=');
+    if (idx === -1) return;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    cookies[k] = decodeURIComponent(v);
+  });
+  return cookies;
+}
+
+function setCookie(headers, name, value, opts) {
+  const parts = [name + '=' + encodeURIComponent(value)];
+  if (opts.maxAgeSeconds != null) parts.push('Max-Age=' + opts.maxAgeSeconds);
+  if (opts.path) parts.push('Path=' + opts.path);
+  if (opts.httpOnly) parts.push('HttpOnly');
+  if (opts.secure) parts.push('Secure');
+  // Use SameSite=None for cross-site Cognito redirects (requires Secure)
+  if (opts.sameSite) parts.push('SameSite=' + opts.sameSite);
+  if (!headers['set-cookie']) headers['set-cookie'] = [];
+  headers['set-cookie'].push({ key: 'Set-Cookie', value: parts.join('; ') });
+  console.log('[COOKIE] Setting cookie:', name, '- Full header:', parts.join('; '));
+}
+
+function deleteCookie(headers, name) {
+  setCookie(headers, name, '', {
+    maxAgeSeconds: 0,
+    path: '/',
+    httpOnly: true,
+    secure: true,
+    sameSite: 'None'
+  });
+}
+
+function httpRequest(args) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        method: args.method,
+        hostname: args.hostname,
+        path: args.path,
+        headers: args.headers
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          resolve({ statusCode: res.statusCode, headers: res.headers, body: data });
+        });
+      }
+    );
+    req.on('error', reject);
+    if (args.body) req.write(args.body);
+    req.end();
+  });
+}
+
+function base64UrlToBuffer(b64u) {
+  // JWT uses base64url without padding.
+  const b64 = b64u.replace(/-/g, '+').replace(/_/g, '/');
+  const padLen = (4 - (b64.length % 4)) % 4;
+  const padded = b64 + '='.repeat(padLen);
+  return Buffer.from(padded, 'base64');
+}
+
+function decodeJwt(token) {
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('invalid jwt');
+  const header = JSON.parse(base64UrlToBuffer(parts[0]).toString('utf8'));
+  const payload = JSON.parse(base64UrlToBuffer(parts[1]).toString('utf8'));
+  return { header, payload, signingInput: parts[0] + '.' + parts[1], signatureB64u: parts[2] };
+}
+
+function rsaPublicKeyDer(nB64u, eB64u) {
+  const n = base64UrlToBuffer(nB64u);
+  const e = base64UrlToBuffer(eB64u);
+
+  function asn1Len(len) {
+    if (len < 0x80) return Buffer.from([len]);
+    const hex = len.toString(16);
+    const bytes = [];
+    for (let i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.slice(i, i + 2), 16));
+    return Buffer.from([0x80 | bytes.length, ...bytes]);
+  }
+
+  function asn1Int(buf) {
+    if (buf[0] & 0x80) buf = Buffer.concat([Buffer.from([0x00]), buf]);
+    return Buffer.concat([Buffer.from([0x02]), asn1Len(buf.length), buf]);
+  }
+
+  const seq = Buffer.concat([asn1Int(n), asn1Int(e)]);
+  const seqWrap = Buffer.concat([Buffer.from([0x30]), asn1Len(seq.length), seq]);
+
+  // AlgorithmIdentifier for rsaEncryption: 1.2.840.113549.1.1.1 + NULL
+  const algId = Buffer.from('300d06092a864886f70d0101010500', 'hex');
+  const bitString = Buffer.concat([
+    Buffer.from([0x03]),
+    asn1Len(seqWrap.length + 1),
+    Buffer.from([0x00]),
+    seqWrap
+  ]);
+
+  const spki = Buffer.concat([algId, bitString]);
+  return Buffer.concat([Buffer.from([0x30]), asn1Len(spki.length), spki]);
+}
+
+function jwkToPem(jwk) {
+  const der = rsaPublicKeyDer(jwk.n, jwk.e);
+  const b64 = der.toString('base64');
+  const lines = b64.match(/.{1,64}/g).join('\n');
+  return '-----BEGIN PUBLIC KEY-----\n' + lines + '\n-----END PUBLIC KEY-----\n';
+}
+
+async function getJwks() {
+  const now = Date.now();
+  if (jwksCache && (now - jwksCacheAtMs) < JWKS_TTL_MS) return jwksCache;
+
+  const res = await httpRequest({
+    method: 'GET',
+    hostname: 'cognito-idp.' + COGNITO_REGION + '.amazonaws.com',
+    path: '/' + USER_POOL_ID + '/.well-known/jwks.json',
+    headers: { accept: 'application/json' }
+  });
+
+  if (res.statusCode !== 200) throw new Error('jwks fetch failed: ' + res.statusCode);
+  const jwks = JSON.parse(res.body);
+  jwksCache = jwks;
+  jwksCacheAtMs = now;
+  return jwks;
+}
+
+async function verifyJwt(idToken) {
+  const decoded = decodeJwt(idToken);
+  const header = decoded.header;
+  const payload = decoded.payload;
+
+  console.log('[JWT] Verifying - kid:', header.kid, 'exp:', payload.exp, 'aud:', payload.aud);
+
+  if (payload.exp && (Date.now() / 1000) >= payload.exp) {
+    console.log('[JWT] Token expired');
+    return false;
+  }
+  if (payload.aud !== CLIENT_ID) {
+    console.log('[JWT] Audience mismatch - expected:', CLIENT_ID, 'got:', payload.aud);
+    return false;
+  }
+  if (payload.token_use && payload.token_use !== 'id') {
+    console.log('[JWT] Wrong token type:', payload.token_use);
+    return false;
+  }
+
+  const expectedIss = 'https://cognito-idp.' + COGNITO_REGION + '.amazonaws.com/' + USER_POOL_ID;
+  if (payload.iss && payload.iss !== expectedIss) {
+    console.log('[JWT] Issuer mismatch - expected:', expectedIss, 'got:', payload.iss);
+    return false;
+  }
+
+  const jwks = await getJwks();
+  const jwk = (jwks.keys || []).find((k) => k.kid === header.kid);
+  if (!jwk) {
+    console.log('[JWT] Key ID not found in JWKS');
+    return false;
+  }
+
+  console.log('[JWT] Found matching key, verifying signature');
+  const pem = jwkToPem(jwk);
+  const verifier = crypto.createVerify('RSA-SHA256');
+  verifier.update(decoded.signingInput);
+  verifier.end();
+
+  const sig = base64UrlToBuffer(decoded.signatureB64u);
+  const valid = verifier.verify(pem, sig);
+  console.log('[JWT] Signature verification result:', valid);
+  return valid;
+}
+
+function redirect(location, extraHeaders) {
+  const headers = Object.assign(
+    {
+      location: [{ key: 'Location', value: location }]
+    },
+    extraHeaders || {}
+  );
+
+  return {
+    status: '302',
+    statusDescription: 'Found',
+    headers
+  };
+}
+
+function buildAuthorizeUrl(codeChallenge, state) {
+  const q = new URLSearchParams({
+    response_type: 'code',
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    scope: 'openid email profile',
+    code_challenge_method: 'S256',
+    code_challenge: codeChallenge,
+    state
+  });
+  return (
+    'https://' +
+    COGNITO_DOMAIN +
+    '.auth.' +
+    COGNITO_REGION +
+    '.amazoncognito.com/oauth2/authorize?' +
+    q.toString()
+  );
+}
+
+async function exchangeCodeForTokens(code, codeVerifier) {
+  const body = new URLSearchParams({
+    grant_type: 'authorization_code',
+    client_id: CLIENT_ID,
+    code,
+    redirect_uri: REDIRECT_URI,
+    code_verifier: codeVerifier
+  }).toString();
+
+  const res = await httpRequest({
+    method: 'POST',
+    hostname: COGNITO_DOMAIN + '.auth.' + COGNITO_REGION + '.amazoncognito.com',
+    path: '/oauth2/token',
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'content-length': Buffer.byteLength(body).toString()
+    },
+    body
+  });
+
+  if (res.statusCode !== 200) {
+    throw new Error('token exchange failed: ' + res.statusCode + ' ' + res.body.slice(0, 200));
+  }
+
+  return JSON.parse(res.body);
+}
+
+exports.handler = async (event) => {
+  const request = event.Records[0].cf.request;
+  const uri = request.uri || '/';
+  const headers = request.headers || {};
+  const cookies = parseCookies(headers);
+
+  console.log('[AUTH] Request URI:', uri);
+  console.log('[AUTH] Has ID token cookie:', !!cookies[COOKIE_ID_TOKEN]);
+  console.log('[AUTH] All cookie names:', Object.keys(cookies));
+
+  if (uri === '/auth/logout') {
+    console.log('[AUTH] Processing logout');
+    const logoutUrl =
+      'https://' +
+      COGNITO_DOMAIN +
+      '.auth.' +
+      COGNITO_REGION +
+      '.amazoncognito.com/logout?' +
+      new URLSearchParams({ client_id: CLIENT_ID, logout_uri: LOGOUT_REDIRECT }).toString();
+
+    const respHeaders = {};
+    deleteCookie(respHeaders, COOKIE_ID_TOKEN);
+    deleteCookie(respHeaders, COOKIE_PKCE_VERIFIER);
+    deleteCookie(respHeaders, COOKIE_RETURN_TO);
+    deleteCookie(respHeaders, COOKIE_STATE);
+
+    return redirect(logoutUrl, respHeaders);
+  }
+
+  if (uri === '/auth/callback') {
+    console.log('[AUTH] Processing callback');
+    const qs = request.querystring || '';
+    const params = new URLSearchParams(qs);
+    const code = params.get('code');
+    const stateParam = params.get('state');
+
+    const verifier = cookies[COOKIE_PKCE_VERIFIER];
+    const returnTo = cookies[COOKIE_RETURN_TO] || '/';
+    const stateCookie = cookies[COOKIE_STATE];
+
+    console.log('[AUTH] Callback validation - has code:', !!code, 'has verifier:', !!verifier, 'has state:', !!stateParam, 'has stateCookie:', !!stateCookie, 'states match:', stateParam === stateCookie);
+
+    if (!code || !verifier || !stateParam || !stateCookie || stateParam !== stateCookie) {
+      console.log('[AUTH] Callback validation failed, redirecting to /');
+      return redirect('/');
+    }
+
+    try {
+      console.log('[AUTH] Exchanging code for tokens');
+      const tokens = await exchangeCodeForTokens(code, verifier);
+      const idToken = tokens.id_token;
+      console.log('[AUTH] Token exchange succeeded, got ID token');
+
+      const respHeaders = {};
+      setCookie(respHeaders, COOKIE_ID_TOKEN, idToken, {
+        maxAgeSeconds: 60 * 60,
+        path: '/',
+        httpOnly: true,
+        secure: true,
+        sameSite: 'None'
+      });
+      deleteCookie(respHeaders, COOKIE_PKCE_VERIFIER);
+      deleteCookie(respHeaders, COOKIE_RETURN_TO);
+      deleteCookie(respHeaders, COOKIE_STATE);
+
+      console.log('[AUTH] Set ID token cookie, redirecting to:', returnTo);
+      return redirect(returnTo, respHeaders);
+    } catch (e) {
+      console.log('[AUTH] Token exchange failed:', e.message);
+      return redirect('/');
+    }
+  }
+
+  const idToken = cookies[COOKIE_ID_TOKEN];
+  if (idToken) {
+    console.log('[AUTH] Found existing ID token, verifying...');
+    try {
+      const ok = await verifyJwt(idToken);
+      console.log('[AUTH] JWT verification result:', ok);
+      if (ok) {
+        console.log('[AUTH] JWT valid, allowing request');
+        return request;
+      }
+      console.log('[AUTH] JWT invalid, re-authenticating');
+    } catch (e) {
+      console.log('[AUTH] JWT verification error:', e.message);
+    }
+  }
+
+  console.log('[AUTH] No valid token, initiating PKCE flow');
+  const verifier = randomString(64);
+  const challenge = sha256Base64Url(verifier);
+
+  const returnTo = uri + (request.querystring ? ('?' + request.querystring) : '');
+  const state = base64UrlEncode(crypto.randomBytes(16));
+
+  const respHeaders = {};
+  setCookie(respHeaders, COOKIE_PKCE_VERIFIER, verifier, {
+    maxAgeSeconds: 10 * 60,
+    path: '/',
+    httpOnly: true,
+    secure: true,
+    sameSite: 'None'
+  });
+  setCookie(respHeaders, COOKIE_RETURN_TO, returnTo, {
+    maxAgeSeconds: 10 * 60,
+    path: '/',
+    httpOnly: true,
+    secure: true,
+    sameSite: 'None'
+  });
+  setCookie(respHeaders, COOKIE_STATE, state, {
+    maxAgeSeconds: 10 * 60,
+    path: '/',
+    httpOnly: true,
+    secure: true,
+    sameSite: 'None'
+  });
+
+  const authUrl = buildAuthorizeUrl(challenge, state);
+  console.log('[AUTH] Redirecting to Cognito for login');
+  return redirect(authUrl, respHeaders);
+};

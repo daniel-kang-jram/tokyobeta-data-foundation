@@ -70,9 +70,28 @@ output "deployment_instructions" {
   
   8. Set up QuickSight (see docs/QUICKSIGHT_SETUP.md)
   
+  Evidence hosting (manual DNS):
+  - CloudFront domain: ${module.evidence_hosting.cloudfront_domain_name}
+  - ACM validation records: see output `evidence_acm_validation_records`
+  
   Aurora endpoint: ${module.aurora.public_cluster_endpoint}
   Glue job: ${module.glue.glue_job_name}
   Daily trigger: ${module.eventbridge.schedule_expression}
   
   EOT
+}
+
+output "evidence_cloudfront_domain" {
+  description = "CloudFront distribution domain for Evidence (CNAME target)"
+  value       = module.evidence_hosting.cloudfront_domain_name
+}
+
+output "evidence_acm_validation_records" {
+  description = "Add these CNAMEs in Sakura DNS to validate ACM certificate"
+  value       = module.evidence_hosting.acm_validation_records
+}
+
+output "evidence_cognito_domain" {
+  description = "Cognito hosted UI domain"
+  value       = module.evidence_hosting.cognito_domain
 }
