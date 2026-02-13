@@ -94,6 +94,37 @@ Recent failures were caused by lock contention and stale input reprocessing:
   - `worker_type = G.2X`
 - Updated Glue/dbt artifacts were uploaded to S3 and verified.
 
+## Update: Lock Root Cause and Final Resolution (2026-02-13)
+After deployment, the job still failed at `silver.tenant_room_snapshot_daily` with MySQL `1205`.
+Detailed runtime diagnostics showed:
+- dbt was still issuing a lock-heavy `DELETE FROM silver.tenant_room_snapshot_daily ...` path
+- A stale dbt delete query remained active for >1 hour and blocked new runs
+
+### Additional fixes applied
+1. `glue/scripts/daily_etl.py`
+   - Added explicit dbt pre-phase execution and timings
+   - Added Aurora lock diagnostics (`innodb_trx`, lock waits fallback, non-sleep processlist)
+   - Added stale dbt query cleanup (`KILL QUERY`) before pre-phase
+   - Reduced default pre-phase retries to `1` (fail fast)
+   - Added runtime guard: disable `models/silver/tenant_room_snapshot_daily.yml` after S3 sync to prevent stale `unique_key` merge/delete behavior
+2. `dbt/models/silver/tenant_room_snapshot_daily.sql`
+   - Kept append-only incremental strategy
+   - Set model session lock wait timeout to 120s for faster failure visibility
+3. `glue/tests/test_daily_etl.py`
+   - Updated/added tests for dbt pre-phase behavior and lock retry flow
+
+### Final validated production run
+- Glue run: `jr_1579d548e3604e2ad2e35b0ae0c8309193dddbb9cd391e05b2189ff686ee30d7`
+- Result: `SUCCEEDED`
+- End-to-end duration: `225.53s`
+- Key timings:
+  - `02_load_dump_to_aurora_staging`: `142.41s`
+  - `09_run_dbt_transformations`: `49.36s`
+  - dbt pre-phase (`tenant_room_snapshot_daily`): success in `~9.72s` (`SUCCESS 12126`)
+  - dbt main-phase: all 13 models succeeded
+- Archive confirmation:
+  - `processed/gghouse_20260213.sql` created at `2026-02-13 16:15:11 JST`
+
 ## Required Follow-up to Deploy
 1. Run a full non-targeted Terraform reconciliation after reviewing unrelated pending infra changes (seen in full plan).
 2. (Optional) Trigger one manual `tokyobeta-prod-daily-etl` run to validate end-to-end behavior under new settings.
