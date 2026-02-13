@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 from datetime import datetime, timedelta, date
+from botocore.exceptions import ClientError
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -122,6 +123,32 @@ def get_latest_dump_key():
     latest_key = sql_files[0]['Key']
     print(f"Latest dump: {latest_key} (modified: {sql_files[0]['LastModified']})")
     return latest_key
+
+
+def get_processed_dump_key(source_key: str) -> str:
+    """Map dumps/ key to processed/ key."""
+    if source_key.startswith("dumps/"):
+        return source_key.replace("dumps/", "processed/", 1)
+    if "/dumps/" in source_key:
+        return source_key.replace("/dumps/", "/processed/", 1)
+    return f"processed/{source_key}"
+
+
+def is_dump_already_processed(source_key: str) -> bool:
+    """
+    Return True if this dump already exists under processed/.
+    This avoids re-running the full ETL on stale dumps.
+    """
+    processed_key = get_processed_dump_key(source_key)
+    try:
+        s3.head_object(Bucket=args['S3_SOURCE_BUCKET'], Key=processed_key)
+        print(f"No new dump detected: {source_key} already archived as {processed_key}")
+        return True
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "")
+        if error_code in {"404", "NoSuchKey", "NotFound"}:
+            return False
+        raise
 
 def get_aurora_credentials():
     """Retrieve Aurora credentials from Secrets Manager."""
@@ -959,7 +986,7 @@ def enrich_nationality_data():
 def archive_processed_dump(s3_key):
     """Move processed dump to archive folder."""
     source_key = s3_key
-    dest_key = source_key.replace('/dumps/', '/processed/').replace('dumps/', 'processed/')
+    dest_key = get_processed_dump_key(source_key)
     
     s3.copy_object(
         Bucket=args['S3_SOURCE_BUCKET'],
@@ -980,6 +1007,10 @@ def main():
         
         # Step 1: Find and download latest dump
         latest_key = get_latest_dump_key()
+        if is_dump_already_processed(latest_key):
+            print("Skipping ETL run because the latest dump is already processed.")
+            job.commit()
+            return
         local_path = download_and_parse_dump(latest_key)
         
         # Step 2: Load to Aurora staging

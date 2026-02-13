@@ -116,9 +116,9 @@ module "glue" {
   private_subnet_ids = module.networking.private_subnet_ids
   security_group_id  = module.networking.lambda_security_group_id
 
-  worker_type       = "G.1X"
+  worker_type       = "G.2X"
   number_of_workers = 2
-  job_timeout       = 60
+  job_timeout       = 120
 }
 
 # Module: Step Functions (NEW - Orchestrates ETL layers)

@@ -222,9 +222,9 @@ resource "aws_glue_job" "daily_etl" {
 
   glue_version      = "4.0"
   max_retries       = 0
-  timeout           = 60
-  worker_type       = "G.1X"
-  number_of_workers = 2
+  timeout           = var.job_timeout
+  worker_type       = var.worker_type
+  number_of_workers = var.number_of_workers
 
   # VPC connection for Aurora access
   connections = [aws_glue_connection.aurora.name]
@@ -328,9 +328,9 @@ resource "aws_glue_job" "silver_transformer" {
   }
 
   glue_version      = "4.0"
-  max_retries       = 0  # Retries handled by Step Functions
-  timeout           = 60 # 60 minutes max (reduced to ~3 min with tests skipped)
-  worker_type       = "G.1X"
+  max_retries       = 0      # Retries handled by Step Functions
+  timeout           = 120    # 120 minutes max (increased from 60 due to backup + transform time)
+  worker_type       = "G.2X" # Upgraded from G.1X for better performance
   number_of_workers = 2
 
   connections = [aws_glue_connection.aurora.name]
@@ -382,9 +382,9 @@ resource "aws_glue_job" "gold_transformer" {
   }
 
   glue_version      = "4.0"
-  max_retries       = 0  # Retries handled by Step Functions
-  timeout           = 60 # 60 minutes max (dbt deps + seed + models + tests + backups)
-  worker_type       = "G.1X"
+  max_retries       = 0      # Retries handled by Step Functions
+  timeout           = 120    # 120 minutes max (increased from 60 due to backup + transform time)
+  worker_type       = "G.2X" # Upgraded from G.1X for better performance
   number_of_workers = 2
 
   connections = [aws_glue_connection.aurora.name]
@@ -450,4 +450,3 @@ resource "aws_glue_job" "data_quality_test" {
     ManagedBy   = "terraform"
   }
 }
-
