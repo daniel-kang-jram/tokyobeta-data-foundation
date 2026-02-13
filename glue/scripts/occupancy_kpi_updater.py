@@ -100,7 +100,7 @@ def compute_kpi_for_dates(cursor, target_dates):
     Compute occupancy KPIs for specific dates (historical and future projections).
     
     For historical dates: Use actual snapshot data for that date.
-    For future dates: Use today's snapshot and filter by scheduled move_in_date/moveout_date.
+    For future dates: Use latest available snapshot and filter by scheduled move_in_date/moveout_date.
     
     Args:
         cursor: pymysql cursor
@@ -112,15 +112,35 @@ def compute_kpi_for_dates(cursor, target_dates):
     if not target_dates:
         return 0
         
-    today = date.today()
-    print(f"Computing KPIs for {len(target_dates)} dates (today: {today})...")
+    calendar_today = date.today()
+
+    # Anchor KPI logic to latest available snapshot date.
+    # This keeps future/past classification stable even if snapshots are delayed.
+    cursor.execute("""
+        SELECT MAX(snapshot_date) AS max_snapshot_date
+        FROM silver.tenant_room_snapshot_daily
+    """)
+    snapshot_meta = cursor.fetchone()
+    as_of_snapshot_date = snapshot_meta['max_snapshot_date'] if snapshot_meta else None
+
+    if as_of_snapshot_date is None:
+        raise RuntimeError(
+            "No data found in silver.tenant_room_snapshot_daily. "
+            "Cannot compute occupancy KPIs."
+        )
+
+    lag_days = (calendar_today - as_of_snapshot_date).days
+    print(
+        f"Computing KPIs for {len(target_dates)} dates "
+        f"(calendar_today: {calendar_today}, as_of_snapshot: {as_of_snapshot_date}, lag: {lag_days} day(s))..."
+    )
     
     for target_date in target_dates:
-        is_future = target_date > today
+        is_future = target_date > as_of_snapshot_date
         print(f"  Processing {target_date} ({'FUTURE' if is_future else 'PAST/TODAY'})...")
         
-        # For future dates, use today's snapshot as the base
-        snapshot_date_filter = today if is_future else target_date
+        # For future dates, use the as-of snapshot as the base
+        snapshot_date_filter = as_of_snapshot_date if is_future else target_date
         
         # --- Metric 1: 申込 (Applications) ---
         # Cannot predict future applications; only count for past dates
@@ -146,7 +166,7 @@ def compute_kpi_for_dates(cursor, target_dates):
         
         # --- Metric 2: 新規入居者 (New Move-ins) ---
         if is_future:
-            # From today's snapshot, count status 4/5 with scheduled move_in_date
+            # From as-of snapshot, count status 4/5 with scheduled move_in_date
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
                 FROM silver.tenant_room_snapshot_daily
@@ -168,7 +188,7 @@ def compute_kpi_for_dates(cursor, target_dates):
         
         # --- Metric 3: 新規退去者 (New Move-outs) ---
         if is_future:
-            # From today's snapshot, count scheduled moveout_date
+            # From as-of snapshot, count scheduled moveout_date
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) as count
                 FROM silver.tenant_room_snapshot_daily

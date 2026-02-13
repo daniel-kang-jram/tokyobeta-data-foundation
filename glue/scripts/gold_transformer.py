@@ -418,7 +418,7 @@ def ensure_occupancy_kpi_table_exists(cursor):
 
 def compute_occupancy_kpis(connection, lookback_days=3, forward_days=90):
     """
-    Compute occupancy KPIs for today + lookback/forward window.
+    Compute occupancy KPIs for latest snapshot date + lookback/forward window.
     
     Args:
         connection: pymysql connection
@@ -437,11 +437,30 @@ def compute_occupancy_kpis(connection, lookback_days=3, forward_days=90):
         print("COMPUTING OCCUPANCY KPIs")
         print("="*60)
         
-        today = date.today()
-        
-        # Build date range: (today - lookback) to (today + forward)
+        calendar_today = date.today()
+
+        # Use latest available snapshot as the KPI "as-of" anchor.
+        # This avoids misclassifying dates when snapshot ingestion is delayed.
+        cursor.execute("""
+            SELECT MAX(snapshot_date) AS max_snapshot_date
+            FROM silver.tenant_room_snapshot_daily
+        """)
+        snapshot_meta = cursor.fetchone()
+        as_of_snapshot_date = snapshot_meta['max_snapshot_date'] if snapshot_meta else None
+
+        if as_of_snapshot_date is None:
+            raise RuntimeError(
+                "No data found in silver.tenant_room_snapshot_daily. "
+                "Cannot compute occupancy KPIs."
+            )
+
+        snapshot_lag_days = (calendar_today - as_of_snapshot_date).days
+        print(f"Calendar date: {calendar_today}")
+        print(f"As-of snapshot date: {as_of_snapshot_date} (lag: {snapshot_lag_days} day(s))")
+
+        # Build date range around the as-of snapshot date.
         dates_to_process = [
-            today + timedelta(days=i)
+            as_of_snapshot_date + timedelta(days=i)
             for i in range(-lookback_days, forward_days + 1)
         ]
         
@@ -455,8 +474,8 @@ def compute_occupancy_kpis(connection, lookback_days=3, forward_days=90):
         
         # Process each date
         for target_date in dates_to_process:
-            is_future = target_date > today
-            snapshot_date_filter = today if is_future else target_date
+            is_future = target_date > as_of_snapshot_date
+            snapshot_date_filter = as_of_snapshot_date if is_future else target_date
             
             # Metric 1: 申込 (Applications) - only for past dates
             if is_future:
