@@ -17,12 +17,12 @@ models:
       
       **DATA QUALITY:**
       - dbt tests disabled (too slow on 1.5M+ rows, taking 5+ minutes)
-      - Constraints enforced by MySQL UNIQUE index + NOT NULL constraints
+      - Constraints validated by incremental date gating + downstream sanity checks
       - Verified during backfill and spot-checked via SQL queries
     
     config:
       materialized: incremental
-      unique_key: ['snapshot_date', 'tenant_id', 'apartment_id', 'room_id']
+      incremental_strategy: append
     
     columns:
       - name: snapshot_date

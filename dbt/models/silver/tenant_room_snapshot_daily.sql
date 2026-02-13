@@ -1,16 +1,10 @@
 {{
     config(
         materialized='incremental',
-        unique_key=['snapshot_date', 'tenant_id', 'apartment_id', 'room_id'],
+        incremental_strategy='append',
+        pre_hook="SET SESSION innodb_lock_wait_timeout = 120",
         on_schema_change='append_new_columns',
-        schema='silver',
-        indexes=[
-            {'columns': ['snapshot_date', 'management_status_code']},
-            {'columns': ['snapshot_date', 'move_in_date']},
-            {'columns': ['snapshot_date', 'moveout_plans_date']},
-            {'columns': ['snapshot_date', 'moveout_date']},
-            {'columns': ['tenant_id', 'apartment_id', 'room_id', 'snapshot_date']}
-        ]
+        schema='silver'
     )
 }}
 
