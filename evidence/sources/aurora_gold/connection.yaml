@@ -1,0 +1,7 @@
+name: aurora_gold
+type: mysql
+options:
+  host: tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com
+  port: 3306
+  database: gold
+  ssl: Amazon RDS

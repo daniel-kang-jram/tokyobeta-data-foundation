@@ -190,7 +190,7 @@ final AS (
         END AS days_in_status,
         
         -- Metadata
-        sp.        dbt_updated_at
+        sp.dbt_updated_at
         
     FROM status_periods_with_end sp
 )

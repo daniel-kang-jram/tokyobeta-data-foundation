@@ -39,6 +39,9 @@ dbt/.venv/
 .terraform/
 .terraform.lock.hcl
 
+# Node
+node_modules/
+
 # IDE
 .vscode/
 .idea/
@@ -72,3 +75,7 @@ evidence/node_modules/
 evidence/build/
 evidence/.evidence/
 evidence/sources/**/connection.options.yaml
+evidence/screenshots/
+
+# Terraform evidence_hosting build artifacts
+terraform/modules/evidence_hosting/.build/

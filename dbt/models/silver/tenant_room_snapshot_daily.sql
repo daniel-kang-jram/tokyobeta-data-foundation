@@ -1,16 +1,10 @@
 {{
     config(
         materialized='incremental',
-        unique_key=['snapshot_date', 'tenant_id', 'apartment_id', 'room_id'],
+        incremental_strategy='append',
+        pre_hook="SET SESSION innodb_lock_wait_timeout = 120",
         on_schema_change='append_new_columns',
-        schema='silver',
-        indexes=[
-            {'columns': ['snapshot_date', 'management_status_code']},
-            {'columns': ['snapshot_date', 'move_in_date']},
-            {'columns': ['snapshot_date', 'moveout_plans_date']},
-            {'columns': ['snapshot_date', 'moveout_date']},
-            {'columns': ['tenant_id', 'apartment_id', 'room_id', 'snapshot_date']}
-        ]
+        schema='silver'
     )
 }}
 
@@ -80,6 +74,8 @@ WITH all_active_movings AS (
         )
         -- Filter 2: Only movings marked as active (is_moveout = 0)
         AND m.is_moveout = 0
+        -- Filter 3: Exclude cancelled contracts
+        AND COALESCE(m.cancel_flag, 0) = 0
 ),
 
 tenant_room_assignments AS (
@@ -170,8 +166,8 @@ final AS (
 SELECT * FROM final
 
 {% if is_incremental() %}
-  -- Only append rows for dates not yet in the table
-  WHERE snapshot_date NOT IN (SELECT DISTINCT snapshot_date FROM {{ this }})
+  -- Append only when today's snapshot date is newer than the latest loaded date
+  WHERE snapshot_date > COALESCE((SELECT MAX(snapshot_date) FROM {{ this }}), CAST('1900-01-01' AS DATE))
 {% endif %}
 
 ORDER BY snapshot_date, tenant_name, property, room_number

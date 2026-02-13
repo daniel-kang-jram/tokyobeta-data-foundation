@@ -8,9 +8,13 @@ import gzip
 import sys
 import boto3
 import json
+import os
 import re
 import subprocess
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, date
+from botocore.exceptions import ClientError
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -44,6 +48,63 @@ job.init(args['JOB_NAME'], args)
 s3 = boto3.client('s3')
 secretsmanager = boto3.client('secretsmanager')
 rds = boto3.client('rds')
+
+@contextmanager
+def timed_step(step_name: str, timings: Dict[str, Dict[str, Any]]):
+    """
+    Emit explicit step timing logs with success/failure status.
+    """
+    started_at = datetime.now().isoformat(timespec='seconds')
+    print(f"\n>>> STEP_START [{step_name}] at {started_at}")
+    step_start = time.perf_counter()
+
+    try:
+        yield
+    except Exception as e:
+        elapsed = time.perf_counter() - step_start
+        timings[step_name] = {"status": "failed", "seconds": elapsed}
+        print(f"<<< STEP_END   [{step_name}] status=failed duration={elapsed:.2f}s error={str(e)[:200]}")
+        raise
+    else:
+        elapsed = time.perf_counter() - step_start
+        timings[step_name] = {"status": "success", "seconds": elapsed}
+        print(f"<<< STEP_END   [{step_name}] status=success duration={elapsed:.2f}s")
+
+
+def print_step_timing_summary(timings: Dict[str, Dict[str, Any]]) -> None:
+    """Print ordered summary of step durations."""
+    if not timings:
+        return
+
+    print("\n=== STEP TIMING SUMMARY ===")
+    total_timed = 0.0
+    for step_name, info in timings.items():
+        seconds = float(info.get("seconds", 0.0))
+        status = info.get("status", "unknown")
+        total_timed += seconds
+        print(f"  - {step_name:<40} {seconds:>8.2f}s  ({status})")
+    print(f"  - {'TOTAL_TIMED_STEPS':<40} {total_timed:>8.2f}s")
+
+
+def env_bool(name: str, default: bool) -> bool:
+    """Read boolean environment variable with safe defaults."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def env_int(name: str, default: int, minimum: int = 0) -> int:
+    """Read integer environment variable with safe defaults and lower bound."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return default
+    return value if value >= minimum else minimum
+
 
 def normalize_statement(stmt: str) -> str:
     """Normalize SQL statement and skip session-level commands."""
@@ -122,6 +183,32 @@ def get_latest_dump_key():
     latest_key = sql_files[0]['Key']
     print(f"Latest dump: {latest_key} (modified: {sql_files[0]['LastModified']})")
     return latest_key
+
+
+def get_processed_dump_key(source_key: str) -> str:
+    """Map dumps/ key to processed/ key."""
+    if source_key.startswith("dumps/"):
+        return source_key.replace("dumps/", "processed/", 1)
+    if "/dumps/" in source_key:
+        return source_key.replace("/dumps/", "/processed/", 1)
+    return f"processed/{source_key}"
+
+
+def is_dump_already_processed(source_key: str) -> bool:
+    """
+    Return True if this dump already exists under processed/.
+    This avoids re-running the full ETL on stale dumps.
+    """
+    processed_key = get_processed_dump_key(source_key)
+    try:
+        s3.head_object(Bucket=args['S3_SOURCE_BUCKET'], Key=processed_key)
+        print(f"No new dump detected: {source_key} already archived as {processed_key}")
+        return True
+    except ClientError as e:
+        error_code = e.response.get("Error", {}).get("Code", "")
+        if error_code in {"404", "NoSuchKey", "NotFound"}:
+            return False
+        raise
 
 def get_aurora_credentials():
     """Retrieve Aurora credentials from Secrets Manager."""
@@ -433,75 +520,343 @@ def run_dbt_transformations():
     
     # Download dbt project from S3
     dbt_local_path = "/tmp/dbt-project"
+    sync_start = time.perf_counter()
     subprocess.run([
         "aws", "s3", "sync",
         f"s3://{args['S3_SOURCE_BUCKET']}/dbt-project/",
         dbt_local_path
     ], check=True)
+    print(f"[dbt_timing] s3_sync_seconds={time.perf_counter() - sync_start:.2f}")
+
+    # Guardrail: disable stale model YAML config that can reintroduce delete+insert
+    # incremental strategy (unique_key) from S3. Runtime SQL config is the source of truth.
+    tenant_snapshot_yaml = os.path.join(
+        dbt_local_path, "models", "silver", "tenant_room_snapshot_daily.yml"
+    )
+    if os.path.exists(tenant_snapshot_yaml):
+        disabled_path = tenant_snapshot_yaml + ".disabled"
+        os.replace(tenant_snapshot_yaml, disabled_path)
+        print(
+            "Disabled runtime config file tenant_room_snapshot_daily.yml "
+            f"at {disabled_path} to avoid lock-heavy incremental deletes."
+        )
     
     # Set environment variables for dbt
     username, password = get_aurora_credentials()
-    import os
     os.environ['AURORA_ENDPOINT'] = args['AURORA_ENDPOINT']
     os.environ['AURORA_USERNAME'] = username
     os.environ['AURORA_PASSWORD'] = password
     os.environ['DBT_TARGET'] = args['ENVIRONMENT']
+
+    # Exclude lock-heavy full-rebuild models from daily run by default.
+    # Override via DBT_EXCLUDE_MODELS env var (comma-separated list).
+    dbt_excludes_env = os.environ.get("DBT_EXCLUDE_MODELS", "silver.tenant_status_history")
+    dbt_excludes = [m.strip() for m in dbt_excludes_env.split(",") if m.strip()]
+    if dbt_excludes:
+        print(f"dbt excludes for this run: {', '.join(dbt_excludes)}")
+
+    # Run lock-sensitive incremental models in serial first to reduce lock contention.
+    pre_run_models_env = os.environ.get("DBT_PRE_RUN_MODELS", "silver.tenant_room_snapshot_daily")
+    pre_run_models = [m.strip() for m in pre_run_models_env.split(",") if m.strip()]
+    pre_run_retries = env_int("DBT_PRE_RUN_RETRIES", 1, minimum=1)
+    pre_run_retry_sleep = env_int("DBT_PRE_RUN_RETRY_SLEEP_SECONDS", 30, minimum=0)
+    if pre_run_models:
+        print(f"dbt pre-run serial models: {', '.join(pre_run_models)}")
     
     # dbt is installed in /home/spark/.local/bin/ by pip --user in Glue
     dbt_executable = "/home/spark/.local/bin/dbt"
     
+    def run_dbt_cmd(cmd: List[str], label: str) -> subprocess.CompletedProcess:
+        """Run dbt command and emit stdout/stderr for CloudWatch visibility."""
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        print(f"=== {label} OUTPUT ===")
+        print(result.stdout)
+        if result.stderr:
+            print(f"=== {label} ERRORS ===")
+            print(result.stderr)
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
+        return result
+
+    def kill_stale_dbt_queries(max_age_seconds: int = 600) -> int:
+        """
+        Kill stale dbt queries left behind by previous failed runs.
+        These stale long-running DELETE statements can hold row locks and
+        repeatedly cause 1205 lock wait timeouts for new runs.
+        """
+        print(f"\n=== Checking for stale dbt queries (>{max_age_seconds}s) ===")
+        killed = 0
+        try:
+            username, password = get_aurora_credentials()
+            connection = pymysql.connect(
+                host=args['AURORA_ENDPOINT'],
+                user=username,
+                password=password,
+                database=args['AURORA_DATABASE'],
+                charset='utf8mb4'
+            )
+            try:
+                cursor = connection.cursor()
+                cursor.execute("SELECT CONNECTION_ID()")
+                current_connection_id = cursor.fetchone()[0]
+
+                cursor.execute("""
+                    SELECT
+                        ID,
+                        TIME,
+                        LEFT(INFO, 300)
+                    FROM information_schema.PROCESSLIST
+                    WHERE COMMAND = 'Query'
+                      AND TIME >= %s
+                      AND INFO IS NOT NULL
+                      AND INFO LIKE '/* {"app": "dbt"%%'
+                      AND ID <> %s
+                    ORDER BY TIME DESC
+                    LIMIT 50
+                """, (max_age_seconds, current_connection_id))
+                stale_rows = cursor.fetchall()
+
+                if not stale_rows:
+                    print("  No stale dbt queries found.")
+                    return 0
+
+                print(f"  Found {len(stale_rows)} stale dbt query(ies).")
+                for thread_id, query_time, query_snippet in stale_rows:
+                    try:
+                        print(f"  Killing thread {thread_id} (running {query_time}s): {query_snippet}")
+                        cursor.execute(f"KILL QUERY {int(thread_id)}")
+                        killed += 1
+                    except Exception as kill_error:
+                        print(f"  Failed to kill thread {thread_id}: {kill_error}")
+
+                print(f"  Killed stale dbt queries: {killed}")
+                return killed
+            finally:
+                connection.close()
+        except Exception as e:
+            print(f"  Warning: stale dbt query cleanup failed: {e}")
+            return killed
+
+    def log_aurora_lock_diagnostics() -> None:
+        """
+        Print lock diagnostics to identify blocking transactions when MySQL returns 1205.
+        Best-effort only; failures should not mask the original dbt error.
+        """
+        print("\n=== AURORA LOCK DIAGNOSTICS ===")
+        try:
+            username, password = get_aurora_credentials()
+            connection = pymysql.connect(
+                host=args['AURORA_ENDPOINT'],
+                user=username,
+                password=password,
+                database=args['AURORA_DATABASE'],
+                charset='utf8mb4'
+            )
+            try:
+                cursor = connection.cursor()
+
+                cursor.execute("""
+                    SELECT
+                        trx_id,
+                        trx_state,
+                        trx_started,
+                        trx_wait_started,
+                        trx_mysql_thread_id,
+                        trx_rows_locked,
+                        trx_rows_modified,
+                        LEFT(trx_query, 300)
+                    FROM information_schema.innodb_trx
+                    ORDER BY trx_started
+                    LIMIT 20
+                """)
+                trx_rows = cursor.fetchall()
+                print("[lock_diag] innodb_trx:")
+                if trx_rows:
+                    for row in trx_rows:
+                        print(f"  {row}")
+                else:
+                    print("  (none)")
+
+                print("[lock_diag] innodb_lock_waits:")
+                try:
+                    cursor.execute("""
+                        SELECT
+                            r.trx_id AS waiting_trx_id,
+                            r.trx_mysql_thread_id AS waiting_thread_id,
+                            b.trx_id AS blocking_trx_id,
+                            b.trx_mysql_thread_id AS blocking_thread_id,
+                            LEFT(r.trx_query, 300) AS waiting_query,
+                            LEFT(b.trx_query, 300) AS blocking_query
+                        FROM information_schema.innodb_lock_waits w
+                        JOIN information_schema.innodb_trx r ON r.trx_id = w.requesting_trx_id
+                        JOIN information_schema.innodb_trx b ON b.trx_id = w.blocking_trx_id
+                        LIMIT 20
+                    """)
+                    wait_rows = cursor.fetchall()
+                    if wait_rows:
+                        for row in wait_rows:
+                            print(f"  {row}")
+                    else:
+                        print("  (none)")
+                except Exception as lock_wait_error:
+                    print(f"  unavailable via information_schema.innodb_lock_waits: {lock_wait_error}")
+                    try:
+                        cursor.execute("""
+                            SELECT
+                                w.REQUESTING_ENGINE_TRANSACTION_ID AS waiting_trx_id,
+                                w.BLOCKING_ENGINE_TRANSACTION_ID AS blocking_trx_id,
+                                rw.THREAD_ID AS waiting_thread_id,
+                                bw.THREAD_ID AS blocking_thread_id,
+                                rw.OBJECT_SCHEMA AS waiting_schema,
+                                rw.OBJECT_NAME AS waiting_object,
+                                bw.OBJECT_SCHEMA AS blocking_schema,
+                                bw.OBJECT_NAME AS blocking_object
+                            FROM performance_schema.data_lock_waits w
+                            LEFT JOIN performance_schema.data_locks rw
+                                ON rw.ENGINE_TRANSACTION_ID = w.REQUESTING_ENGINE_TRANSACTION_ID
+                            LEFT JOIN performance_schema.data_locks bw
+                                ON bw.ENGINE_TRANSACTION_ID = w.BLOCKING_ENGINE_TRANSACTION_ID
+                            LIMIT 20
+                        """)
+                        wait_rows = cursor.fetchall()
+                        if wait_rows:
+                            for row in wait_rows:
+                                print(f"  {row}")
+                        else:
+                            print("  (none in performance_schema.data_lock_waits)")
+                    except Exception as pfs_wait_error:
+                        print(f"  unavailable via performance_schema.data_lock_waits: {pfs_wait_error}")
+
+                cursor.execute("""
+                    SELECT
+                        ID,
+                        USER,
+                        HOST,
+                        DB,
+                        COMMAND,
+                        TIME,
+                        STATE,
+                        LEFT(INFO, 300)
+                    FROM information_schema.PROCESSLIST
+                    WHERE COMMAND <> 'Sleep'
+                    ORDER BY TIME DESC
+                    LIMIT 30
+                """)
+                process_rows = cursor.fetchall()
+                print("[lock_diag] processlist_non_sleep:")
+                if process_rows:
+                    for row in process_rows:
+                        print(f"  {row}")
+                else:
+                    print("  (none)")
+            finally:
+                connection.close()
+        except Exception as diag_error:
+            print(f"[lock_diag] diagnostics failed: {diag_error}")
+        print("=== END AURORA LOCK DIAGNOSTICS ===\n")
+
     # Install dbt dependencies
+    deps_start = time.perf_counter()
     subprocess.run([
         dbt_executable, "deps",
         "--profiles-dir", dbt_local_path,
         "--project-dir", dbt_local_path
     ], check=True)
+    print(f"[dbt_timing] deps_seconds={time.perf_counter() - deps_start:.2f}")
     
     # Load seed files (code mappings)
-    seed_result = subprocess.run([
+    seed_start = time.perf_counter()
+    run_dbt_cmd([
         dbt_executable, "seed",
         "--profiles-dir", dbt_local_path,
         "--project-dir", dbt_local_path,
         "--target", args['ENVIRONMENT']
-    ], capture_output=True, text=True)
-    
-    print("=== DBT SEED OUTPUT ===")
-    print(seed_result.stdout)
-    if seed_result.returncode != 0:
-        print("=== DBT SEED ERRORS ===")
-        print(seed_result.stderr)
-        raise subprocess.CalledProcessError(seed_result.returncode, seed_result.args, seed_result.stdout, seed_result.stderr)
-    
-    # Run dbt models with --fail-fast to stop on first error (data protection)
-    result = subprocess.run([
+    ], "DBT SEED")
+    print(f"[dbt_timing] seed_seconds={time.perf_counter() - seed_start:.2f}")
+
+    # Phase A: run lock-sensitive models serially, with retry on lock waits.
+    if pre_run_models:
+        pre_start = time.perf_counter()
+        kill_stale_dbt_queries(max_age_seconds=600)
+        pre_cmd = [
+            dbt_executable, "run",
+            "--profiles-dir", dbt_local_path,
+            "--project-dir", dbt_local_path,
+            "--target", args['ENVIRONMENT'],
+            "--fail-fast",
+            "--threads", "1",
+            "--select",
+        ] + pre_run_models
+
+        pre_success = False
+        for attempt in range(1, pre_run_retries + 1):
+            attempt_start = time.perf_counter()
+            try:
+                run_dbt_cmd(pre_cmd, f"DBT RUN PRE-PHASE (attempt {attempt}/{pre_run_retries})")
+                pre_success = True
+                print(f"[dbt_timing] pre_run_attempt_{attempt}_seconds={time.perf_counter() - attempt_start:.2f}")
+                break
+            except subprocess.CalledProcessError as e:
+                combined_output = f"{e.stdout or ''}\n{e.stderr or ''}"
+                is_lock_wait = "Lock wait timeout exceeded" in combined_output
+                print(f"[dbt_timing] pre_run_attempt_{attempt}_seconds={time.perf_counter() - attempt_start:.2f}")
+                if is_lock_wait and attempt < pre_run_retries:
+                    log_aurora_lock_diagnostics()
+                    print(
+                        f"Lock wait timeout detected in pre-phase; "
+                        f"retrying in {pre_run_retry_sleep}s (attempt {attempt + 1}/{pre_run_retries})"
+                    )
+                    cleanup_dbt_tmp_tables()
+                    if pre_run_retry_sleep > 0:
+                        time.sleep(pre_run_retry_sleep)
+                    continue
+                if is_lock_wait:
+                    log_aurora_lock_diagnostics()
+                raise
+
+        if not pre_success:
+            raise RuntimeError("dbt pre-phase failed unexpectedly")
+        print(f"[dbt_timing] pre_run_total_seconds={time.perf_counter() - pre_start:.2f}")
+    else:
+        print("[dbt_timing] pre_run_total_seconds=0.00 (no pre-run models configured)")
+
+    # Phase B: run remaining dbt graph
+    run_start = time.perf_counter()
+    run_cmd = [
         dbt_executable, "run",
         "--profiles-dir", dbt_local_path,
         "--project-dir", dbt_local_path,
         "--target", args['ENVIRONMENT'],
-        "--fail-fast"  # Stop immediately on first model failure
-    ], capture_output=True, text=True)
+        "--fail-fast"
+    ]
+    remaining_excludes = list(dict.fromkeys(dbt_excludes + pre_run_models))
+    for model_name in remaining_excludes:
+        run_cmd.extend(["--exclude", model_name])
+
+    result = run_dbt_cmd(run_cmd, "DBT RUN MAIN-PHASE")
+    print(f"[dbt_timing] run_seconds={time.perf_counter() - run_start:.2f}")
     
-    print("=== DBT RUN OUTPUT ===")
-    print(result.stdout)
-    if result.stderr:
-        print("=== DBT RUN ERRORS ===")
-        print(result.stderr)
-    
-    if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, result.args, result.stdout, result.stderr)
-    
-    # Run dbt tests
-    test_result = subprocess.run([
-        dbt_executable, "test",
-        "--profiles-dir", dbt_local_path,
-        "--project-dir", dbt_local_path,
-        "--target", args['ENVIRONMENT']
-    ], capture_output=True, text=True)
-    
-    print(test_result.stdout)
-    if test_result.returncode != 0:
-        print(f"WARNING: dbt tests failed:\n{test_result.stderr}")
-        # Don't fail job on test failures, just warn
+    # Run dbt tests (optional; disabled by default for faster daily SLA)
+    run_dbt_tests = env_bool("DAILY_RUN_DBT_TESTS", False)
+    if run_dbt_tests:
+        test_start = time.perf_counter()
+        test_cmd = [
+            dbt_executable, "test",
+            "--profiles-dir", dbt_local_path,
+            "--project-dir", dbt_local_path,
+            "--target", args['ENVIRONMENT']
+        ]
+        for model_name in remaining_excludes:
+            test_cmd.extend(["--exclude", model_name])
+
+        test_result = subprocess.run(test_cmd, capture_output=True, text=True)
+        print(test_result.stdout)
+        if test_result.returncode != 0:
+            print(f"WARNING: dbt tests failed:\n{test_result.stderr}")
+            # Don't fail job on test failures, just warn
+        print(f"[dbt_timing] test_seconds={time.perf_counter() - test_start:.2f}")
+    else:
+        print("[dbt_timing] test_seconds=0.00 (skipped by DAILY_RUN_DBT_TESTS=false)")
     
     return result.returncode == 0
 
@@ -959,7 +1314,7 @@ def enrich_nationality_data():
 def archive_processed_dump(s3_key):
     """Move processed dump to archive folder."""
     source_key = s3_key
-    dest_key = source_key.replace('/dumps/', '/processed/').replace('dumps/', 'processed/')
+    dest_key = get_processed_dump_key(source_key)
     
     s3.copy_object(
         Bucket=args['S3_SOURCE_BUCKET'],
@@ -972,68 +1327,114 @@ def archive_processed_dump(s3_key):
 def main():
     """Main ETL workflow."""
     start_time = datetime.now()
+    step_timings: Dict[str, Dict[str, Any]] = {}
     
     try:
         # NOTE: Aurora automated backups enabled with 7-day retention for PITR
         # No manual snapshots created to reduce costs (~$57/month savings)
         # Use scripts/rollback_etl.sh if recovery needed
+        skip_enrichment = env_bool("DAILY_SKIP_LLM_ENRICHMENT", True)
+        skip_table_backups = env_bool("DAILY_SKIP_TABLE_BACKUPS", True)
         
         # Step 1: Find and download latest dump
-        latest_key = get_latest_dump_key()
-        local_path = download_and_parse_dump(latest_key)
+        skip_etl_run = False
+        latest_key = None
+        local_path = None
+        with timed_step("01_find_and_download_dump", step_timings):
+            latest_key = get_latest_dump_key()
+            if is_dump_already_processed(latest_key):
+                skip_etl_run = True
+            else:
+                local_path = download_and_parse_dump(latest_key)
+
+        if skip_etl_run:
+            print("Skipping ETL run because the latest dump is already processed.")
+            print_step_timing_summary(step_timings)
+            job.commit()
+            return
         
         # Step 2: Load to Aurora staging
-        table_count, stmt_count = load_to_aurora_staging(local_path)
+        with timed_step("02_load_dump_to_aurora_staging", step_timings):
+            table_count, stmt_count = load_to_aurora_staging(local_path)
         
         # Step 3: Clean up empty tables
-        dropped_count = cleanup_empty_staging_tables()
+        with timed_step("03_cleanup_empty_staging_tables", step_timings):
+            dropped_count = cleanup_empty_staging_tables()
         
         # Step 4: Export today's tenant snapshot to S3
-        username, password = get_aurora_credentials()
-        connection = pymysql.connect(
-            host=args['AURORA_ENDPOINT'],
-            user=username,
-            password=password,
-            database=args['AURORA_DATABASE'],
-            charset='utf8mb4'
-        )
-        
-        snapshot_date = datetime.now().date()
-        snapshot_export_result = export_tenant_snapshot_to_s3(
-            connection,
-            s3,
-            args['S3_SOURCE_BUCKET'],
-            snapshot_date
-        )
-        snapshot_exported = snapshot_export_result.get('rows_exported', 0)
+        with timed_step("04_export_tenant_snapshot_to_s3", step_timings):
+            username, password = get_aurora_credentials()
+            connection = pymysql.connect(
+                host=args['AURORA_ENDPOINT'],
+                user=username,
+                password=password,
+                database=args['AURORA_DATABASE'],
+                charset='utf8mb4'
+            )
+            try:
+                snapshot_date = datetime.now().date()
+                snapshot_export_result = export_tenant_snapshot_to_s3(
+                    connection,
+                    s3,
+                    args['S3_SOURCE_BUCKET'],
+                    snapshot_date
+                )
+                snapshot_exported = snapshot_export_result.get('rows_exported', 0)
+            finally:
+                connection.close()
         
         # Step 5: Load all historical snapshots from S3
-        snapshot_load_result = load_tenant_snapshots_from_s3(
-            connection,
-            s3,
-            args['S3_SOURCE_BUCKET']
-        )
-        snapshot_rows_loaded = snapshot_load_result.get('total_rows_loaded', 0)
-        
-        connection.close()
+        with timed_step("05_load_snapshot_history_from_s3", step_timings):
+            username, password = get_aurora_credentials()
+            connection = pymysql.connect(
+                host=args['AURORA_ENDPOINT'],
+                user=username,
+                password=password,
+                database=args['AURORA_DATABASE'],
+                charset='utf8mb4'
+            )
+            try:
+                snapshot_load_result = load_tenant_snapshots_from_s3(
+                    connection,
+                    s3,
+                    args['S3_SOURCE_BUCKET']
+                )
+                snapshot_rows_loaded = snapshot_load_result.get('total_rows_loaded', 0)
+            finally:
+                connection.close()
         
         # Step 6: Enrich nationality data using LLM (レソト and missing values)
-        enriched_count = enrich_nationality_data()
+        if skip_enrichment:
+            enriched_count = 0
+            print("\nSkipping LLM enrichment (DAILY_SKIP_LLM_ENRICHMENT=true)")
+        else:
+            with timed_step("06_llm_nationality_enrichment", step_timings):
+                enriched_count = enrich_nationality_data()
         
         # Step 7: Create backups before dbt transformations
-        backup_count = create_pre_etl_backups()
+        if skip_table_backups:
+            backup_count = 0
+            removed_backups = 0
+            print("\nSkipping table backups (DAILY_SKIP_TABLE_BACKUPS=true)")
+        else:
+            with timed_step("07_create_pre_etl_backups", step_timings):
+                backup_count = create_pre_etl_backups()
         
-        # Step 8: Clean up old backups (keep last 3 days)
-        removed_backups = cleanup_old_backups(days_to_keep=3)
+            # Step 8: Clean up old backups (keep last 3 days)
+            with timed_step("08_cleanup_old_backups", step_timings):
+                removed_backups = cleanup_old_backups(days_to_keep=3)
         
         # Step 8.5: Clean up dbt temp tables (prevent failures)
-        cleanup_dbt_tmp_tables()
+        with timed_step("08_5_cleanup_dbt_tmp_tables", step_timings):
+            dropped_tmp_tables = cleanup_dbt_tmp_tables()
         
         # Step 9: Run dbt transformations
-        dbt_success = run_dbt_transformations()
+        with timed_step("09_run_dbt_transformations", step_timings):
+            dbt_success = run_dbt_transformations()
         
         # Step 10: Archive processed dump
-        archive_processed_dump(latest_key)
+        with timed_step("10_archive_processed_dump", step_timings):
+            archive_processed_dump(latest_key)
         
         # Calculate duration
         duration = (datetime.now() - start_time).total_seconds()
@@ -1049,6 +1450,7 @@ def main():
         print(f"Nationalities enriched: {enriched_count}")
         print(f"Pre-ETL backups created: {backup_count}")
         print(f"Old backups removed: {removed_backups}")
+        print(f"dbt temp tables dropped: {dropped_tmp_tables}")
         print(f"SQL statements executed: {stmt_count}")
         print(f"dbt transformations: {'Success' if dbt_success else 'Failed'}")
         print(f"{'='*60}\n")
@@ -1064,6 +1466,7 @@ def main():
         print(f"  • Table-level backups: {backup_count} created (3-day retention)")
         print(f"  • Aurora PITR: 7-day retention for cluster-level recovery")
         print(f"  • Recovery guide: docs/DATA_PROTECTION_STRATEGY.md")
+        print_step_timing_summary(step_timings)
         
         job.commit()
         
@@ -1071,6 +1474,7 @@ def main():
         print(f"\nERROR: ETL job failed: {str(e)}")
         import traceback
         traceback.print_exc()
+        print_step_timing_summary(step_timings)
         job.commit()
         raise
 

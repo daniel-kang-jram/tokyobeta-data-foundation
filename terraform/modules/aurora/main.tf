@@ -6,6 +6,11 @@ resource "aws_db_subnet_group" "aurora" {
   name       = "tokyobeta-${var.environment}-aurora-public-subnet-group"
   subnet_ids = var.subnet_ids
 
+  # Never modify subnet membership once in use by the cluster.
+  lifecycle {
+    ignore_changes = [subnet_ids]
+  }
+
   tags = {
     Name        = "tokyobeta-${var.environment}-aurora-public-subnet-group"
     Environment = var.environment
