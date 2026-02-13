@@ -1,9 +1,8 @@
 import pathlib
 import subprocess
 import sys
+from datetime import date
 from unittest.mock import Mock
-
-from botocore.exceptions import ClientError
 
 
 SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1] / "scripts"
@@ -49,27 +48,16 @@ def test_get_processed_dump_key_maps_dump_prefixes():
     assert daily_etl.get_processed_dump_key("gghouse_20260213.sql") == "processed/gghouse_20260213.sql"
 
 
-def test_is_dump_already_processed_true(monkeypatch):
-    mock_s3 = Mock()
-    mock_s3.head_object.return_value = {}
-
-    monkeypatch.setattr(daily_etl, "s3", mock_s3)
-    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "unit-test-bucket")
-
-    assert daily_etl.is_dump_already_processed("dumps/gghouse_20260213.sql") is True
+def test_runtime_date_reads_valid_env(monkeypatch):
+    monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-13")
+    result = daily_etl.runtime_date("DAILY_TARGET_DATE", date(2026, 2, 1))
+    assert result == date(2026, 2, 13)
 
 
-def test_is_dump_already_processed_false_for_missing_key(monkeypatch):
-    mock_s3 = Mock()
-    mock_s3.head_object.side_effect = ClientError(
-        {"Error": {"Code": "404", "Message": "Not Found"}},
-        "HeadObject",
-    )
-
-    monkeypatch.setattr(daily_etl, "s3", mock_s3)
-    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "unit-test-bucket")
-
-    assert daily_etl.is_dump_already_processed("dumps/gghouse_20260213.sql") is False
+def test_runtime_date_falls_back_on_invalid(monkeypatch):
+    monkeypatch.setenv("DAILY_TARGET_DATE", "bad-date")
+    result = daily_etl.runtime_date("DAILY_TARGET_DATE", date(2026, 2, 1))
+    assert result == date(2026, 2, 1)
 
 
 def test_run_dbt_transformations_pre_phase_then_main_phase(monkeypatch):
@@ -80,8 +68,9 @@ def test_run_dbt_transformations_pre_phase_then_main_phase(monkeypatch):
     monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "unit-test-bucket")
     monkeypatch.setitem(daily_etl.args, "AURORA_ENDPOINT", "test.cluster.amazonaws.com")
     monkeypatch.setitem(daily_etl.args, "ENVIRONMENT", "prod")
-    monkeypatch.setenv("DBT_EXCLUDE_MODELS", "silver.tenant_status_history")
+    monkeypatch.setenv("DBT_EXCLUDE_MODELS", "")
     monkeypatch.setenv("DBT_PRE_RUN_MODELS", "silver.tenant_room_snapshot_daily")
+    monkeypatch.setenv("DBT_POST_RUN_MODELS", "silver.tenant_status_history")
     monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
 
     def fake_run(cmd, check=False, capture_output=False, text=False):
@@ -101,7 +90,7 @@ def test_run_dbt_transformations_pre_phase_then_main_phase(monkeypatch):
     assert daily_etl.run_dbt_transformations() is True
 
     run_commands = [cmd for cmd in calls if len(cmd) > 1 and cmd[0].endswith("/dbt") and cmd[1] == "run"]
-    assert len(run_commands) == 2
+    assert len(run_commands) == 3
 
     pre_phase = run_commands[0]
     assert "--threads" in pre_phase
@@ -113,6 +102,39 @@ def test_run_dbt_transformations_pre_phase_then_main_phase(monkeypatch):
     assert "--exclude" in main_phase
     assert "silver.tenant_room_snapshot_daily" in main_phase
     assert "silver.tenant_status_history" in main_phase
+
+    post_phase = run_commands[2]
+    assert "--threads" in post_phase
+    assert "1" in post_phase
+    assert "--select" in post_phase
+    assert "silver.tenant_status_history" in post_phase
+
+
+def test_run_dbt_transformations_default_skips_post_run(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(daily_etl, "get_aurora_credentials", lambda: ("user", "pass"))
+    monkeypatch.setattr(daily_etl, "cleanup_dbt_tmp_tables", lambda: 0)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "unit-test-bucket")
+    monkeypatch.setitem(daily_etl.args, "AURORA_ENDPOINT", "test.cluster.amazonaws.com")
+    monkeypatch.setitem(daily_etl.args, "ENVIRONMENT", "prod")
+    monkeypatch.setenv("DBT_EXCLUDE_MODELS", "")
+    monkeypatch.setenv("DBT_PRE_RUN_MODELS", "silver.tenant_room_snapshot_daily")
+    monkeypatch.delenv("DBT_POST_RUN_MODELS", raising=False)
+    monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
+
+    def fake_run(cmd, check=False, capture_output=False, text=False):
+        calls.append(cmd)
+        if check:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+    monkeypatch.setattr(daily_etl.subprocess, "run", fake_run)
+
+    assert daily_etl.run_dbt_transformations() is True
+
+    run_commands = [cmd for cmd in calls if len(cmd) > 1 and cmd[0].endswith("/dbt") and cmd[1] == "run"]
+    assert len(run_commands) == 2
 
 
 def test_run_dbt_transformations_retries_lock_wait(monkeypatch):
@@ -128,6 +150,7 @@ def test_run_dbt_transformations_retries_lock_wait(monkeypatch):
     monkeypatch.setitem(daily_etl.args, "ENVIRONMENT", "prod")
     monkeypatch.setenv("DBT_EXCLUDE_MODELS", "silver.tenant_status_history")
     monkeypatch.setenv("DBT_PRE_RUN_MODELS", "silver.tenant_room_snapshot_daily")
+    monkeypatch.setenv("DBT_POST_RUN_MODELS", "")
     monkeypatch.setenv("DBT_PRE_RUN_RETRIES", "2")
     monkeypatch.setenv("DBT_PRE_RUN_RETRY_SLEEP_SECONDS", "0")
     monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
@@ -152,3 +175,18 @@ def test_run_dbt_transformations_retries_lock_wait(monkeypatch):
     assert daily_etl.run_dbt_transformations() is True
     assert pre_attempts["count"] == 2
     cleanup_mock.assert_called_once()
+
+
+def test_reset_staging_tables_drops_existing(monkeypatch):
+    cursor = Mock()
+    cursor.fetchall.return_value = [("tenants",), ("rooms",)]
+
+    dropped = daily_etl.reset_staging_tables(cursor)
+
+    assert dropped == 2
+    executed_sql = [call.args[0] for call in cursor.execute.call_args_list]
+    assert any("FROM information_schema.tables" in sql for sql in executed_sql)
+    assert "SET FOREIGN_KEY_CHECKS = 0" in executed_sql
+    assert "DROP TABLE IF EXISTS `staging`.`tenants`" in executed_sql
+    assert "DROP TABLE IF EXISTS `staging`.`rooms`" in executed_sql
+    assert "SET FOREIGN_KEY_CHECKS = 1" in executed_sql

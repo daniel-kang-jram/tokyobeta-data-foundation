@@ -151,6 +151,84 @@ The `inquiries_count` metric in `gold.daily_activity_summary` is severely underc
 
 ---
 
+## Incident #5: Occupancy Data Discrepancy vs Miyago Report (Feb 11, 2026)
+
+**Date:** 2026-02-11  
+**Detected:** 2026-02-11 17:30 JST (external report), investigated on 2026-02-13  
+**Severity:** High  
+**Status:** ✅ Resolved (Logic fixes implemented)
+
+### Summary
+
+Miyago (GG House) reported the following values on 2026-02-11 17:30:
+- Feb move-ins: 304 vs our 363 (+59)
+- Mar move-ins: 131 vs our 102 (-29)
+- Feb move-outs: 549 vs our 511 (-38)
+- Mar move-outs: 393 vs our 385 (-8)
+- Feb 28 move-outs: 139 vs our 139 (exact match)
+
+We reproduced our numbers directly from `gold.occupancy_daily_metrics` and investigated both occupancy and contract pipelines. The discrepancy was primarily caused by snapshot timing lag and KPI filter semantics, not by a large cancellation population.
+
+### Findings
+
+1. **Our KPI numbers reproduced exactly from `gold.occupancy_daily_metrics`.**
+   - 2026-02: move-ins 363, move-outs 511
+   - 2026-03: move-ins 102, move-outs 385
+   - 2026-02-28 move-outs: 139
+
+2. **Snapshot timing lag was significant at investigation time.**
+   - Current date during investigation: 2026-02-13
+   - Latest `silver.tenant_room_snapshot_daily.snapshot_date`: 2026-02-10
+   - Lag: 3 days
+
+3. **Cancellation impact was small for the target population.**
+   - Feb move-ins on as-of snapshot (status 4/5): 171
+   - Cancelled inside that set: 2
+   - Conclusion: cancellation inclusion alone does not explain +59.
+
+4. **Move-out date field mismatch was not a major driver on as-of snapshot.**
+   - As-of snapshot 2026-02-10:
+     - Feb `moveout_date`: 405
+     - Feb `moveout_plans_date`: 2
+     - Feb union (`OR`): 405
+     - Mar `moveout_date`: 385
+     - Mar `moveout_plans_date`: 0
+     - Mar union (`OR`): 385
+   - Conclusion: `moveout_plans_date` adds near-zero in this comparison window.
+
+5. **Move-in KPI semantics are hybrid and can diverge from external definitions.**
+   - Current logic mixes:
+     - Historical dates: status IN (4,5,6,7,9) with `move_in_date = snapshot_date`
+     - Future dates: status IN (4,5) from single as-of snapshot
+   - This hybrid behavior can create mismatches depending on counterpart definition of "入居予定".
+
+### Resolution
+
+Implemented changes:
+
+1. **Anchored KPI computation to latest available snapshot date**
+   - Updated `glue/scripts/gold_transformer.py`
+   - Updated `glue/scripts/occupancy_kpi_updater.py`
+   - Replaced wall-clock `today` anchoring with `MAX(snapshot_date)` anchoring to prevent stale-snapshot misclassification and zeroing.
+
+2. **Promoted occupancy KPI upsert into daily ETL with explicit runtime toggles**
+   - Updated `glue/scripts/daily_etl.py`
+   - Added `gold.occupancy_daily_metrics` upsert step (lookback/forward window around the as-of snapshot date)
+   - Added runtime flags to enable/disable the step and tune the backfill window
+
+### Validation
+
+- Added/updated unit tests in `glue/tests/test_daily_etl.py` for the new runtime parsing and dbt phase behavior.
+- Confirmed KPI anchoring uses `MAX(snapshot_date)` to avoid stale snapshot misclassification.
+- Logic patches are in code; production table values will reflect updated behavior after next dbt/Glue run.
+
+### Prevention Measures
+
+1. Use `MAX(snapshot_date)` as KPI as-of anchor for all future projections.
+2. Keep occupancy KPI future projections anchored to a single as-of snapshot (not wall-clock date) when snapshot ingestion can lag.
+
+---
+
 ## Template for Future Incidents
 
 **Date:**  

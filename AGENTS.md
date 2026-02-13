@@ -1,0 +1,708 @@
+# Real Estate BI Dashboard - Cursor Rules
+
+## Core Principles
+
+### 1. Test-Driven Development (TDD) - STRICTLY ENFORCED
+- **RED-GREEN-REFACTOR cycle is MANDATORY**
+- ALWAYS write tests BEFORE implementation code
+- For any new function, class, or module:
+  1. Write the test first (it should fail)
+  2. Run the test to confirm it fails
+  3. Write minimal code to make it pass
+  4. Refactor while keeping tests green
+- Never commit untested code
+- Test coverage must be ≥ 80% for all Python modules
+- Each PR must include tests for new functionality
+
+### 2. Minimal Change Philosophy
+- Don't touch irrelevant parts of the codebase
+- Don't break/change existing code unless absolutely necessary
+- Make surgical, focused changes to fix bugs or add features
+- Verify that edits don't involuntarily affect existing modules
+- Before modifying, understand all dependencies and downstream impacts
+
+## Project Structure & Conventions
+
+### Directory Organization
+```
+terraform/          # Infrastructure as Code
+  modules/          # Reusable Terraform modules
+  environments/     # Dev/Prod environment configs
+lambda/             # Python Lambda functions
+  etl_processor/    # Main ETL application
+    tests/          # Test files (pytest)
+    transformers/   # Data transformation modules
+sql/                # Database schemas and transformations
+  schemas/          # DDL scripts (numbered: 001_, 002_, etc.)
+  transforms/       # Business logic SQL
+  seeds/            # Initial data CSV files
+quicksight/         # BI layer configurations
+config/             # Environment-specific YAML configs
+scripts/            # Operational scripts (bash, Python)
+docs/               # Architecture and user documentation
+```
+
+### File Naming Conventions
+- **Python**: `snake_case.py` (e.g., `staging_loader.py`)
+- **Terraform**: `snake_case.tf` (e.g., `main.tf`, `variables.tf`)
+- **SQL**: `descriptive_name.sql` (e.g., `daily_activity_summary.sql`)
+- **Tests**: `test_<module_name>.py` (e.g., `test_transformers.py`)
+- **Configs**: `<env>.yaml` (e.g., `dev.yaml`, `prod.yaml`)
+
+## Python Development Standards
+
+### TDD Workflow for Python
+```python
+# 1. WRITE TEST FIRST (in tests/ directory)
+def test_transform_daily_summary():
+    """Test that daily summary aggregates correctly by individual/corporate."""
+    input_data = [...]
+    expected = [...]
+    result = transform_daily_summary(input_data)
+    assert result == expected
+
+# 2. RUN TEST (it should fail - red)
+# pytest tests/test_transformers.py::test_transform_daily_summary
+
+# 3. WRITE MINIMAL IMPLEMENTATION
+def transform_daily_summary(data):
+    # Simplest code to make test pass
+    pass
+
+# 4. RUN TEST AGAIN (should pass - green)
+
+# 5. REFACTOR (optimize, clean up, add error handling)
+```
+
+### Code Quality
+- Follow PEP 8 style guide
+- Use type hints for all function signatures:
+  ```python
+  def load_staging_data(dump_path: str, db_client: DBClient) -> int:
+      """Load SQL dump into staging schema."""
+      pass
+  ```
+- Docstrings required for all public functions (Google style):
+  ```python
+  def geocode_asset(address: str) -> Tuple[float, float]:
+      """Geocode an asset address to latitude/longitude.
+      
+      Args:
+          address: Full Japanese address string
+          
+      Returns:
+          Tuple of (latitude, longitude)
+          
+      Raises:
+          GeocodingError: If address cannot be geocoded
+      """
+  ```
+- Max line length: 100 characters
+- Use meaningful variable names (no single letters except loop iterators)
+
+### Testing Standards
+- **Framework**: pytest
+- **Test structure**: Arrange-Act-Assert (AAA pattern)
+- **Fixtures**: Use pytest fixtures for common setup (DB connections, sample data)
+- **Mocking**: Use unittest.mock for external dependencies (S3, Aurora, AWS services)
+- **Test file structure**:
+  ```python
+  # tests/test_transformers.py
+  import pytest
+  from transformers.daily_summary import transform_daily_summary
+  
+  @pytest.fixture
+  def sample_staging_data():
+      """Fixture providing sample staging data."""
+      return [...]
+  
+  class TestDailySummaryTransformer:
+      def test_aggregates_by_date(self, sample_staging_data):
+          """Test date-based aggregation."""
+          pass
+      
+      def test_splits_individual_corporate(self, sample_staging_data):
+          """Test individual vs corporate classification."""
+          pass
+      
+      def test_handles_empty_input(self):
+          """Test graceful handling of empty dataset."""
+          pass
+  ```
+
+### Lambda-Specific Guidelines
+- Handler function must be named `handler` in `handler.py`
+- Environment variables for configuration (not hardcoded values)
+- Graceful error handling with structured logging:
+  ```python
+  import logging
+  logger = logging.getLogger()
+  logger.setLevel(logging.INFO)
+  
+  try:
+      result = process_etl()
+      logger.info(f"ETL completed: {result['rows_processed']} rows")
+  except Exception as e:
+      logger.error(f"ETL failed: {str(e)}", exc_info=True)
+      raise
+  ```
+- Return structured responses for CloudWatch logging:
+  ```python
+  return {
+      'statusCode': 200,
+      'body': json.dumps({
+          'message': 'ETL completed',
+          'rows_processed': count,
+          'execution_time_seconds': duration
+      })
+  }
+  ```
+
+## Terraform Standards
+
+### Module Design
+- Each module must have: `main.tf`, `variables.tf`, `outputs.tf`
+- Use descriptive variable names with clear descriptions
+- Always specify variable types and validation rules:
+  ```hcl
+  variable "db_instance_class" {
+    type        = string
+    description = "Aurora MySQL instance class"
+    default     = "db.t4g.medium"
+    
+    validation {
+      condition     = can(regex("^db\\.", var.db_instance_class))
+      error_message = "Instance class must start with 'db.'"
+    }
+  }
+  ```
+- Output all resource IDs/ARNs needed by other modules
+- Use tags consistently:
+  ```hcl
+  tags = {
+    Project     = "tokyobeta-data-consolidation"
+    Environment = var.environment
+    ManagedBy   = "terraform"
+    Component   = "aurora"
+  }
+  ```
+
+### Glue Job Configuration - STRICTLY ENFORCED
+- **ALWAYS** explicitly set `glue_version` to "4.0" (or higher)
+- **ALWAYS** explicitly set `worker_type` (e.g., "G.1X" or "G.2X")
+- **NEVER** leave these undefined, as Terraform defaults to legacy Glue 0.9
+- **NEVER** update job parameters via CLI without updating Terraform (causes "Invalid Input" drift)
+
+### State Management
+- Never commit `terraform.tfstate` files
+- Always use S3 backend with DynamoDB locking
+- Separate state files per environment (dev, prod)
+
+### Testing Terraform
+- Use `terraform fmt` before committing
+- Run `terraform validate` after changes
+- Always review `terraform plan` output before applying
+- For modules, write example usage in `examples/` directory
+
+## SQL Standards
+
+### Schema Design
+- Use explicit schema prefixes: `staging.table_name`, `analytics.table_name`
+- Primary keys on all tables
+- Indexes on foreign keys and frequently filtered columns
+- Created/updated timestamp columns on all tables:
+  ```sql
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  ```
+
+### Transformation SQL
+- Readable formatting with proper indentation
+- Use CTEs (Common Table Expressions) for complex queries:
+  ```sql
+  WITH daily_counts AS (
+      SELECT 
+          DATE(contract_date) as activity_date,
+          COUNT(*) as contract_count,
+          tenant_type
+      FROM staging.movings
+      WHERE contract_date IS NOT NULL
+      GROUP BY DATE(contract_date), tenant_type
+  )
+  SELECT * FROM daily_counts;
+  ```
+- Always include comments explaining business logic
+- Avoid `SELECT *` in production queries
+
+### Testing SQL
+- Write SQL test scripts in `sql/tests/` directory
+- Test edge cases: NULL values, empty results, boundary dates
+- Validate data integrity after transformations:
+  ```sql
+  -- Test: Verify no duplicate contracts
+  SELECT contract_id, COUNT(*) 
+  FROM analytics.new_contracts 
+  GROUP BY contract_id 
+  HAVING COUNT(*) > 1;
+  -- Should return 0 rows
+  ```
+
+## AWS Best Practices
+
+### Security
+- Never hardcode credentials in code or Terraform files
+- Use AWS Secrets Manager for database passwords
+- IAM roles with least privilege principle
+- Private subnets for Aurora, public subnets for NAT gateway only
+- Security groups: whitelist only required ports/sources
+
+### Cost Optimization
+- Use db.t4g instances for Aurora (ARM-based, cheaper)
+- Lambda memory: right-size based on profiling (start at 512MB)
+- Aurora: enable auto-pause for dev environment
+- S3: lifecycle policies to archive old dumps to Glacier after 90 days
+
+### Monitoring
+- CloudWatch log retention: 7 days for dev, 30 days for prod
+- Alarms for: Lambda errors, Aurora CPU > 80%, ETL duration > 30 min
+- Structured logging in JSON format for easy querying
+
+## Git Workflow
+
+### Commit Messages
+```
+<type>(<scope>): <subject>
+
+[optional body]
+[optional footer]
+```
+Types: `feat`, `fix`, `test`, `refactor`, `docs`, `chore`, `terraform`
+
+Examples:
+- `feat(etl): implement daily summary transformer`
+- `test(etl): add unit tests for staging loader`
+- `terraform(aurora): add backup retention configuration`
+- `fix(lambda): handle missing geocoding data gracefully`
+
+### Branch Strategy
+- `main`: production-ready code
+- `develop`: integration branch
+- `feature/<name>`: new features
+- `fix/<name>`: bug fixes
+- `test/<name>`: test improvements
+
+### Pull Request Checklist
+- [ ] Tests written first (TDD)
+- [ ] All tests pass locally
+- [ ] Code coverage ≥ 80%
+- [ ] Terraform validated and formatted
+- [ ] No linter errors
+- [ ] Documentation updated if needed
+- [ ] No secrets committed
+- [ ] Minimal changes only (no scope creep)
+
+## Documentation Standards
+
+### Documentation Philosophy: UPDATE, DON'T CREATE
+
+**CRITICAL RULE:** Always update existing documentation files instead of creating new ones.
+
+**Before creating ANY .md file:**
+1. ✅ Check if similar documentation already exists
+2. ✅ Update the existing file with new information
+3. ✅ Only create new file if topic is completely unrelated
+4. ❌ NEVER create date-stamped files (e.g., `REPORT_20260210.md`)
+5. ❌ NEVER create duplicate/overlapping documentation
+
+### Standard Documentation Files (DO NOT MULTIPLY)
+
+**Root Level (update these, don't create similar):**
+- `README.md` - Project overview, quick start
+- `SETUP.md` - Complete setup instructions
+- `CHANGELOG.md` - Version history and changes
+
+**docs/ Directory:**
+- `docs/ARCHITECTURE.md` - System architecture, decisions
+- `docs/OPERATIONS.md` - Runbooks, troubleshooting, common tasks
+- `docs/INCIDENTS.md` - All incident reports (append new incidents here)
+- `docs/AWS_SETUP.md` - AWS configuration, profiles, authentication
+- `docs/DATA_MODEL.md` - Database schema, table relationships
+- `docs/DEPLOYMENT.md` - Deployment procedures, rollback plans
+
+**Per-Module Documentation:**
+- Each major directory (terraform/, dbt/, glue/) should have ONE `README.md`
+- Update that README.md, don't create supplementary docs
+
+### How to Document Incidents
+
+**WRONG (what I did):** ❌
+```
+docs/GLUE_JOB_STATUS_REPORT_20260210.md
+docs/STAGING_STALENESS_INVESTIGATION.md
+docs/DEPLOYMENT_SUMMARY_20260210.md
+docs/FIX_COMPLETE_SUMMARY.md
+docs/LESSONS_LEARNED_FEB2026.md
+(5 overlapping files for one incident!)
+```
+
+**RIGHT:** ✅
+```
+docs/INCIDENTS.md  (append to this one file)
+
+## Incident: Staging Table Staleness
+**Date:** 2026-02-10
+**Severity:** High
+**Status:** Resolved
+
+### Summary
+[Brief description]
+
+### Timeline
+[Key events]
+
+### Root Cause
+[What went wrong]
+
+### Resolution
+[What fixed it]
+
+### Prevention
+[Changes made to prevent recurrence]
+
+---
+(Next incident appended below)
+```
+
+### Documentation Update Workflow
+
+When documenting work:
+
+1. **Check existing docs first:**
+   ```bash
+   grep -r "relevant keyword" docs/
+   find docs/ -name "*.md" -exec head -5 {} \;
+   ```
+
+2. **Update existing file:**
+   - Add new section at appropriate location
+   - Update table of contents if present
+   - Add "Last updated: DATE" at top
+
+3. **Only create new file if:**
+   - Topic is completely unrelated to existing docs
+   - New major component being added (e.g., new service)
+   - Explicitly requested by user
+
+4. **Never create:**
+   - Date-stamped files (`REPORT_20260210.md`)
+   - Status reports (update `docs/OPERATIONS.md` instead)
+   - Multiple incident files (use `docs/INCIDENTS.md`)
+   - Summary files (update main documentation)
+
+### Code Documentation
+- README.md in each major directory explaining its purpose
+- Architecture decisions documented in `docs/ARCHITECTURE.md`
+- Inline comments for complex business logic only (code should be self-documenting)
+
+### Operational Documentation
+- Runbooks in `docs/OPERATIONS.md` (one file, multiple sections)
+- Deployment procedures in `docs/DEPLOYMENT.md`
+- Troubleshooting in `docs/OPERATIONS.md` under "Troubleshooting" section
+- User guides for QuickSight in `docs/QUICKSIGHT_USER_GUIDE.md`
+
+## Project-Specific Business Rules
+
+### ETL Logic
+- **Table 1 (daily_activity_summary)**: Aggregate by date and individual/corporate split
+- **Table 2 (new_contracts)**: Include demographics + geolocation (lat/long)
+- **Table 3 (moveouts)**: Full tenant contract history on moveout date
+- **Table 4 (moveout_notices)**: Rolling 24-month window, purge older records
+
+### Data Quality
+- Validate all date fields are not NULL before transformations
+- Geocoding: fallback to prefecture centroid if exact address fails
+- Log all data quality issues but don't fail ETL (partial success)
+
+### Critical Data Model Rules (DISCOVERED FEB 2026)
+
+#### 1. Tenant-Moving Relationship
+**The join method depends on the query purpose!**
+
+**A. For CURRENT tenant-room assignments (snapshot queries):**
+```sql
+-- Example: active_tenant_count, current occupancy, tenant_room_info
+FROM staging.tenants t
+INNER JOIN staging.movings m ON t.moving_id = m.id  -- Use tenant.moving_id!
+WHERE t.status IN (target_statuses)
+```
+
+**Why**: 
+- `tenant.moving_id` points to the PRIMARY/CURRENT room assignment
+- One-to-one relationship: 1 tenant → 1 current moving
+- No deduplication needed (tenant.moving_id is already the "latest")
+- **Validation**: Matches Excel export logic (-7.0% deviation, much better than -7.3%)
+
+**B. For ALL movings/contracts (historical event queries):**
+```sql
+-- Example: daily_activity_summary (move-ins/outs by date), int_contracts (all contracts)
+FROM staging.movings m
+INNER JOIN staging.tenants t ON m.tenant_id = t.id  -- Use moving.tenant_id
+WHERE <date_filters>
+```
+
+**Why**:
+- `moving.tenant_id` enables one-to-many: 1 tenant → many movings over time
+- Captures ALL historical room assignments
+- **MUST deduplicate** using ROW_NUMBER() to handle duplicate data entry errors (see below)
+
+**Summary**:
+- **Current snapshot** → Use `tenant.moving_id = moving.id`
+- **Historical events** → Use `moving.tenant_id = tenant.id` + deduplicate
+
+#### 2. Duplicate Moving Records - ALWAYS Deduplicate!
+The `staging.movings` table has ~3,500 duplicate historical records where `is_moveout = 0` but they're old contracts that weren't properly closed.
+
+**MANDATORY deduplication pattern:**
+```sql
+WITH deduplicated_movings AS (
+    SELECT 
+        m.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY m.tenant_id, m.apartment_id, m.room_id 
+            ORDER BY m.movein_date DESC, m.updated_at DESC, m.id DESC
+        ) as rn
+    FROM staging.movings m
+    WHERE <your_filters>
+)
+SELECT * FROM deduplicated_movings WHERE rn = 1
+```
+
+**Why**: 
+- Individual tenants have up to 6 duplicate "active" records for the SAME ROOM
+- Corporate tenants correctly have multiple records for MULTIPLE UNIQUE ROOMS
+- ROW_NUMBER() selects most recent moving per tenant-room combination
+
+#### 3. Contract Type Field - Use moving_agreement_type!
+**NEVER use `tenant.contract_type` for analytics!**
+
+```sql
+-- ❌ WRONG - tenant.contract_type was consolidated (only codes 1,2 remain)
+SELECT contract_type FROM staging.tenants;  
+
+-- ✅ CORRECT - moving_agreement_type preserves original 5-code system
+SELECT moving_agreement_type FROM staging.movings;
+```
+
+**Contract type mapping (moving_agreement_type):**
+- Code 1: 一般 (General)
+- Code 2: 法人契約 (Corporate multi-room)
+- Code 3: 法人契約（個人）(Corporate individual)
+- Code 7: 一般（保証会社）(General with guarantor)
+- Code 9: 一般2 (General 2)
+
+**Why**: Database underwent schema consolidation on Sept 29, 2025 where tenant.contract_type codes 3,7,9 were merged into code 1. Use `moving.moving_agreement_type` to preserve historical accuracy.
+
+### Timing & Scheduling
+- ETL runs daily at 7:00 AM JST (after dump generation at 5:30 AM)
+- QuickSight SPICE refresh at 8:00 AM JST (after ETL completes)
+- Alerts sent to `dashboard-etl-alerts` SNS topic
+
+## Development Workflow Summary
+
+1. **Before writing any code**:
+   - Understand the requirement fully
+   - Identify what needs testing
+   - Write test cases first (RED)
+
+2. **Write minimal implementation**:
+   - Make tests pass (GREEN)
+   - Don't add extra features
+
+3. **Refactor**:
+   - Clean up code
+   - Add error handling
+   - Optimize if needed
+   - Keep tests passing
+
+4. **Verify no side effects**:
+   - Run full test suite
+   - Check linter
+   - Confirm existing functionality unaffected
+
+5. **Document**:
+   - Add docstrings
+   - Update README if needed
+   - Add inline comments for complex logic
+
+6. **Review**:
+   - Self-review changes
+   - Ensure adherence to all rules above
+   - Commit with descriptive message
+
+## Anti-Patterns to Avoid
+
+❌ Writing implementation before tests
+❌ Committing code without tests
+❌ Hardcoding configuration values
+❌ Using `SELECT *` in production SQL
+❌ Broad exception catching without logging
+❌ Modifying unrelated code in a PR
+❌ Large, unfocused commits
+❌ Skipping `terraform plan` review
+❌ Testing in production first
+❌ Ignoring linter warnings
+❌ **Creating new .md files instead of updating existing ones**
+❌ **Creating date-stamped documentation files**
+❌ **Creating multiple overlapping documentation files**
+
+## Questions to Ask Before Making Changes
+
+1. Have I written tests first?
+2. Do my tests cover edge cases and error conditions?
+3. Am I changing only what's necessary?
+4. Will this affect existing functionality?
+5. Have I checked for similar patterns in the codebase?
+6. Is my code readable and well-documented?
+7. Have I validated my Terraform changes?
+8. Are all secrets properly managed?
+9. Will this change impact costs or performance?
+10. Have I followed the TDD cycle completely?
+11. **Am I about to create a new .md file? Should I update an existing one instead?**
+12. **Have I checked docs/ for existing documentation on this topic?**
+
+---
+
+## AWS Account & Profile Management
+
+### Mandatory: Always Use `gghouse` Profile
+
+This repository ONLY works with AWS account `343881458651` (gghouse profile).
+
+**Setup (One-time):**
+```bash
+# Install direnv (if not installed)
+brew install direnv  # macOS
+# OR: apt-get install direnv  # Linux
+
+# Enable direnv for your shell
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc  # for zsh
+# OR: echo 'eval "$(direnv hook bash)"' >> ~/.bashrc  # for bash
+
+# Allow direnv for this repo
+cd /path/to/tokyobeta-data-consolidation
+direnv allow
+```
+
+**Verify Correct Profile:**
+```bash
+# Should show Account: 343881458651
+aws sts get-caller-identity
+
+# If wrong account, run:
+aws sso login --profile gghouse
+```
+
+**Why This Matters:**
+- Using wrong AWS account (018014110453) causes AccessDenied errors
+- All infrastructure (Glue, RDS, S3) is in account 343881458651
+- `.envrc` file automatically sets `AWS_PROFILE=gghouse` when you `cd` into this repo
+
+---
+
+## Data Quality & Monitoring - CRITICAL
+
+### Lessons Learned (Feb 2026 Incident)
+
+**Incident:** Staging tables became 8 days stale, causing downstream data quality issues.
+
+**Root Cause:** Glue ETL jobs existed but weren't being triggered automatically.
+
+**Prevention Measures Implemented:**
+
+1. **Data Freshness Monitoring** (CloudWatch + Lambda)
+   - Automated daily checks at 9 AM JST
+   - CloudWatch alarms if any table > 2 days old
+   - SNS alerts sent to dashboard-etl-alerts topic
+   - Metrics published: `TokyoBeta/DataQuality` namespace
+
+2. **dbt Freshness Tests** (Add to all staging sources)
+   ```yaml
+   sources:
+     - name: staging
+       freshness:
+         warn_after: {count: 1, period: day}
+         error_after: {count: 2, period: day}
+       tables:
+         - name: movings
+         - name: tenants
+         - name: rooms
+         - name: inquiries
+   ```
+
+3. **Manual Recovery Scripts**
+   - `scripts/emergency_staging_fix.py` - Download and load from S3
+   - `scripts/load_full_dump_to_staging.py` - Load full dumps
+   - `scripts/emergency_staging_fix.py --check-only` - Check freshness
+
+4. **ETL Pipeline Validation**
+   - Always verify FULL pipeline: Dump generation → S3 storage → Glue loading → Table freshness
+   - Don't assume one part working means all parts working
+   - EC2 cron dumps ≠ Glue ETL loads ≠ Fresh database tables
+
+### Critical Checks Before Assuming Data Issues
+
+**When tables appear stale:**
+1. ✅ Check S3 dumps are current: `aws s3 ls s3://jram-gghouse/dumps/ --profile gghouse | tail`
+2. ✅ Check Glue job status: `aws glue get-job-runs --job-name tokyobeta-prod-staging-loader --profile gghouse --max-items 1`
+3. ✅ Check EventBridge schedule: `aws events list-rules --profile gghouse | grep staging`
+4. ✅ Check CloudWatch logs for errors
+
+**If dumps are fresh but tables are stale:**
+- Problem is Glue ETL (our problem)
+- Run: `python3 scripts/emergency_staging_fix.py --tables movings tenants rooms`
+
+**If dumps are stale:**
+- Problem is EC2 cron job (external stakeholder problem)
+- Contact: External stakeholders managing EC2 dump generation
+
+### Data Freshness SLA
+
+| Table | Max Age (Days) | Alert Level | Action |
+|-------|----------------|-------------|--------|
+| staging.movings | 1 | WARN → 2 = CRITICAL | Check Glue staging_loader |
+| staging.tenants | 1 | WARN → 2 = CRITICAL | Check Glue staging_loader |
+| staging.rooms | 2 | WARN → 3 = CRITICAL | Check Glue staging_loader |
+| staging.inquiries | 2 | WARN → 3 = CRITICAL | Check Glue staging_loader |
+| silver.* tables | 1 | WARN → 2 = CRITICAL | Check Glue silver_transformer |
+| gold.* tables | 1 | WARN → 2 = CRITICAL | Check Glue gold_transformer |
+
+### Emergency Response Runbook
+
+**If alerted about stale data:**
+
+```bash
+# 1. Assess situation
+python3 scripts/emergency_staging_fix.py --check-only
+
+# 2. Check if S3 dumps are current
+aws s3 ls s3://jram-gghouse/dumps/ --profile gghouse --recursive | grep $(date +%Y%m%d)
+
+# 3. If dumps exist, load immediately
+python3 scripts/emergency_staging_fix.py --tables movings tenants rooms inquiries
+
+# 4. Trigger downstream transforms
+aws glue start-job-run --job-name tokyobeta-prod-silver-transformer --profile gghouse
+aws glue start-job-run --job-name tokyobeta-prod-gold-transformer --profile gghouse
+
+# 5. Verify fix
+python3 scripts/emergency_staging_fix.py --check-only
+
+# 6. Investigate root cause
+aws glue get-job-runs --job-name tokyobeta-prod-staging-loader --profile gghouse --max-items 5
+```
+
+**Expected Resolution Time:** < 15 minutes
+
+---
+
+**Remember**: Test-driven development is not optional. Tests come first, implementation second, always.

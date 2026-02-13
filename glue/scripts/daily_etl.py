@@ -14,7 +14,6 @@ import subprocess
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, date
-from botocore.exceptions import ClientError
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -48,6 +47,8 @@ job.init(args['JOB_NAME'], args)
 s3 = boto3.client('s3')
 secretsmanager = boto3.client('secretsmanager')
 rds = boto3.client('rds')
+
+TOTAL_PHYSICAL_ROOMS = 16108
 
 @contextmanager
 def timed_step(step_name: str, timings: Dict[str, Dict[str, Any]]):
@@ -106,6 +107,48 @@ def env_int(name: str, default: int, minimum: int = 0) -> int:
     return value if value >= minimum else minimum
 
 
+def optional_argv_value(name: str) -> str | None:
+    """
+    Read optional Glue argument from sys.argv without requiring it in getResolvedOptions.
+    Expected shape: --NAME value
+    """
+    token = f"--{name}"
+    try:
+        index = sys.argv.index(token)
+    except ValueError:
+        return None
+    if index + 1 >= len(sys.argv):
+        return None
+    return sys.argv[index + 1]
+
+
+def runtime_bool(name: str, default: bool) -> bool:
+    """
+    Read boolean runtime toggle from environment first, then optional argv, then default.
+    """
+    if name in os.environ:
+        return env_bool(name, default)
+
+    arg_val = optional_argv_value(name)
+    if arg_val is None:
+        return default
+    return arg_val.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def runtime_date(name: str, default: date) -> date:
+    """Read YYYY-MM-DD runtime date from env/argv, else return default."""
+    raw = os.environ.get(name)
+    if raw is None:
+        raw = optional_argv_value(name)
+    if raw is None:
+        return default
+    try:
+        return datetime.strptime(raw.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        print(f"Invalid {name}={raw!r}; using default {default.isoformat()}")
+        return default
+
+
 def normalize_statement(stmt: str) -> str:
     """Normalize SQL statement and skip session-level commands."""
     stmt = stmt.strip()
@@ -158,6 +201,34 @@ def extract_table_name(stmt: str) -> str | None:
         return None
     return match.group(2)
 
+
+def reset_staging_tables(cursor) -> int:
+    """
+    Drop existing staging tables before loading a full SQL dump.
+    This guarantees a clean replace even when dumps omit DROP TABLE statements.
+    """
+    cursor.execute("""
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'staging'
+    """)
+    existing_tables = [row[0] for row in cursor.fetchall()]
+
+    if not existing_tables:
+        print("No existing staging tables - clean load")
+        return 0
+
+    print(f"Dropping {len(existing_tables)} existing staging tables before load")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+    try:
+        for table_name in existing_tables:
+            cursor.execute(f"DROP TABLE IF EXISTS `staging`.`{table_name}`")
+    finally:
+        cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+
+    return len(existing_tables)
+
+
 def get_latest_dump_key():
     """Find the most recent SQL dump file in S3."""
     response = s3.list_objects_v2(
@@ -193,22 +264,6 @@ def get_processed_dump_key(source_key: str) -> str:
         return source_key.replace("/dumps/", "/processed/", 1)
     return f"processed/{source_key}"
 
-
-def is_dump_already_processed(source_key: str) -> bool:
-    """
-    Return True if this dump already exists under processed/.
-    This avoids re-running the full ETL on stale dumps.
-    """
-    processed_key = get_processed_dump_key(source_key)
-    try:
-        s3.head_object(Bucket=args['S3_SOURCE_BUCKET'], Key=processed_key)
-        print(f"No new dump detected: {source_key} already archived as {processed_key}")
-        return True
-    except ClientError as e:
-        error_code = e.response.get("Error", {}).get("Code", "")
-        if error_code in {"404", "NoSuchKey", "NotFound"}:
-            return False
-        raise
 
 def get_aurora_credentials():
     """Retrieve Aurora credentials from Secrets Manager."""
@@ -257,18 +312,9 @@ def load_to_aurora_staging(dump_path):
         
         print("Schemas verified/created: staging, analytics, seeds")
         
-        # Check existing tables (SQL dump has DROP TABLE IF EXISTS, so we don't need to drop manually)
-        cursor.execute("""
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = 'staging'
-        """)
-        existing_tables = [row[0] for row in cursor.fetchall()]
-        
-        if existing_tables:
-            print(f"Found {len(existing_tables)} existing staging tables - SQL dump will handle recreation")
-        else:
-            print("No existing staging tables - clean load")
+        dropped_tables = reset_staging_tables(cursor)
+        if dropped_tables > 0:
+            print(f"Reset staging schema: dropped {dropped_tables} tables")
         
         connection.commit()
         
@@ -394,10 +440,14 @@ def create_pre_etl_backups():
         cursor.close()
         connection.close()
 
-def cleanup_old_backups(days_to_keep=3):
+def cleanup_old_backups(days_to_keep=3, include_staging=True):
     """
     Remove backup tables older than N days to manage storage costs.
     Backup table naming convention: {table_name}_backup_{YYYYMMDD_HHMMSS}
+
+    Args:
+        days_to_keep: Retention window in days.
+        include_staging: Whether to clean staging.*_backup_* in addition to silver/gold.
     """
     print(f"\n=== Cleaning Up Old Backups (keeping last {days_to_keep} days) ===")
     
@@ -417,7 +467,11 @@ def cleanup_old_backups(days_to_keep=3):
     try:
         cursor = connection.cursor()
         
-        for schema in ['silver', 'gold']:
+        schemas_to_cleanup = ['silver', 'gold']
+        if include_staging:
+            schemas_to_cleanup.append('staging')
+
+        for schema in schemas_to_cleanup:
             cursor.execute(f"""
                 SELECT TABLE_NAME 
                 FROM information_schema.TABLES 
@@ -548,9 +602,9 @@ def run_dbt_transformations():
     os.environ['AURORA_PASSWORD'] = password
     os.environ['DBT_TARGET'] = args['ENVIRONMENT']
 
-    # Exclude lock-heavy full-rebuild models from daily run by default.
+    # Exclude optional models from the main graph run.
     # Override via DBT_EXCLUDE_MODELS env var (comma-separated list).
-    dbt_excludes_env = os.environ.get("DBT_EXCLUDE_MODELS", "silver.tenant_status_history")
+    dbt_excludes_env = os.environ.get("DBT_EXCLUDE_MODELS", "")
     dbt_excludes = [m.strip() for m in dbt_excludes_env.split(",") if m.strip()]
     if dbt_excludes:
         print(f"dbt excludes for this run: {', '.join(dbt_excludes)}")
@@ -562,6 +616,16 @@ def run_dbt_transformations():
     pre_run_retry_sleep = env_int("DBT_PRE_RUN_RETRY_SLEEP_SECONDS", 30, minimum=0)
     if pre_run_models:
         print(f"dbt pre-run serial models: {', '.join(pre_run_models)}")
+
+    # Run heavy full-rebuild models serially after main graph.
+    # Keep default empty: these can be expensive and are not required for core gold outputs.
+    # Enable explicitly via DBT_POST_RUN_MODELS (comma-separated).
+    post_run_models_env = os.environ.get("DBT_POST_RUN_MODELS", "")
+    post_run_models = [m.strip() for m in post_run_models_env.split(",") if m.strip()]
+    post_run_retries = env_int("DBT_POST_RUN_RETRIES", 1, minimum=1)
+    post_run_retry_sleep = env_int("DBT_POST_RUN_RETRY_SLEEP_SECONDS", 30, minimum=0)
+    if post_run_models:
+        print(f"dbt post-run serial models: {', '.join(post_run_models)}")
     
     # dbt is installed in /home/spark/.local/bin/ by pip --user in Glue
     dbt_executable = "/home/spark/.local/bin/dbt"
@@ -774,11 +838,19 @@ def run_dbt_transformations():
     ], "DBT SEED")
     print(f"[dbt_timing] seed_seconds={time.perf_counter() - seed_start:.2f}")
 
-    # Phase A: run lock-sensitive models serially, with retry on lock waits.
-    if pre_run_models:
-        pre_start = time.perf_counter()
-        kill_stale_dbt_queries(max_age_seconds=600)
-        pre_cmd = [
+    def run_serial_dbt_phase(
+        phase_name: str,
+        model_names: List[str],
+        retries: int,
+        retry_sleep_seconds: int
+    ) -> None:
+        """Run selected dbt models in serial with retry on lock waits."""
+        if not model_names:
+            print(f"[dbt_timing] {phase_name}_total_seconds=0.00 (no {phase_name} models configured)")
+            return
+
+        phase_start = time.perf_counter()
+        phase_cmd = [
             dbt_executable, "run",
             "--profiles-dir", dbt_local_path,
             "--project-dir", dbt_local_path,
@@ -786,39 +858,46 @@ def run_dbt_transformations():
             "--fail-fast",
             "--threads", "1",
             "--select",
-        ] + pre_run_models
+        ] + model_names
 
-        pre_success = False
-        for attempt in range(1, pre_run_retries + 1):
+        phase_success = False
+        for attempt in range(1, retries + 1):
             attempt_start = time.perf_counter()
             try:
-                run_dbt_cmd(pre_cmd, f"DBT RUN PRE-PHASE (attempt {attempt}/{pre_run_retries})")
-                pre_success = True
-                print(f"[dbt_timing] pre_run_attempt_{attempt}_seconds={time.perf_counter() - attempt_start:.2f}")
+                run_dbt_cmd(phase_cmd, f"DBT RUN {phase_name.upper()} (attempt {attempt}/{retries})")
+                phase_success = True
+                print(f"[dbt_timing] {phase_name}_attempt_{attempt}_seconds={time.perf_counter() - attempt_start:.2f}")
                 break
             except subprocess.CalledProcessError as e:
                 combined_output = f"{e.stdout or ''}\n{e.stderr or ''}"
                 is_lock_wait = "Lock wait timeout exceeded" in combined_output
-                print(f"[dbt_timing] pre_run_attempt_{attempt}_seconds={time.perf_counter() - attempt_start:.2f}")
-                if is_lock_wait and attempt < pre_run_retries:
+                print(f"[dbt_timing] {phase_name}_attempt_{attempt}_seconds={time.perf_counter() - attempt_start:.2f}")
+                if is_lock_wait and attempt < retries:
                     log_aurora_lock_diagnostics()
                     print(
-                        f"Lock wait timeout detected in pre-phase; "
-                        f"retrying in {pre_run_retry_sleep}s (attempt {attempt + 1}/{pre_run_retries})"
+                        f"Lock wait timeout detected in {phase_name}; "
+                        f"retrying in {retry_sleep_seconds}s (attempt {attempt + 1}/{retries})"
                     )
                     cleanup_dbt_tmp_tables()
-                    if pre_run_retry_sleep > 0:
-                        time.sleep(pre_run_retry_sleep)
+                    if retry_sleep_seconds > 0:
+                        time.sleep(retry_sleep_seconds)
                     continue
                 if is_lock_wait:
                     log_aurora_lock_diagnostics()
                 raise
 
-        if not pre_success:
-            raise RuntimeError("dbt pre-phase failed unexpectedly")
-        print(f"[dbt_timing] pre_run_total_seconds={time.perf_counter() - pre_start:.2f}")
-    else:
-        print("[dbt_timing] pre_run_total_seconds=0.00 (no pre-run models configured)")
+        if not phase_success:
+            raise RuntimeError(f"dbt {phase_name} failed unexpectedly")
+        print(f"[dbt_timing] {phase_name}_total_seconds={time.perf_counter() - phase_start:.2f}")
+
+    # Phase A: run lock-sensitive incrementals first.
+    kill_stale_dbt_queries(max_age_seconds=600)
+    run_serial_dbt_phase(
+        phase_name="pre_run",
+        model_names=pre_run_models,
+        retries=pre_run_retries,
+        retry_sleep_seconds=pre_run_retry_sleep,
+    )
 
     # Phase B: run remaining dbt graph
     run_start = time.perf_counter()
@@ -829,12 +908,20 @@ def run_dbt_transformations():
         "--target", args['ENVIRONMENT'],
         "--fail-fast"
     ]
-    remaining_excludes = list(dict.fromkeys(dbt_excludes + pre_run_models))
+    remaining_excludes = list(dict.fromkeys(dbt_excludes + pre_run_models + post_run_models))
     for model_name in remaining_excludes:
         run_cmd.extend(["--exclude", model_name])
 
     result = run_dbt_cmd(run_cmd, "DBT RUN MAIN-PHASE")
     print(f"[dbt_timing] run_seconds={time.perf_counter() - run_start:.2f}")
+
+    # Phase C: run heavy full-rebuild models in serial after main graph.
+    run_serial_dbt_phase(
+        phase_name="post_run",
+        model_names=post_run_models,
+        retries=post_run_retries,
+        retry_sleep_seconds=post_run_retry_sleep,
+    )
     
     # Run dbt tests (optional; disabled by default for faster daily SLA)
     run_dbt_tests = env_bool("DAILY_RUN_DBT_TESTS", False)
@@ -1251,6 +1338,234 @@ def validate_no_future_dates(cursor) -> bool:
     return future_count == 0
 
 
+def ensure_occupancy_kpi_table_exists(cursor) -> None:
+    """Create gold.occupancy_daily_metrics table if it does not exist."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS gold.occupancy_daily_metrics (
+            snapshot_date DATE NOT NULL,
+            applications INT COMMENT '申込: First appearance of pairs in status 4 or 5',
+            new_moveins INT COMMENT '新規入居者: Pairs with move_in_date = snapshot_date',
+            new_moveouts INT COMMENT '新規退去者: Pairs with moveout date = snapshot_date',
+            occupancy_delta INT COMMENT '稼働室数増減: new_moveins - new_moveouts',
+            period_start_rooms INT COMMENT '期首稼働室数: Occupied count on previous day',
+            period_end_rooms INT COMMENT '期末稼働室数: period_start + delta',
+            occupancy_rate DECIMAL(5,4) COMMENT '稼働率: period_end / 16108',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (snapshot_date),
+            INDEX idx_snapshot_date (snapshot_date),
+            INDEX idx_occupancy_rate (occupancy_rate)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        COMMENT='Daily occupancy KPI metrics (incremental upsert)'
+    """)
+
+
+def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
+    """
+    Compute occupancy KPIs for historical + projected dates.
+    Returns number of processed dates.
+    """
+    if not target_dates:
+        return 0
+
+    calendar_today = date.today()
+    cursor.execute("""
+        SELECT MAX(snapshot_date) AS max_snapshot_date
+        FROM silver.tenant_room_snapshot_daily
+    """)
+    snapshot_meta = cursor.fetchone()
+    as_of_snapshot_date = snapshot_meta["max_snapshot_date"] if snapshot_meta else None
+    if as_of_snapshot_date is None:
+        raise RuntimeError("No data in silver.tenant_room_snapshot_daily; cannot compute occupancy KPIs")
+
+    lag_days = (calendar_today - as_of_snapshot_date).days
+    print(
+        f"Computing occupancy KPIs for {len(target_dates)} dates "
+        f"(calendar_today={calendar_today}, as_of_snapshot={as_of_snapshot_date}, lag={lag_days}d)"
+    )
+
+    for target_date in target_dates:
+        is_future = target_date > as_of_snapshot_date
+        snapshot_date_filter = as_of_snapshot_date if is_future else target_date
+
+        if is_future:
+            applications = 0
+        else:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+                FROM (
+                    SELECT
+                        tenant_id,
+                        apartment_id,
+                        room_id,
+                        MIN(snapshot_date) AS first_appearance
+                    FROM silver.tenant_room_snapshot_daily
+                    WHERE management_status_code IN (4, 5)
+                    GROUP BY tenant_id, apartment_id, room_id
+                ) first_apps
+                WHERE first_appearance = %s
+            """, (target_date,))
+            applications = cursor.fetchone()["count"]
+
+        if is_future:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND move_in_date = %s
+                  AND management_status_code IN (4, 5)
+            """, (snapshot_date_filter, target_date))
+        else:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND move_in_date = %s
+                  AND management_status_code IN (4, 5, 6, 7, 9)
+            """, (snapshot_date_filter, target_date))
+        new_moveins = cursor.fetchone()["count"]
+
+        if is_future:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND moveout_date = %s
+            """, (snapshot_date_filter, target_date))
+        else:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND moveout_plans_date = %s
+            """, (snapshot_date_filter, target_date))
+        new_moveouts = cursor.fetchone()["count"]
+
+        occupancy_delta = new_moveins - new_moveouts
+
+        previous_date = target_date - timedelta(days=1)
+        cursor.execute("""
+            SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+            FROM silver.tenant_room_snapshot_daily
+            WHERE snapshot_date = %s
+              AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
+        """, (previous_date,))
+        period_start_rooms = cursor.fetchone()["count"]
+        period_end_rooms = period_start_rooms + occupancy_delta
+        occupancy_rate = period_end_rooms / TOTAL_PHYSICAL_ROOMS
+
+        cursor.execute("""
+            INSERT INTO gold.occupancy_daily_metrics
+            (snapshot_date, applications, new_moveins, new_moveouts,
+             occupancy_delta, period_start_rooms, period_end_rooms, occupancy_rate)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                applications = VALUES(applications),
+                new_moveins = VALUES(new_moveins),
+                new_moveouts = VALUES(new_moveouts),
+                occupancy_delta = VALUES(occupancy_delta),
+                period_start_rooms = VALUES(period_start_rooms),
+                period_end_rooms = VALUES(period_end_rooms),
+                occupancy_rate = VALUES(occupancy_rate),
+                updated_at = CURRENT_TIMESTAMP
+        """, (
+            target_date,
+            applications,
+            new_moveins,
+            new_moveouts,
+            occupancy_delta,
+            period_start_rooms,
+            period_end_rooms,
+            occupancy_rate,
+        ))
+
+        print(
+            f"  KPI {target_date}: apps={applications}, moveins={new_moveins}, "
+            f"moveouts={new_moveouts}, delta={occupancy_delta:+d}, "
+            f"start={period_start_rooms}, end={period_end_rooms}, rate={occupancy_rate:.2%}"
+        )
+
+    return len(target_dates)
+
+
+def update_gold_occupancy_kpis(target_date: date, lookback_days: int, forward_days: int) -> int:
+    """Update gold.occupancy_daily_metrics for target +/- windows."""
+    print(
+        f"\nUpdating gold.occupancy_daily_metrics "
+        f"(target_date={target_date}, lookback_days={lookback_days}, forward_days={forward_days})"
+    )
+
+    username, password = get_aurora_credentials()
+    connection = pymysql.connect(
+        host=args['AURORA_ENDPOINT'],
+        user=username,
+        password=password,
+        database=args['AURORA_DATABASE'],
+        charset='utf8mb4',
+        cursorclass=pymysql.cursors.DictCursor
+    )
+    cursor = connection.cursor()
+    try:
+        ensure_occupancy_kpi_table_exists(cursor)
+        dates_to_process = [
+            target_date + timedelta(days=i)
+            for i in range(-lookback_days, forward_days + 1)
+        ]
+        processed_dates = compute_occupancy_kpis_for_dates(cursor, dates_to_process)
+        connection.commit()
+        print(f"Updated occupancy KPI rows for {processed_dates} date(s)")
+        return processed_dates
+    finally:
+        cursor.close()
+        connection.close()
+
+
+def log_layer_freshness() -> Dict[str, Any]:
+    """Log silver/gold max dates and row counts for post-run verification."""
+    username, password = get_aurora_credentials()
+    connection = pymysql.connect(
+        host=args['AURORA_ENDPOINT'],
+        user=username,
+        password=password,
+        database=args['AURORA_DATABASE'],
+        charset='utf8mb4',
+        cursorclass=pymysql.cursors.DictCursor
+    )
+    cursor = connection.cursor()
+    try:
+        cursor.execute("""
+            SELECT
+                (SELECT MAX(snapshot_date) FROM silver.tenant_room_snapshot_daily) AS silver_snapshot_max_date,
+                (SELECT COUNT(*) FROM silver.tenant_room_snapshot_daily) AS silver_snapshot_rows,
+                (SELECT MAX(valid_from) FROM silver.tenant_status_history) AS silver_status_history_max_date,
+                (SELECT COUNT(*) FROM silver.tenant_status_history) AS silver_status_history_rows,
+                (SELECT MAX(snapshot_date) FROM gold.occupancy_daily_metrics) AS gold_occupancy_max_date,
+                (SELECT COUNT(*) FROM gold.occupancy_daily_metrics) AS gold_occupancy_rows
+        """)
+        freshness = cursor.fetchone()
+        print("\n=== LAYER FRESHNESS ===")
+        print(
+            "silver.tenant_room_snapshot_daily: "
+            f"max_snapshot_date={freshness['silver_snapshot_max_date']}, "
+            f"rows={freshness['silver_snapshot_rows']}"
+        )
+        print(
+            "silver.tenant_status_history: "
+            f"max_valid_from={freshness['silver_status_history_max_date']}, "
+            f"rows={freshness['silver_status_history_rows']}"
+        )
+        print(
+            "gold.occupancy_daily_metrics: "
+            f"max_snapshot_date={freshness['gold_occupancy_max_date']}, "
+            f"rows={freshness['gold_occupancy_rows']}"
+        )
+        print("=== END LAYER FRESHNESS ===")
+        return freshness
+    finally:
+        cursor.close()
+        connection.close()
+
+
 def enrich_nationality_data():
     """
     Enrich missing nationality data using AWS Bedrock LLM.
@@ -1335,32 +1650,42 @@ def main():
         # Use scripts/rollback_etl.sh if recovery needed
         skip_enrichment = env_bool("DAILY_SKIP_LLM_ENRICHMENT", True)
         skip_table_backups = env_bool("DAILY_SKIP_TABLE_BACKUPS", True)
-        
-        # Step 1: Find and download latest dump
-        skip_etl_run = False
+        run_backup_cleanup = env_bool("DAILY_RUN_BACKUP_CLEANUP", True)
+        include_staging_backup_cleanup = env_bool("DAILY_CLEANUP_STAGING_BACKUPS", True)
+        run_occupancy_gold_step = runtime_bool("DAILY_RUN_OCCUPANCY_GOLD_STEP", True)
+        occupancy_lookback_days = env_int("DAILY_OCCUPANCY_LOOKBACK_DAYS", 3, minimum=0)
+        occupancy_forward_days = env_int("DAILY_OCCUPANCY_FORWARD_DAYS", 90, minimum=0)
+        occupancy_target_date = runtime_date("DAILY_TARGET_DATE", datetime.now().date())
+
+        # Initialize counters for summary
+        table_count = 0
+        stmt_count = 0
+        dropped_count = 0
+        snapshot_exported = 0
+        snapshot_rows_loaded = 0
+        enriched_count = 0
+        backup_count = 0
+        removed_backups = 0
+        dropped_tmp_tables = 0
+        dbt_success = False
+        occupancy_rows_processed = 0
+        freshness_snapshot: Dict[str, Any] = {}
+
+        # Step 1: Always find and download latest dump
         latest_key = None
         local_path = None
         with timed_step("01_find_and_download_dump", step_timings):
             latest_key = get_latest_dump_key()
-            if is_dump_already_processed(latest_key):
-                skip_etl_run = True
-            else:
-                local_path = download_and_parse_dump(latest_key)
+            local_path = download_and_parse_dump(latest_key)
 
-        if skip_etl_run:
-            print("Skipping ETL run because the latest dump is already processed.")
-            print_step_timing_summary(step_timings)
-            job.commit()
-            return
-        
         # Step 2: Load to Aurora staging
         with timed_step("02_load_dump_to_aurora_staging", step_timings):
             table_count, stmt_count = load_to_aurora_staging(local_path)
-        
+
         # Step 3: Clean up empty tables
         with timed_step("03_cleanup_empty_staging_tables", step_timings):
             dropped_count = cleanup_empty_staging_tables()
-        
+
         # Step 4: Export today's tenant snapshot to S3
         with timed_step("04_export_tenant_snapshot_to_s3", step_timings):
             username, password = get_aurora_credentials()
@@ -1382,7 +1707,7 @@ def main():
                 snapshot_exported = snapshot_export_result.get('rows_exported', 0)
             finally:
                 connection.close()
-        
+
         # Step 5: Load all historical snapshots from S3
         with timed_step("05_load_snapshot_history_from_s3", step_timings):
             username, password = get_aurora_credentials()
@@ -1402,37 +1727,55 @@ def main():
                 snapshot_rows_loaded = snapshot_load_result.get('total_rows_loaded', 0)
             finally:
                 connection.close()
-        
+
         # Step 6: Enrich nationality data using LLM (レソト and missing values)
         if skip_enrichment:
-            enriched_count = 0
             print("\nSkipping LLM enrichment (DAILY_SKIP_LLM_ENRICHMENT=true)")
         else:
             with timed_step("06_llm_nationality_enrichment", step_timings):
                 enriched_count = enrich_nationality_data()
-        
+
         # Step 7: Create backups before dbt transformations
         if skip_table_backups:
-            backup_count = 0
-            removed_backups = 0
             print("\nSkipping table backups (DAILY_SKIP_TABLE_BACKUPS=true)")
         else:
             with timed_step("07_create_pre_etl_backups", step_timings):
                 backup_count = create_pre_etl_backups()
-        
-            # Step 8: Clean up old backups (keep last 3 days)
+
+        # Step 8: Clean up old backups (keep last 3 days)
+        if run_backup_cleanup:
             with timed_step("08_cleanup_old_backups", step_timings):
-                removed_backups = cleanup_old_backups(days_to_keep=3)
-        
+                removed_backups = cleanup_old_backups(
+                    days_to_keep=3,
+                    include_staging=include_staging_backup_cleanup
+                )
+        else:
+            print("\nSkipping backup cleanup (DAILY_RUN_BACKUP_CLEANUP=false)")
+
         # Step 8.5: Clean up dbt temp tables (prevent failures)
         with timed_step("08_5_cleanup_dbt_tmp_tables", step_timings):
             dropped_tmp_tables = cleanup_dbt_tmp_tables()
-        
-        # Step 9: Run dbt transformations
+
+        # Step 9: Run dbt transformations (silver + dbt gold)
         with timed_step("09_run_dbt_transformations", step_timings):
             dbt_success = run_dbt_transformations()
-        
-        # Step 10: Archive processed dump
+
+        # Step 9.5: Update gold occupancy KPI table
+        if run_occupancy_gold_step:
+            with timed_step("09_5_update_gold_occupancy_metrics", step_timings):
+                occupancy_rows_processed = update_gold_occupancy_kpis(
+                    target_date=occupancy_target_date,
+                    lookback_days=occupancy_lookback_days,
+                    forward_days=occupancy_forward_days
+                )
+        else:
+            print("\nSkipping occupancy KPI update (DAILY_RUN_OCCUPANCY_GOLD_STEP=false)")
+
+        # Step 9.6: Log silver/gold freshness after transformations
+        with timed_step("09_6_log_layer_freshness", step_timings):
+            freshness_snapshot = log_layer_freshness()
+
+        # Step 10: Archive processed dump (archive only; not used for run decisions)
         with timed_step("10_archive_processed_dump", step_timings):
             archive_processed_dump(latest_key)
         
@@ -1453,6 +1796,14 @@ def main():
         print(f"dbt temp tables dropped: {dropped_tmp_tables}")
         print(f"SQL statements executed: {stmt_count}")
         print(f"dbt transformations: {'Success' if dbt_success else 'Failed'}")
+        print(f"Gold occupancy KPI dates processed: {occupancy_rows_processed}")
+        if freshness_snapshot:
+            print(
+                "Layer freshness max dates: "
+                f"silver_snapshot={freshness_snapshot.get('silver_snapshot_max_date')}, "
+                f"silver_status_history={freshness_snapshot.get('silver_status_history_max_date')}, "
+                f"gold_occupancy={freshness_snapshot.get('gold_occupancy_max_date')}"
+            )
         print(f"{'='*60}\n")
         print(f"Tenant Status History:")
         print(f"  • Today's snapshot: {snapshot_exported} tenants exported to S3")
