@@ -27,6 +27,6 @@ phases:
         print("EVIDENCE_VAR__lookback_days=730")
         PY
       - NODE_OPTIONS="--max-old-space-size=4096" npm run sources -- --sources aurora_gold
-      - npm run build
+      - NODE_OPTIONS="--max-old-space-size=4096" npm run build
       - aws s3 sync build/ "s3://$EVIDENCE_S3_BUCKET/" --delete
       - aws cloudfront create-invalidation --distribution-id "$EVIDENCE_CF_DISTRIBUTION_ID" --paths "/*"
