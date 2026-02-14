@@ -29,8 +29,8 @@ with base_raw as (
     phase,
     occupancy_rate_pct
   from aurora_gold.occupancy_daily_metrics_all
-  where snapshot_date between as_of_snapshot_date - interval '56 days'
-                        and as_of_snapshot_date + interval '30 days'
+  where snapshot_date between DATE_SUB(as_of_snapshot_date, INTERVAL 56 DAY)
+                        and DATE_ADD(as_of_snapshot_date, INTERVAL 30 DAY)
 ),
 base as (
   select
@@ -75,7 +75,7 @@ projection_stub as (
   -- If there are 0 valid future projection points in-range, add a stub point after as-of so the
   -- projection series visibly renders (otherwise it can be fully hidden under the fact point).
   select
-    cast(snapshot_date + interval '1 day' as date) as snapshot_date,
+    DATE_ADD(snapshot_date, INTERVAL 1 DAY) as snapshot_date,
     as_of_snapshot_date,
     'projection' as phase,
     occupancy_rate_pct

@@ -48,7 +48,7 @@ select
   sum(moveout_count) as moveout_count,
   sum(net_change) as net_change
 from aurora_gold.municipality_churn_weekly
-where week_start >= current_date - interval '12 weeks'
+where week_start >= DATE_SUB(CURRENT_DATE, INTERVAL 12 WEEK)
 group by municipality
 order by abs(sum(net_change)) desc
 limit 30
@@ -61,7 +61,7 @@ select
   sum(moveout_count) as moveout_count,
   sum(net_change) as net_change
 from aurora_gold.property_churn_weekly
-where week_start >= current_date - interval '12 weeks'
+where week_start >= DATE_SUB(CURRENT_DATE, INTERVAL 12 WEEK)
 group by apartment_name
 order by abs(sum(net_change)) desc
 limit 30
