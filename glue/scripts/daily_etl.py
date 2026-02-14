@@ -1409,6 +1409,10 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         f"(calendar_today={calendar_today}, as_of_snapshot={as_of_snapshot_date}, lag={lag_days}d)"
     )
 
+    # Ensure deterministic ordering so future projections can chain correctly.
+    target_dates = sorted(target_dates)
+    period_end_by_date: Dict[date, int] = {}
+
     for target_date in target_dates:
         is_future = target_date > as_of_snapshot_date
         snapshot_date_filter = as_of_snapshot_date if is_future else target_date
@@ -1469,14 +1473,29 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         occupancy_delta = new_moveins - new_moveouts
 
         previous_date = target_date - timedelta(days=1)
-        cursor.execute("""
-            SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
-            FROM silver.tenant_room_snapshot_daily
-            WHERE snapshot_date = %s
-              AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
-        """, (previous_date,))
-        period_start_rooms = cursor.fetchone()["count"]
+        if is_future:
+            # Future projections must chain from the previous day's KPI end-room count.
+            # Silver snapshots do not exist for future dates, so counting from silver would reset to 0.
+            prior_end = period_end_by_date.get(previous_date)
+            if prior_end is None:
+                cursor.execute("""
+                    SELECT period_end_rooms
+                    FROM gold.occupancy_daily_metrics
+                    WHERE snapshot_date = %s
+                """, (previous_date,))
+                result = cursor.fetchone()
+                prior_end = result["period_end_rooms"] if result else 0
+            period_start_rooms = int(prior_end)
+        else:
+            cursor.execute("""
+                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
+            """, (previous_date,))
+            period_start_rooms = cursor.fetchone()["count"]
         period_end_rooms = period_start_rooms + occupancy_delta
+        period_end_by_date[target_date] = int(period_end_rooms)
         occupancy_rate = period_end_rooms / TOTAL_PHYSICAL_ROOMS
 
         cursor.execute("""
