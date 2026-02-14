@@ -3,9 +3,15 @@ pytest configuration and fixtures for Glue script testing.
 Sets up proper mocking for AWS Glue dependencies.
 """
 
+import os
 import sys
 import pytest
 from unittest.mock import Mock, MagicMock
+
+# GitHub Actions runners may not have an AWS region configured, but several Glue scripts
+# create boto3 clients at import time. Ensure a default region exists before imports.
+os.environ.setdefault('AWS_REGION', 'ap-northeast-1')
+os.environ.setdefault('AWS_DEFAULT_REGION', 'ap-northeast-1')
 
 # Mock AWS Glue modules BEFORE any imports
 mock_args = {
