@@ -23,7 +23,7 @@ order by week_start, tenant_type
 
 ```sql moveout_tenure_weekly
 select
-  cast(date_trunc('week', moveout_date) as date) as week_start,
+  DATE_SUB(moveout_date, INTERVAL WEEKDAY(moveout_date) DAY) as week_start,
   tenure_category,
   count(*) as moveout_count
 from aurora_gold.moveout_analysis_recent
@@ -37,7 +37,7 @@ select
   moveout_reason_en,
   sum(moveout_count) as moveout_count
 from aurora_gold.moveouts_reason_weekly
-where week_start >= current_date - interval '365 days'
+where week_start >= DATE_SUB(CURRENT_DATE, INTERVAL 365 DAY)
 group by moveout_reason_en
 order by moveout_count desc
 limit 15
@@ -71,7 +71,7 @@ select
   municipality,
   sum(moveout_count) as moveout_count
 from aurora_gold.municipality_churn_weekly
-where week_start >= current_date - interval '12 weeks'
+where week_start >= DATE_SUB(CURRENT_DATE, INTERVAL 12 WEEK)
 group by municipality
 order by moveout_count desc
 limit 30
@@ -82,7 +82,7 @@ select
   apartment_name,
   sum(moveout_count) as moveout_count
 from aurora_gold.property_churn_weekly
-where week_start >= current_date - interval '12 weeks'
+where week_start >= DATE_SUB(CURRENT_DATE, INTERVAL 12 WEEK)
 group by apartment_name
 order by moveout_count desc
 limit 30
