@@ -265,6 +265,20 @@ def get_processed_dump_key(source_key: str) -> str:
     return f"processed/{source_key}"
 
 
+def extract_dump_date_from_key(s3_key: str) -> date | None:
+    """
+    Extract dump date from S3 key like gghouse_YYYYMMDD.sql(.gz).
+    Returns None if the key doesn't match expected pattern.
+    """
+    m = re.search(r"gghouse_(\d{8})\.sql(\.gz)?$", s3_key)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d").date()
+    except ValueError:
+        return None
+
+
 def get_aurora_credentials():
     """Retrieve Aurora credentials from Secrets Manager."""
     response = secretsmanager.get_secret_value(SecretId=args['AURORA_SECRET_ARN'])
@@ -602,6 +616,13 @@ def run_dbt_transformations():
     os.environ['AURORA_PASSWORD'] = password
     os.environ['DBT_TARGET'] = args['ENVIRONMENT']
 
+    # Anchor dbt's notion of "daily snapshot date" to the dump date (JST),
+    # not the Aurora server clock (typically UTC). This avoids off-by-one day
+    # snapshots when the job runs at 07:00 JST (22:00 UTC previous day).
+    snapshot_date = runtime_date("DAILY_TARGET_DATE", datetime.now().date())
+    dbt_vars_payload = json.dumps({"daily_snapshot_date": snapshot_date.isoformat()})
+    print(f"[dbt_vars] daily_snapshot_date={snapshot_date.isoformat()}")
+
     # Exclude optional models from the main graph run.
     # Override via DBT_EXCLUDE_MODELS env var (comma-separated list).
     dbt_excludes_env = os.environ.get("DBT_EXCLUDE_MODELS", "")
@@ -834,6 +855,7 @@ def run_dbt_transformations():
         dbt_executable, "seed",
         "--profiles-dir", dbt_local_path,
         "--project-dir", dbt_local_path,
+        "--vars", dbt_vars_payload,
         "--target", args['ENVIRONMENT']
     ], "DBT SEED")
     print(f"[dbt_timing] seed_seconds={time.perf_counter() - seed_start:.2f}")
@@ -855,6 +877,7 @@ def run_dbt_transformations():
             "--profiles-dir", dbt_local_path,
             "--project-dir", dbt_local_path,
             "--target", args['ENVIRONMENT'],
+            "--vars", dbt_vars_payload,
             "--fail-fast",
             "--threads", "1",
             "--select",
@@ -906,6 +929,7 @@ def run_dbt_transformations():
         "--profiles-dir", dbt_local_path,
         "--project-dir", dbt_local_path,
         "--target", args['ENVIRONMENT'],
+        "--vars", dbt_vars_payload,
         "--fail-fast"
     ]
     remaining_excludes = list(dict.fromkeys(dbt_excludes + pre_run_models + post_run_models))
@@ -931,7 +955,8 @@ def run_dbt_transformations():
             dbt_executable, "test",
             "--profiles-dir", dbt_local_path,
             "--project-dir", dbt_local_path,
-            "--target", args['ENVIRONMENT']
+            "--target", args['ENVIRONMENT'],
+            "--vars", dbt_vars_payload,
         ]
         for model_name in remaining_excludes:
             test_cmd.extend(["--exclude", model_name])
@@ -1539,7 +1564,8 @@ def log_layer_freshness() -> Dict[str, Any]:
                 (SELECT COUNT(*) FROM silver.tenant_room_snapshot_daily) AS silver_snapshot_rows,
                 (SELECT MAX(valid_from) FROM silver.tenant_status_history) AS silver_status_history_max_date,
                 (SELECT COUNT(*) FROM silver.tenant_status_history) AS silver_status_history_rows,
-                (SELECT MAX(snapshot_date) FROM gold.occupancy_daily_metrics) AS gold_occupancy_max_date,
+                (SELECT MAX(updated_at) FROM gold.occupancy_daily_metrics) AS gold_occupancy_max_updated_at,
+                (SELECT MAX(snapshot_date) FROM gold.occupancy_daily_metrics) AS gold_occupancy_max_snapshot_date,
                 (SELECT COUNT(*) FROM gold.occupancy_daily_metrics) AS gold_occupancy_rows
         """)
         freshness = cursor.fetchone()
@@ -1556,7 +1582,8 @@ def log_layer_freshness() -> Dict[str, Any]:
         )
         print(
             "gold.occupancy_daily_metrics: "
-            f"max_snapshot_date={freshness['gold_occupancy_max_date']}, "
+            f"max_updated_at_utc={freshness['gold_occupancy_max_updated_at']}, "
+            f"max_snapshot_date={freshness['gold_occupancy_max_snapshot_date']}, "
             f"rows={freshness['gold_occupancy_rows']}"
         )
         print("=== END LAYER FRESHNESS ===")
@@ -1655,7 +1682,6 @@ def main():
         run_occupancy_gold_step = runtime_bool("DAILY_RUN_OCCUPANCY_GOLD_STEP", True)
         occupancy_lookback_days = env_int("DAILY_OCCUPANCY_LOOKBACK_DAYS", 3, minimum=0)
         occupancy_forward_days = env_int("DAILY_OCCUPANCY_FORWARD_DAYS", 90, minimum=0)
-        occupancy_target_date = runtime_date("DAILY_TARGET_DATE", datetime.now().date())
 
         # Initialize counters for summary
         table_count = 0
@@ -1674,9 +1700,19 @@ def main():
         # Step 1: Always find and download latest dump
         latest_key = None
         local_path = None
+        dump_date = None
         with timed_step("01_find_and_download_dump", step_timings):
             latest_key = get_latest_dump_key()
+            dump_date = extract_dump_date_from_key(latest_key)
+            if dump_date is not None and "DAILY_TARGET_DATE" not in os.environ:
+                os.environ["DAILY_TARGET_DATE"] = dump_date.isoformat()
+                print(f"Anchored DAILY_TARGET_DATE to dump date: {dump_date.isoformat()}")
             local_path = download_and_parse_dump(latest_key)
+
+        occupancy_target_date = runtime_date(
+            "DAILY_TARGET_DATE",
+            dump_date if dump_date is not None else datetime.now().date(),
+        )
 
         # Step 2: Load to Aurora staging
         with timed_step("02_load_dump_to_aurora_staging", step_timings):
@@ -1697,7 +1733,7 @@ def main():
                 charset='utf8mb4'
             )
             try:
-                snapshot_date = datetime.now().date()
+                snapshot_date = occupancy_target_date
                 snapshot_export_result = export_tenant_snapshot_to_s3(
                     connection,
                     s3,

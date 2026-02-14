@@ -48,6 +48,13 @@ def test_get_processed_dump_key_maps_dump_prefixes():
     assert daily_etl.get_processed_dump_key("gghouse_20260213.sql") == "processed/gghouse_20260213.sql"
 
 
+def test_extract_dump_date_from_key_parses_sql_and_gz():
+    assert daily_etl.extract_dump_date_from_key("dumps/gghouse_20260214.sql") == date(2026, 2, 14)
+    assert daily_etl.extract_dump_date_from_key("raw/dumps/gghouse_20260214.sql.gz") == date(2026, 2, 14)
+    assert daily_etl.extract_dump_date_from_key("gghouse_20260214.sql") == date(2026, 2, 14)
+    assert daily_etl.extract_dump_date_from_key("dumps/not_a_dump.sql") is None
+
+
 def test_runtime_date_reads_valid_env(monkeypatch):
     monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-13")
     result = daily_etl.runtime_date("DAILY_TARGET_DATE", date(2026, 2, 1))
@@ -71,6 +78,7 @@ def test_run_dbt_transformations_pre_phase_then_main_phase(monkeypatch):
     monkeypatch.setenv("DBT_EXCLUDE_MODELS", "")
     monkeypatch.setenv("DBT_PRE_RUN_MODELS", "silver.tenant_room_snapshot_daily")
     monkeypatch.setenv("DBT_POST_RUN_MODELS", "silver.tenant_status_history")
+    monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-14")
     monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
 
     def fake_run(cmd, check=False, capture_output=False, text=False):
@@ -108,6 +116,11 @@ def test_run_dbt_transformations_pre_phase_then_main_phase(monkeypatch):
     assert "1" in post_phase
     assert "--select" in post_phase
     assert "silver.tenant_status_history" in post_phase
+    assert "--vars" in pre_phase
+    assert "--vars" in main_phase
+    assert "--vars" in post_phase
+    assert "daily_snapshot_date" in " ".join(pre_phase)
+    assert "2026-02-14" in " ".join(pre_phase)
 
 
 def test_run_dbt_transformations_default_skips_post_run(monkeypatch):
@@ -121,6 +134,7 @@ def test_run_dbt_transformations_default_skips_post_run(monkeypatch):
     monkeypatch.setenv("DBT_EXCLUDE_MODELS", "")
     monkeypatch.setenv("DBT_PRE_RUN_MODELS", "silver.tenant_room_snapshot_daily")
     monkeypatch.delenv("DBT_POST_RUN_MODELS", raising=False)
+    monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-14")
     monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
 
     def fake_run(cmd, check=False, capture_output=False, text=False):
@@ -135,6 +149,8 @@ def test_run_dbt_transformations_default_skips_post_run(monkeypatch):
 
     run_commands = [cmd for cmd in calls if len(cmd) > 1 and cmd[0].endswith("/dbt") and cmd[1] == "run"]
     assert len(run_commands) == 2
+    assert "--vars" in run_commands[0]
+    assert "2026-02-14" in " ".join(run_commands[0])
 
 
 def test_run_dbt_transformations_retries_lock_wait(monkeypatch):
@@ -153,6 +169,7 @@ def test_run_dbt_transformations_retries_lock_wait(monkeypatch):
     monkeypatch.setenv("DBT_POST_RUN_MODELS", "")
     monkeypatch.setenv("DBT_PRE_RUN_RETRIES", "2")
     monkeypatch.setenv("DBT_PRE_RUN_RETRY_SLEEP_SECONDS", "0")
+    monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-14")
     monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
 
     def fake_run(cmd, check=False, capture_output=False, text=False):

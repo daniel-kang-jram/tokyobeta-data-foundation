@@ -78,6 +78,8 @@ WITH all_active_movings AS (
         AND COALESCE(m.cancel_flag, 0) = 0
 ),
 
+{% set daily_snapshot_date = var('daily_snapshot_date', none) %}
+
 tenant_room_assignments AS (
     -- Take only the most recent moving per tenant-room combination
     -- This eliminates duplicate historical records
@@ -112,8 +114,12 @@ with_property_room AS (
 
 final AS (
     SELECT
-        -- Snapshot date (run date)
-        CURDATE() as snapshot_date,
+        -- Snapshot date (anchored to dump date via dbt vars; fallback to server date)
+        {% if daily_snapshot_date is not none %}
+            CAST('{{ daily_snapshot_date }}' AS DATE) as snapshot_date,
+        {% else %}
+            CURDATE() as snapshot_date,
+        {% endif %}
         
         -- Status
         management_status_code,
