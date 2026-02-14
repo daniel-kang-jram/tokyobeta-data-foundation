@@ -8,6 +8,7 @@ on:
       - 'terraform/**'
       - 'glue/scripts/**'
       - 'dbt/**'
+  workflow_dispatch: {}
 
 permissions:
   contents: read
