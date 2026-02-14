@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  glue-tests:
+    name: Glue Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r glue/tests/requirements.txt
+      - name: Run Glue unit tests
+        run: |
+          pytest glue/tests -q --cov=glue/scripts --cov-report=term-missing --cov-fail-under=80
+      - name: Run pipeline integration checks
+        run: |
+          python3 scripts/tests/test_etl_integration.py
+
+  terraform-check:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+      - name: Terraform fmt
+        run: terraform fmt -check -recursive terraform/environments
+      - name: Validate prod Terraform
+        working-directory: terraform/environments/prod
+        run: |
+          terraform init -backend=false
+          terraform validate
+      - name: Validate test EC2 role Terraform
+        working-directory: terraform/environments/test_ec2_role
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  evidence-build:
+    name: Evidence Build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect Evidence changes
+        id: evidence_changes
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+
+          if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- evidence/ | wc -l)
+          if [[ "$CHANGED" -gt 0 ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Skip if no Evidence changes
+        if: steps.evidence_changes.outputs.changed != 'true'
+        run: echo "No Evidence path changes detected. Skipping."
+      - name: Set up Node
+        if: steps.evidence_changes.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: evidence/.nvmrc
+      - name: Install Evidence dependencies
+        if: steps.evidence_changes.outputs.changed == 'true'
+        run: |
+          cd evidence
+          npm ci
+      - name: Build Evidence
+        if: steps.evidence_changes.outputs.changed == 'true'
+        run: |
+          cd evidence
+          npm run build

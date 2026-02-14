@@ -1,0 +1,103 @@
+name: Deploy Prod
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'terraform/**'
+      - 'glue/scripts/**'
+      - 'dbt/**'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: tokyobeta-prod-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-prod:
+    name: Deploy Infrastructure and Artifacts
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      AWS_REGION: ap-northeast-1
+      S3_ARTIFACT_BUCKET: jram-gghouse
+      TERRAFORM_STATE_BUCKET: tokyobeta-terraform-state
+      TERRAFORM_STATE_KEY: prod/terraform.tfstate
+      TF_VAR_alert_email: ${{ secrets.TF_VAR_ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::343881458651:role/tokyobeta-prod-github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Sync Glue scripts to S3
+        run: |
+          aws s3 sync glue/scripts s3://${S3_ARTIFACT_BUCKET}/glue-scripts/ \
+            --exclude "*" --include "*.py" --delete
+
+      - name: Install dbt CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install dbt-core==1.7.0 dbt-mysql==1.7.0
+
+      - name: Sync dbt project to S3
+        run: |
+          cd dbt
+          dbt deps
+          cd ..
+          aws s3 sync dbt s3://${S3_ARTIFACT_BUCKET}/dbt-project/ \
+            --exclude ".user.yml" \
+            --exclude "target/*" \
+            --exclude ".venv/*" \
+            --exclude "logs/*" \
+            --delete
+
+      - name: Verify remote Terraform state exists
+        run: |
+          if ! aws s3api head-bucket --bucket ${S3_ARTIFACT_BUCKET} > /dev/null 2>&1; then
+            echo "::error::S3 artifact bucket missing: s3://${S3_ARTIFACT_BUCKET}."
+            exit 1
+          fi
+
+          if ! aws s3api head-bucket --bucket ${TERRAFORM_STATE_BUCKET} > /dev/null 2>&1; then
+            echo "::error::Terraform state bucket missing: s3://${TERRAFORM_STATE_BUCKET}. Create bootstrap state backend first."
+            exit 1
+          fi
+
+          if ! aws dynamodb describe-table --table-name tokyobeta-terraform-locks --region ${AWS_REGION} > /dev/null 2>&1; then
+            echo "::error::Terraform lock table missing: tokyobeta-terraform-locks. Create bootstrap lock table first."
+            exit 1
+          fi
+
+          if ! aws s3api head-object --bucket ${TERRAFORM_STATE_BUCKET} --key ${TERRAFORM_STATE_KEY} > /dev/null 2>&1; then
+            echo "::error::Remote Terraform state not found in s3://${TERRAFORM_STATE_BUCKET}/${TERRAFORM_STATE_KEY}. Run local migration first: cd terraform/environments/prod && terraform init -migrate-state."
+            exit 1
+          fi
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5
+
+      - name: Apply Terraform
+        working-directory: terraform/environments/prod
+        run: |
+          terraform init
+          terraform plan -out=prod.tfplan
+          terraform apply -auto-approve prod.tfplan
