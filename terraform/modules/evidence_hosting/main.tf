@@ -477,7 +477,7 @@ resource "aws_codebuild_project" "refresh" {
   }
 
   environment {
-    compute_type                = "BUILD_GENERAL1_SMALL"
+    compute_type                = "BUILD_GENERAL1_MEDIUM"
     image                       = "aws/codebuild/standard:7.0"
     type                        = "LINUX_CONTAINER"
     image_pull_credentials_type = "CODEBUILD"
