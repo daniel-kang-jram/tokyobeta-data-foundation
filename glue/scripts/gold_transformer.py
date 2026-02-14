@@ -11,6 +11,7 @@ import boto3
 import json
 import subprocess
 import os
+import re
 from datetime import datetime, timedelta
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
@@ -381,10 +382,51 @@ def create_table_backups(connection, tables, schema='gold'):
 
 def cleanup_old_backups(connection, days_to_keep=3):
     """
-    Deprecated: Backup cleanup is now handled inline in create_table_backups.
-    Kept for compatibility but does nothing.
+    Remove backup tables older than retention window across silver and gold schemas.
     """
-    return 0
+    cursor = connection.cursor()
+    removed_count = 0
+    seen_backups = set()
+    cutoff = datetime.now() - timedelta(days=days_to_keep)
+    backup_pattern = re.compile(r".+_backup_(\d{8})_\d{6}$")
+
+    schemas = ("silver", "gold")
+    try:
+        for schema in schemas:
+            cursor.execute(
+                """
+                SELECT TABLE_NAME
+                FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA = %s
+                  AND TABLE_NAME LIKE '%%_backup%%'
+                ORDER BY TABLE_NAME
+                """
+            , (schema,))
+
+            for (table_name,) in cursor.fetchall():
+                match = backup_pattern.match(table_name)
+                if not match:
+                    continue
+
+                if table_name in seen_backups:
+                    continue
+
+                try:
+                    backup_date = datetime.strptime(match.group(1), "%Y%m%d").date()
+                except ValueError:
+                    continue
+
+                if backup_date <= cutoff.date():
+                    cursor.execute(f"DROP TABLE IF EXISTS {schema}.{table_name}")
+                    removed_count += 1
+                    seen_backups.add(table_name)
+
+        connection.commit()
+        return removed_count
+    except Exception:
+        return 0
+    finally:
+        cursor.close()
 
 
 def ensure_occupancy_kpi_table_exists(cursor):
