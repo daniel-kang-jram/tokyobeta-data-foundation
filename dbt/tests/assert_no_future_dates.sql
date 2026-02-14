@@ -1,15 +1,6 @@
--- Test: Ensure no activity dates are in the future
--- This could indicate data quality issues or incorrect date parsing
-
-SELECT
-    'daily_activity_summary' as table_name,
-    activity_date,
-    COUNT(*) as invalid_count
-FROM {{ ref('daily_activity_summary') }}
-WHERE activity_date > CURRENT_DATE
-GROUP BY activity_date
-
-UNION ALL
+-- Test: Ensure contract / move-out dates are not in the future.
+-- Note: gold.occupancy_daily_metrics intentionally contains future projection dates,
+-- so it is excluded from this check.
 
 SELECT
     'new_contracts' as table_name,

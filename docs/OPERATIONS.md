@@ -149,11 +149,20 @@ The Evidence proof-of-concept starts with:
 - `gold.new_contracts` for move-in profiling
 - `gold.moveouts` for move-out profiling
 
+Additional marts used by the redesigned dashboards:
+- `gold.occupancy_kpi_meta` (as-of snapshot boundary + freshness)
+- `gold.dim_property` + `gold.occupancy_property_map_latest` (Tokyo map)
+- `gold.movein_analysis` + weekly cubes (`gold.move_events_weekly`, `gold.*_churn_weekly`, `gold.moveouts_reason_weekly`)
+
 Dimensions covered in the POC:
 - tenant type (`tenant_type`: corporate/individual)
 - nationality
 - property (`apartment_name`)
 - municipality
+
+Time grains:
+- Occupancy: daily (with explicit fact vs projection boundary)
+- Move-in / Move-out profiling: weekly (Monday-start)
 
 ### Runbook (Local)
 ```bash

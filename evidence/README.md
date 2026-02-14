@@ -2,7 +2,12 @@
 
 This directory contains an Evidence.dev proof-of-concept for business reporting on the Aurora gold layer.
 
-It starts from `gold.occupancy_daily_metrics` (current occupancy KPI table) and extends into move-in/move-out profiling by:
+It starts from `gold.occupancy_daily_metrics` (portfolio occupancy KPI table) and extends into weekly-first profiling and geography views via:
+- `gold.occupancy_kpi_meta` (as-of snapshot boundary: fact vs projection)
+- `gold.dim_property` + `gold.occupancy_property_map_latest` (Tokyo occupancy map)
+- `gold.movein_analysis` / `gold.moveout_analysis` + weekly cubes for richer segmentation
+
+It supports breakdowns by:
 - contract type (`tenant_type`)
 - nationality
 - property (`apartment_name`)
@@ -22,6 +27,8 @@ Profiling datasets:
 - `gold.new_contracts` for move-ins
 - `gold.moveouts` for completed move-outs
 - `gold.moveout_analysis` for richer move-out dimensions (already modeled in dbt)
+- `gold.movein_analysis` for richer move-in dimensions (added for weekly profiling)
+- `gold.move_events_weekly` + churn marts for weekly dashboards
 
 ## Local setup
 
@@ -70,11 +77,11 @@ npm run preview   # Preview built site
 
 ## Expected pages
 
-- `pages/index.md`: KPI overview and quick diagnostics
+- `pages/index.md`: KPI overview + fact vs projection hero chart + full KPI table
 - `pages/occupancy.md`: occupancy trend and net move-in/move-out drivers
-- `pages/moveins.md`: move-in profiling by tenant type, nationality, municipality, property
-- `pages/moveouts.md`: move-out profiling with same dimensions and trend breakdown
-- `pages/geography.md`: municipality/property concentration and churn hotspots
+- `pages/moveins.md`: weekly move-in profiling (multi-dimensional)
+- `pages/moveouts.md`: weekly move-out profiling (tenure/reasons + drilldown)
+- `pages/geography.md`: Tokyo occupancy map + weekly churn hotspots
 
 ## Security notes
 

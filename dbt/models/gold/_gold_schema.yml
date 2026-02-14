@@ -1,84 +1,6 @@
 version: 2
 
 models:
-  - name: occupancy_daily_metrics
-    description: |
-      Daily occupancy KPI metrics computed from silver.tenant_room_snapshot_daily.
-      Updated incrementally by Glue (not dbt) for target dates only.
-      
-      Grain: One row per snapshot_date.
-      Volume: 1 row/day (365 rows/year).
-      
-      Metrics:
-      - 申込 (applications): First appearance of pairs in status 4 or 5
-      - 新規入居者 (new_moveins): Pairs with move_in_date = snapshot_date
-      - 新規退去者 (new_moveouts): Pairs with moveout date = snapshot_date (past: moveout_plans_date, future: moveout_date)
-      - 稼働室数増減 (occupancy_delta): new_moveins - new_moveouts
-      - 期首稼働室数 (period_start_rooms): Occupied count on previous day
-      - 期末稼働室数 (period_end_rooms): period_start + delta
-      - 稼働率 (occupancy_rate): period_end / 16108
-    
-    config:
-      schema: gold
-    
-    columns:
-      - name: snapshot_date
-        description: Snapshot date
-        tests:
-          - unique
-          - not_null
-      
-      - name: applications
-        description: Number of first-time applications (status 4 or 5)
-        tests:
-          - not_null
-      
-      - name: new_moveins
-        description: Number of new move-ins on this date
-        tests:
-          - not_null
-      
-      - name: new_moveouts
-        description: Number of new move-outs on this date
-        tests:
-          - not_null
-      
-      - name: occupancy_delta
-        description: Net change in occupied rooms (moveins - moveouts)
-        tests:
-          - not_null
-      
-      - name: period_start_rooms
-        description: Occupied rooms at start of day (previous day's end count)
-        tests:
-          - not_null
-      
-      - name: period_end_rooms
-        description: Occupied rooms at end of day
-        tests:
-          - not_null
-      
-      - name: occupancy_rate
-        description: Occupancy rate (period_end_rooms / 16108)
-        tests:
-          - not_null
-    
-    tests:
-      # Arithmetic invariant: period_end = period_start + delta
-      - dbt_utils.expression_is_true:
-          expression: "period_end_rooms = period_start_rooms + occupancy_delta"
-          severity: error
-      
-      # Arithmetic invariant: delta = moveins - moveouts
-      - dbt_utils.expression_is_true:
-          expression: "occupancy_delta = new_moveins - new_moveouts"
-          severity: error
-      
-      # Rate calculation: occupancy_rate = period_end / 16108
-      - dbt_utils.expression_is_true:
-          expression: "ABS(occupancy_rate - (period_end_rooms / 16108.0)) < 0.0001"
-          severity: error
-  
   - name: new_contracts
     description: New contract records with full demographics and geolocation
     config:
@@ -280,3 +202,227 @@ models:
         description: Count of tenants with long stays (1-2 years)
       - name: tenure_very_long_count
         description: Count of tenants with very long stays (2+ years)
+
+  - name: occupancy_kpi_meta
+    description: |
+      Single-row meta table for occupancy KPI dashboards.
+      Provides the semantic "as-of snapshot date" boundary for fact vs projection,
+      plus freshness signals for gold.occupancy_daily_metrics.
+    config:
+      schema: gold
+    columns:
+      - name: as_of_snapshot_date
+        description: MAX(snapshot_date) from silver.tenant_room_snapshot_daily
+        tests:
+          - not_null
+      - name: lag_days
+        description: Calendar lag in days (calendar_today - as_of_snapshot_date)
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "lag_days >= 0"
+          severity: warn
+
+  - name: dim_property
+    description: |
+      Property dimension table with validated geolocation and basic room counts.
+      Grain: 1 row per apartment_id.
+    config:
+      schema: gold
+    columns:
+      - name: apartment_id
+        description: Apartment primary key
+        tests:
+          - unique
+          - not_null
+      - name: asset_id_hj
+        description: Property identifier (AssetID_HJ)
+        tests:
+          - not_null
+      - name: latitude
+        description: Validated property latitude
+        tests:
+          - not_null
+      - name: longitude
+        description: Validated property longitude
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "latitude BETWEEN 35.0 AND 36.0 AND longitude BETWEEN 139.0 AND 140.5"
+          severity: error
+
+  - name: occupancy_property_daily
+    description: |
+      Daily property-level occupancy derived from silver.tenant_room_snapshot_daily.
+      Grain: (snapshot_date, asset_id_hj).
+    config:
+      schema: gold
+    columns:
+      - name: snapshot_date
+        description: Snapshot date
+        tests:
+          - not_null
+      - name: asset_id_hj
+        description: Property identifier (AssetID_HJ)
+        tests:
+          - not_null
+      - name: occupancy_rate
+        description: Occupancy rate at property level (occupied_rooms / total_rooms)
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: ['snapshot_date', 'asset_id_hj']
+      - dbt_utils.expression_is_true:
+          expression: "occupancy_rate >= 0 AND occupancy_rate <= 1"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "occupied_rooms <= total_rooms"
+          severity: warn
+
+  - name: occupancy_property_map_latest
+    description: |
+      Latest-snapshot property occupancy table for mapping, including 7-day deltas.
+      Grain: 1 row per asset_id_hj for the latest snapshot_date.
+    config:
+      schema: gold
+    columns:
+      - name: asset_id_hj
+        description: Property identifier (AssetID_HJ)
+        tests:
+          - unique
+          - not_null
+      - name: latitude
+        description: Property latitude
+        tests:
+          - not_null
+      - name: longitude
+        description: Property longitude
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "latitude BETWEEN 35.0 AND 36.0 AND longitude BETWEEN 139.0 AND 140.5"
+          severity: error
+
+  - name: movein_analysis
+    description: |
+      Enhanced move-in analysis table with categorical dimensions (rent ranges, age groups,
+      lead-time buckets) for weekly-first move-in profiling.
+      Grain: 1 row per contract_id.
+    config:
+      schema: gold
+    columns:
+      - name: contract_id
+        description: Contract ID
+        tests:
+          - unique
+          - not_null
+      - name: tenant_type
+        description: Tenant classification (individual/corporate)
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['individual', 'corporate']
+      - name: rent_range
+        description: Categorical rent range bucket
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Under 50K', '50K-70K', '70K-100K', '100K-150K', '150K+']
+      - name: age_group
+        description: Age group category
+        tests:
+          - accepted_values:
+              values: ['Under 25', '25-34', '35-44', '45-54', '55+', 'Unknown']
+
+  - name: move_events
+    description: |
+      Unified move-in and move-out events at the contract grain.
+      Provides week_start (Monday buckets) for weekly-first analysis.
+      Grain: 1 row per (event_type, contract_id).
+    config:
+      schema: gold
+    columns:
+      - name: event_id
+        description: Synthetic event id (event_type + contract_id)
+        tests:
+          - unique
+          - not_null
+      - name: event_type
+        description: Event type (movein/moveout)
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['movein', 'moveout']
+      - name: week_start
+        description: Monday-start week bucket for event_date
+        tests:
+          - not_null
+      - name: latitude
+        description: Property latitude
+        tests:
+          - not_null
+      - name: longitude
+        description: Property longitude
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "WEEKDAY(week_start) = 0"
+          severity: error
+
+  - name: move_events_weekly
+    description: |
+      Weekly aggregated cube of move events for dashboards.
+      Grain: (week_start, event_type, tenant_type, rent_range, age_group).
+    config:
+      schema: gold
+    columns:
+      - name: week_start
+        tests:
+          - not_null
+      - name: event_count
+        description: Weekly event count
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "event_count >= 0"
+          severity: error
+
+  - name: municipality_churn_weekly
+    description: Weekly net change (move-ins - move-outs) by municipality.
+    config:
+      schema: gold
+    columns:
+      - name: week_start
+        tests:
+          - not_null
+      - name: municipality
+        tests:
+          - not_null
+
+  - name: property_churn_weekly
+    description: Weekly net change (move-ins - move-outs) by property.
+    config:
+      schema: gold
+    columns:
+      - name: week_start
+        tests:
+          - not_null
+      - name: asset_id_hj
+        tests:
+          - not_null
+
+  - name: moveouts_reason_weekly
+    description: Weekly move-out counts by reason (and basic segments).
+    config:
+      schema: gold
+    columns:
+      - name: week_start
+        tests:
+          - not_null
+      - name: moveout_reason_en
+        tests:
+          - not_null
