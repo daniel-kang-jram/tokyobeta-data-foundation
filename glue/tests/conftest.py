@@ -5,6 +5,7 @@ Sets up proper mocking for AWS Glue dependencies.
 
 import os
 import sys
+from pathlib import Path
 import pytest
 from unittest.mock import Mock, MagicMock
 
@@ -44,8 +45,10 @@ sys.modules['awsglue.job'] = mock_glue_job
 sys.modules['pyspark'] = Mock()
 sys.modules['pyspark.context'] = mock_spark_context
 
-# Add scripts directory to path
-sys.path.insert(0, '/Users/danielkang/tokyobeta-data-consolidation/glue/scripts')
+# Add repo root + scripts directory to path (must be portable across CI runners)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / 'glue' / 'scripts'))
 
 
 @pytest.fixture
