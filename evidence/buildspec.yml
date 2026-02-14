@@ -13,19 +13,19 @@ phases:
       - |
         export SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id "$EVIDENCE_SECRET_ID" --query SecretString --output text)
         python3 - <<'PY' > .env
-import json
-import os
+        import json
+        import os
 
-s = json.loads(os.environ["SECRET_JSON"])
+        s = json.loads(os.environ["SECRET_JSON"])
 
-print(f'EVIDENCE_SOURCE__aurora_gold__host={s["host"]}')
-print(f'EVIDENCE_SOURCE__aurora_gold__port={s.get("port", 3306)}')
-print(f'EVIDENCE_SOURCE__aurora_gold__database={s.get("dbname") or s.get("database") or "gold"}')
-print(f'EVIDENCE_SOURCE__aurora_gold__user={s["username"]}')
-print(f'EVIDENCE_SOURCE__aurora_gold__password={s["password"]}')
-print("EVIDENCE_SOURCE__aurora_gold__ssl=Amazon RDS")
-print("EVIDENCE_VAR__lookback_days=730")
-PY
+        print(f'EVIDENCE_SOURCE__aurora_gold__host={s["host"]}')
+        print(f'EVIDENCE_SOURCE__aurora_gold__port={s.get("port", 3306)}')
+        print(f'EVIDENCE_SOURCE__aurora_gold__database={s.get("dbname") or s.get("database") or "gold"}')
+        print(f'EVIDENCE_SOURCE__aurora_gold__user={s["username"]}')
+        print(f'EVIDENCE_SOURCE__aurora_gold__password={s["password"]}')
+        print("EVIDENCE_SOURCE__aurora_gold__ssl=Amazon RDS")
+        print("EVIDENCE_VAR__lookback_days=730")
+        PY
       - NODE_OPTIONS="--max-old-space-size=4096" npm run sources -- --sources aurora_gold
       - npm run build
       - aws s3 sync build/ "s3://$EVIDENCE_S3_BUCKET/" --delete
