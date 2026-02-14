@@ -30,10 +30,24 @@ jobs:
       TERRAFORM_STATE_BUCKET: tokyobeta-terraform-state
       TERRAFORM_STATE_KEY: prod/terraform.tfstate
       TF_VAR_alert_email: ${{ secrets.TF_VAR_ALERT_EMAIL }}
+      # Keep Evidence Basic Auth enabled in Terraform-managed CloudFront config.
+      # Value should be a JSON map string, e.g. {"admin":"<password>"}.
+      TF_VAR_evidence_auth_users: ${{ secrets.TF_VAR_EVIDENCE_AUTH_USERS }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Validate required Terraform variables
+        run: |
+          if [[ -z "${TF_VAR_alert_email}" ]]; then
+            echo "::error::Missing Actions secret TF_VAR_ALERT_EMAIL (used as TF_VAR_alert_email)."
+            exit 1
+          fi
+          if [[ -z "${TF_VAR_evidence_auth_users}" ]]; then
+            echo "::error::Missing Actions secret TF_VAR_EVIDENCE_AUTH_USERS (used as TF_VAR_evidence_auth_users)."
+            exit 1
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
