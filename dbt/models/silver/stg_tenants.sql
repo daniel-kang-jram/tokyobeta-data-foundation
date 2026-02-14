@@ -34,12 +34,18 @@ SELECT
              AND t.nationality != 'レソト'
         THEN {{ clean_string_null('t.nationality') }}
         
-        -- Priority 2: Use lookup table nationality_name (but not if it's レソト)
+        -- Priority 2: Use LLM-enriched nationality before lookup table
+        -- (lookup may contain placeholder values like 'レソト' that should not block LLM predictions)
+        WHEN llm_cache.llm_nationality IS NOT NULL
+             AND llm_cache.llm_nationality != 'レソト'
+        THEN llm_cache.llm_nationality
+
+        -- Priority 3: Use lookup table nationality_name (but not if it's レソト)
         WHEN n.nationality_name IS NOT NULL
              AND n.nationality_name != 'レソト'
         THEN n.nationality_name
         
-        -- Priority 3: Fallback to "その他 (Unknown)"
+        -- Priority 4: Fallback to "その他 (Unknown)"
         ELSE 'その他'
     END as nationality,
     
@@ -53,6 +59,9 @@ SELECT
         WHEN {{ clean_string_null('t.nationality') }} IS NOT NULL 
              AND t.nationality != 'レソト'
         THEN 'original'
+        WHEN llm_cache.llm_nationality IS NOT NULL
+             AND llm_cache.llm_nationality != 'レソト'
+        THEN 'llm'
         WHEN n.nationality_name IS NOT NULL
              AND n.nationality_name != 'レソト'
         THEN 'lookup_table'

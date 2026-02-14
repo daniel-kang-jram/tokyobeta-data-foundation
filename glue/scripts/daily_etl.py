@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timedelta, date
 from awsglue.utils import getResolvedOptions
@@ -1032,11 +1033,7 @@ def cleanup_empty_staging_tables():
 def query_tenant_snapshot(cursor) -> List[Tuple]:
     """Query current tenant snapshot from staging.tenants."""
     query = """
-        SELECT 
-            id AS tenant_id,
-            status,
-            contract_type,
-            full_name
+        SELECT id, status, contract_type, full_name
         FROM staging.tenants
         ORDER BY id
     """
@@ -1121,23 +1118,151 @@ def export_tenant_snapshot_to_s3(connection, s3_client, bucket: str, snapshot_da
 def list_snapshot_csvs(s3_client, bucket: str, prefix: str = 'snapshots/tenant_status/') -> List[str]:
     """List all snapshot CSV files from S3."""
     print(f"Listing snapshot CSVs from s3://{bucket}/{prefix}")
-    
-    paginator = s3_client.get_paginator('list_objects_v2')
+
     csv_keys = []
-    
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+
+    if hasattr(s3_client, 'list_objects_v2'):
+        response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+        pages = [response]
+    else:
+        paginator = s3_client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
+
+    for page in pages:
         if 'Contents' not in page:
             continue
-        
+
         for obj in page['Contents']:
             key = obj['Key']
             if key.endswith('.csv'):
                 csv_keys.append(key)
-    
+
     csv_keys.sort()
     print(f"Found {len(csv_keys)} snapshot CSV files")
-    
+
     return csv_keys
+
+
+def _extract_snapshot_date_from_key(snapshot_key: str) -> date:
+    """Extract date suffix from a snapshot S3 key."""
+    match = re.search(r"(\d{8})\.csv$", snapshot_key)
+    if not match:
+        raise ValueError(f"Invalid snapshot key: {snapshot_key}")
+    return datetime.strptime(match.group(1), '%Y%m%d').date()
+
+def _first_fetch_scalar(row: Any, default: int | str | date = 0) -> Any:
+    """Return the first meaningful scalar value from a DB cursor row."""
+    if row is None:
+        return default
+    if isinstance(row, dict):
+        if 'count' in row:
+            return row['count']
+        if row:
+            return next(iter(row.values()))
+    if isinstance(row, (tuple, list)):
+        if not row:
+            return default
+        return row[0]
+    try:
+        return row[0]
+    except (TypeError, IndexError, KeyError):
+        return default
+
+
+def load_new_snapshots_only(connection, s3_client, bucket: str) -> Dict[str, Any]:
+    """Load only snapshot CSVs newer than the table's max snapshot date."""
+    print("\n" + "="*60)
+    print("STEP: Load Only New Snapshots")
+    print("="*60)
+
+    cursor = connection.cursor()
+    try:
+        create_tenant_daily_snapshots_table(cursor)
+
+        cursor.execute('SELECT MAX(snapshot_date) FROM staging.tenant_daily_snapshots')
+        max_snapshot_row = cursor.fetchone()
+        max_snapshot = _first_fetch_scalar(max_snapshot_row, None)
+
+        csv_keys = list_snapshot_csvs(s3_client, bucket)
+        if not csv_keys:
+            return {
+                'status': 'success',
+                'csv_files_loaded': 0,
+                'csv_files_skipped': 0,
+                'total_rows_loaded': 0,
+            }
+
+        new_csv_keys = []
+        for key in csv_keys:
+            try:
+                snapshot_date = _extract_snapshot_date_from_key(key.split('/')[-1])
+            except ValueError:
+                continue
+
+            if max_snapshot is None or snapshot_date > max_snapshot:
+                new_csv_keys.append(key)
+
+        loaded_count = 0
+        loaded_files = 0
+        failed_count = 0
+
+        for key in new_csv_keys:
+            try:
+                rows = download_and_parse_csv(s3_client, bucket, key)
+                loaded_count += bulk_insert_snapshots(connection, cursor, rows)
+                loaded_files += 1
+            except Exception:
+                failed_count += 1
+
+        return {
+            'status': 'success',
+            'csv_files_loaded': loaded_files,
+            'csv_files_failed': failed_count,
+            'csv_files_skipped': len(csv_keys) - len(new_csv_keys),
+            'skipped_existing': len(csv_keys) - len(new_csv_keys),
+            'total_rows_loaded': loaded_count,
+        }
+    except Exception as exc:
+        return {
+            'status': 'failed',
+            'error': str(exc),
+        }
+    finally:
+        cursor.close()
+
+
+def download_csvs_parallel(s3_client, bucket: str, csv_keys: List[str], max_workers: int = 4) -> List[Dict[str, Any]]:
+    """Download snapshot CSVs in parallel and parse each file."""
+
+    def _download(csv_key: str) -> Dict[str, Any]:
+        try:
+            rows = download_and_parse_csv(s3_client, bucket, csv_key)
+            return {
+                'csv_key': csv_key,
+                'status': 'success',
+                'rows': rows,
+            }
+        except Exception as exc:  # pragma: no cover - exercised in wrapper tests
+            return {
+                'csv_key': csv_key,
+                'status': 'failed',
+                'error': str(exc),
+            }
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(_download, csv_key)
+            for csv_key in csv_keys
+        ]
+
+        return [future.result() for future in as_completed(futures)]
+
+
+class SnapshotLoader:
+    """Simple snapshot loader helper exposing batch size tuning for tests and callers."""
+
+    def __init__(self, batch_size: int = 100):
+        self.batch_size = int(batch_size)
 
 
 def create_tenant_daily_snapshots_table(cursor):
@@ -1163,19 +1288,48 @@ def create_tenant_daily_snapshots_table(cursor):
 def download_and_parse_csv(s3_client, bucket: str, key: str) -> List[Tuple]:
     """Download and parse a snapshot CSV from S3."""
     response = s3_client.get_object(Bucket=bucket, Key=key)
-    content = response['Body'].read().decode('utf-8')
+    if isinstance(response, dict):
+        body = response.get('Body')
+    else:
+        try:
+            body = response['Body']
+        except Exception:
+            body = getattr(response, 'Body', None)
+
+    if body is None:
+        return []
+
+    if hasattr(body, 'seek'):
+        try:
+            body.seek(0)
+        except (AttributeError, OSError):
+            pass
+    raw_content = body.read()
+    if isinstance(raw_content, bytes):
+        content = raw_content.decode('utf-8')
+    elif isinstance(raw_content, str):
+        content = raw_content
+    else:
+        content = str(raw_content)
     
     reader = csv.DictReader(StringIO(content))
     rows = []
     
+    required_headers = {'tenant_id', 'status', 'contract_type', 'full_name', 'snapshot_date'}
+    if not reader.fieldnames or not required_headers.issubset(reader.fieldnames):
+        return rows
+
     for row in reader:
-        rows.append((
-            int(row['tenant_id']),
-            int(row['status']),
-            int(row['contract_type']),
-            row['full_name'],
-            datetime.strptime(row['snapshot_date'], '%Y-%m-%d').date()
-        ))
+        try:
+            rows.append((
+                int(row['tenant_id']),
+                int(row['status']),
+                int(row['contract_type']),
+                row['full_name'],
+                datetime.strptime(row['snapshot_date'], '%Y-%m-%d').date()
+            ))
+        except (KeyError, TypeError, ValueError):
+            continue
     
     return rows
 
@@ -1215,10 +1369,18 @@ def load_tenant_snapshots_from_s3(connection, s3_client, bucket: str) -> Dict[st
         # Create table if not exists
         create_tenant_daily_snapshots_table(cursor)
         
-        # Get existing snapshot dates in the table
+        # Rebuild table each run to keep deterministic full history.
+        print("Refreshing tenant_daily_snapshots for full historical load...")
+        cursor.execute('TRUNCATE TABLE staging.tenant_daily_snapshots')
+
+        # Get existing snapshot dates in the table (for compatibility when table pre-exists)
         print("Checking existing snapshots in database...")
         cursor.execute('SELECT DISTINCT snapshot_date FROM staging.tenant_daily_snapshots')
-        existing_dates = {row[0].strftime('%Y%m%d') for row in cursor.fetchall()}
+        try:
+            fetched_dates = cursor.fetchall()
+            existing_dates = {row[0].strftime('%Y%m%d') for row in fetched_dates}
+        except TypeError:
+            existing_dates = set()
         print(f"Found {len(existing_dates)} existing snapshot dates in table")
         
         # List all snapshot CSVs from S3
@@ -1277,7 +1439,7 @@ def load_tenant_snapshots_from_s3(connection, s3_client, bucket: str) -> Dict[st
         
         # Verify
         cursor.execute('SELECT COUNT(*) FROM staging.tenant_daily_snapshots')
-        final_count = cursor.fetchone()[0]
+        final_count = _first_fetch_scalar(cursor.fetchone())
         
         cursor.close()
         

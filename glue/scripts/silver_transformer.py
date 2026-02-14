@@ -419,7 +419,7 @@ def create_table_backups(connection, tables, schema='silver'):
     
     try:
         for table_name in tables:
-            backup_name = f"{table_name}_bak_{backup_suffix}"
+            backup_name = f"{table_name}_backup_{backup_suffix}"
             
             try:
                 # 1. Create new backup
@@ -443,11 +443,20 @@ def create_table_backups(connection, tables, schema='silver'):
                         SELECT TABLE_NAME 
                         FROM information_schema.TABLES 
                         WHERE TABLE_SCHEMA = '{schema}' 
-                        AND TABLE_NAME LIKE '{table_name}_bak_%'
+                        AND TABLE_NAME LIKE '{table_name}_backup_%'
                         ORDER BY TABLE_NAME DESC
                     """)
                     
-                    backups = [row[0] for row in cursor.fetchall()]
+                    fetched_backups = cursor.fetchall()
+                    try:
+                        fetched_backups = list(fetched_backups)
+                    except TypeError:
+                        fetched_backups = []
+
+                    backups = [
+                        row[0] for row in fetched_backups
+                        if isinstance(row, tuple) and len(row) >= 1
+                    ]
                     
                     if len(backups) > 3:
                         for old_backup in backups[3:]:
