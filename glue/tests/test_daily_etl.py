@@ -1,7 +1,7 @@
 import pathlib
 import subprocess
 import sys
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import Mock
 
 
@@ -207,3 +207,134 @@ def test_reset_staging_tables_drops_existing(monkeypatch):
     assert "DROP TABLE IF EXISTS `staging`.`tenants`" in executed_sql
     assert "DROP TABLE IF EXISTS `staging`.`rooms`" in executed_sql
     assert "SET FOREIGN_KEY_CHECKS = 1" in executed_sql
+
+
+def test_compute_occupancy_kpis_for_dates_future_projection_continues_from_previous_day(monkeypatch):
+    """Future KPI rows should chain from prior day period_end_rooms (not reset to 0 after as-of+1)."""
+
+    class FakeCursor:
+        def __init__(self):
+            self.as_of_snapshot_date = date(2026, 2, 13)
+            self.occupied_counts = {
+                date(2026, 2, 12): 10_000,
+                date(2026, 2, 13): 10_005,
+                # No silver snapshot exists for future dates; treat as 0.
+                date(2026, 2, 14): 0,
+            }
+            self.applications = {date(2026, 2, 13): 1}
+            self.moveins = {
+                date(2026, 2, 13): 10,
+                date(2026, 2, 14): 7,
+                date(2026, 2, 15): 3,
+            }
+            self.moveouts = {
+                date(2026, 2, 13): 5,
+                date(2026, 2, 14): 2,
+                date(2026, 2, 15): 4,
+            }
+
+            self.inserted_rows = {}
+            self._gold_period_end_rooms = {}
+            self._next_fetchone = None
+
+        def execute(self, sql, params=None):
+            sql_compact = " ".join(sql.split())
+            params = params or ()
+
+            if "SELECT MAX(snapshot_date) AS max_snapshot_date" in sql_compact:
+                self._next_fetchone = {"max_snapshot_date": self.as_of_snapshot_date}
+                return
+
+            if "first_apps" in sql_compact:
+                target_date = params[0]
+                self._next_fetchone = {"count": self.applications.get(target_date, 0)}
+                return
+
+            if "AND move_in_date = %s" in sql_compact:
+                target_date = params[1]
+                self._next_fetchone = {"count": self.moveins.get(target_date, 0)}
+                return
+
+            if "AND moveout_plans_date = %s" in sql_compact:
+                target_date = params[1]
+                self._next_fetchone = {"count": self.moveouts.get(target_date, 0)}
+                return
+
+            if "AND moveout_date = %s" in sql_compact:
+                target_date = params[1]
+                self._next_fetchone = {"count": self.moveouts.get(target_date, 0)}
+                return
+
+            if (
+                "FROM silver.tenant_room_snapshot_daily" in sql_compact
+                and "management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)" in sql_compact
+            ):
+                snapshot_date = params[0]
+                self._next_fetchone = {"count": self.occupied_counts.get(snapshot_date, 0)}
+                return
+
+            if (
+                "FROM gold.occupancy_daily_metrics" in sql_compact
+                and "SELECT period_end_rooms" in sql_compact
+            ):
+                snapshot_date = params[0]
+                period_end_rooms = self._gold_period_end_rooms.get(snapshot_date)
+                self._next_fetchone = (
+                    {"period_end_rooms": period_end_rooms} if period_end_rooms is not None else None
+                )
+                return
+
+            if sql_compact.startswith("INSERT INTO gold.occupancy_daily_metrics"):
+                (
+                    snapshot_date,
+                    applications,
+                    new_moveins,
+                    new_moveouts,
+                    occupancy_delta,
+                    period_start_rooms,
+                    period_end_rooms,
+                    occupancy_rate,
+                ) = params
+                self._gold_period_end_rooms[snapshot_date] = period_end_rooms
+                self.inserted_rows[snapshot_date] = {
+                    "snapshot_date": snapshot_date,
+                    "applications": applications,
+                    "new_moveins": new_moveins,
+                    "new_moveouts": new_moveouts,
+                    "occupancy_delta": occupancy_delta,
+                    "period_start_rooms": period_start_rooms,
+                    "period_end_rooms": period_end_rooms,
+                    "occupancy_rate": occupancy_rate,
+                }
+                self._next_fetchone = None
+                return
+
+            raise AssertionError(f"Unexpected SQL executed: {sql_compact!r} params={params!r}")
+
+        def fetchone(self):
+            result = self._next_fetchone
+            self._next_fetchone = None
+            return result
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return date(2026, 2, 14)
+
+    monkeypatch.setattr(daily_etl, "date", FixedDate)
+
+    cursor = FakeCursor()
+    as_of = cursor.as_of_snapshot_date
+    dates = [as_of, as_of + timedelta(days=1), as_of + timedelta(days=2)]
+
+    processed = daily_etl.compute_occupancy_kpis_for_dates(cursor, dates)
+
+    assert processed == 3
+    assert cursor.inserted_rows[as_of + timedelta(days=1)]["period_end_rooms"] == 10_010
+    # Critical: projection must continue from prior day's computed KPI (not reset to 0).
+    assert (
+        cursor.inserted_rows[as_of + timedelta(days=2)]["period_start_rooms"]
+        == cursor.inserted_rows[as_of + timedelta(days=1)]["period_end_rooms"]
+    )
+    assert cursor.inserted_rows[as_of + timedelta(days=2)]["period_end_rooms"] == 10_009
+    assert cursor.inserted_rows[as_of + timedelta(days=2)]["occupancy_rate"] > 0.6

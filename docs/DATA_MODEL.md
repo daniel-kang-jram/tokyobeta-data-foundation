@@ -1,6 +1,6 @@
 # Data Model & Schema
 
-**Last Updated:** February 10, 2026
+**Last Updated:** February 14, 2026
 
 This document defines the data model, schema relationships, business logic, and data quality rules for the TokyoBeta Data Consolidation project.
 
@@ -137,6 +137,34 @@ The master view for tenant-room details.
 | `age` | Tenant age | Calculated from `birthdate` |
 | `gender` | Tenant gender | `tenants.gender` |
 | `job_type` | Occupation category | `tenants.job_type` |
+
+---
+
+## Gold Marts for Evidence Dashboards (Weekly-First)
+
+These gold tables power the Evidence dashboard experience (fact vs projection boundary, mapping, and weekly move profiling).
+
+### Occupancy
+
+| Table | Grain | Purpose |
+|-------|-------|---------|
+| `gold.occupancy_kpi_meta` | 1 row | As-of snapshot date + freshness signals for Fact vs Projection styling |
+| `gold.occupancy_daily_metrics` | 1 row / day | Portfolio occupancy KPIs (includes future projections) |
+| `gold.dim_property` | 1 row / property | Property attributes + validated coordinates |
+| `gold.occupancy_property_daily` | 1 row / (day, property) | Daily property occupancy (facts from snapshots) |
+| `gold.occupancy_property_map_latest` | 1 row / property | Latest snapshot + 7-day deltas for map rendering |
+
+### Move-In / Move-Out Profiling
+
+| Table | Grain | Purpose |
+|-------|-------|---------|
+| `gold.movein_analysis` | 1 row / contract | Move-in enrichment (rent/age buckets, lead-time, geo) |
+| `gold.moveout_analysis` | 1 row / contract | Move-out enrichment (rent/age/tenure buckets, reasons, geo) |
+| `gold.move_events` | 1 row / (event_type, contract) | Unified move-in + move-out events with Monday week buckets |
+| `gold.move_events_weekly` | 1 row / (week, segment) | Weekly cube for dashboards |
+| `gold.municipality_churn_weekly` | 1 row / (week, municipality) | Weekly move-in/move-out net change by municipality |
+| `gold.property_churn_weekly` | 1 row / (week, property) | Weekly move-in/move-out net change by property |
+| `gold.moveouts_reason_weekly` | 1 row / (week, reason, segment) | Weekly move-out counts by reason |
 
 ---
 
