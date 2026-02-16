@@ -37,7 +37,7 @@ select
   sum(event_count) as movein_count
 from aurora_gold.move_events_weekly
 where event_type = 'movein'
-  and week_start >= DATE_SUB(CURRENT_DATE, INTERVAL 365 DAY)
+  and week_start >= CURRENT_DATE - INTERVAL 365 DAY
 group by rent_range, rent_range_order, age_group, age_group_order
 order by rent_range_order, age_group_order
 ```
@@ -72,7 +72,7 @@ select
   municipality,
   sum(movein_count) as movein_count
 from aurora_gold.municipality_churn_weekly
-where week_start >= DATE_SUB(CURRENT_DATE, INTERVAL 12 WEEK)
+where week_start >= CURRENT_DATE - INTERVAL 12 WEEK
 group by municipality
 order by movein_count desc
 limit 30
@@ -83,7 +83,7 @@ select
   apartment_name,
   sum(movein_count) as movein_count
 from aurora_gold.property_churn_weekly
-where week_start >= DATE_SUB(CURRENT_DATE, INTERVAL 12 WEEK)
+where week_start >= CURRENT_DATE - INTERVAL 12 WEEK
 group by apartment_name
 order by movein_count desc
 limit 30
