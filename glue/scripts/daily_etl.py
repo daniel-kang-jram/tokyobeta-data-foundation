@@ -1701,11 +1701,67 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
     target_dates = sorted(target_dates)
     period_end_by_date: Dict[date, int] = {}
 
+    def snapshot_exists(snapshot_date: date) -> bool:
+        cursor.execute(
+            """
+            SELECT 1
+            FROM silver.tenant_room_snapshot_daily
+            WHERE snapshot_date = %s
+            LIMIT 1
+            """,
+            (snapshot_date,),
+        )
+        return cursor.fetchone() is not None
+
+    def next_available_snapshot_date(from_date: date) -> date | None:
+        cursor.execute(
+            """
+            SELECT MIN(snapshot_date) AS next_snapshot_date
+            FROM silver.tenant_room_snapshot_daily
+            WHERE snapshot_date >= %s
+            """,
+            (from_date,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return row.get("next_snapshot_date")
+
+    def count_occupied_rooms(snapshot_date: date) -> int:
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+            FROM silver.tenant_room_snapshot_daily
+            WHERE snapshot_date = %s
+              AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
+            """,
+            (snapshot_date,),
+        )
+        return int(cursor.fetchone()["count"])
+
     for target_date in target_dates:
         is_future = target_date > as_of_snapshot_date
-        snapshot_date_filter = as_of_snapshot_date if is_future else target_date
+        # For missing fact-day snapshots, forward-fill occupancy from the next available snapshot
+        # to avoid 0% spikes. Movements/applications cannot be reliably recovered, so set them to 0.
+        missing_fact_snapshot = False
+        filled_from_snapshot: date | None = None
 
         if is_future:
+            snapshot_date_filter = as_of_snapshot_date
+        else:
+            if snapshot_exists(target_date):
+                snapshot_date_filter = target_date
+            else:
+                missing_fact_snapshot = True
+                filled_from_snapshot = next_available_snapshot_date(target_date) or as_of_snapshot_date
+                snapshot_date_filter = filled_from_snapshot
+                print(
+                    "WARN: Missing silver snapshot for "
+                    f"{target_date}; forward-filling occupancy from {snapshot_date_filter}. "
+                    "Setting movements/applications to 0 for this date."
+                )
+
+        if is_future or missing_fact_snapshot:
             applications = 0
         else:
             cursor.execute("""
@@ -1724,7 +1780,9 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
             """, (target_date,))
             applications = cursor.fetchone()["count"]
 
-        if is_future:
+        if missing_fact_snapshot:
+            new_moveins = 0
+        elif is_future:
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
                 FROM silver.tenant_room_snapshot_daily
@@ -1732,6 +1790,7 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
                   AND move_in_date = %s
                   AND management_status_code IN (4, 5)
             """, (snapshot_date_filter, target_date))
+            new_moveins = cursor.fetchone()["count"]
         else:
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
@@ -1740,15 +1799,18 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
                   AND move_in_date = %s
                   AND management_status_code IN (4, 5, 6, 7, 9)
             """, (snapshot_date_filter, target_date))
-        new_moveins = cursor.fetchone()["count"]
+            new_moveins = cursor.fetchone()["count"]
 
-        if is_future:
+        if missing_fact_snapshot:
+            new_moveouts = 0
+        elif is_future:
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
                 FROM silver.tenant_room_snapshot_daily
                 WHERE snapshot_date = %s
                   AND moveout_date = %s
             """, (snapshot_date_filter, target_date))
+            new_moveouts = cursor.fetchone()["count"]
         else:
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
@@ -1756,9 +1818,9 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
                 WHERE snapshot_date = %s
                   AND moveout_plans_date = %s
             """, (snapshot_date_filter, target_date))
-        new_moveouts = cursor.fetchone()["count"]
+            new_moveouts = cursor.fetchone()["count"]
 
-        occupancy_delta = new_moveins - new_moveouts
+        occupancy_delta = int(new_moveins) - int(new_moveouts)
 
         previous_date = target_date - timedelta(days=1)
         if is_future:
@@ -1775,14 +1837,20 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
                 prior_end = result["period_end_rooms"] if result else 0
             period_start_rooms = int(prior_end)
         else:
-            cursor.execute("""
-                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                  AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
-            """, (previous_date,))
-            period_start_rooms = cursor.fetchone()["count"]
-        period_end_rooms = period_start_rooms + occupancy_delta
+            # Fact days: compute end rooms from same-day snapshot if present (or forward-filled snapshot if missing),
+            # then derive start rooms from delta. This avoids collapsing to 0 when previous day snapshot is missing.
+            period_end_rooms = count_occupied_rooms(snapshot_date_filter)
+            period_start_rooms = int(period_end_rooms) - int(occupancy_delta)
+            if period_start_rooms < 0:
+                print(
+                    "WARN: Derived period_start_rooms < 0; clamping. "
+                    f"date={target_date} end={period_end_rooms} delta={occupancy_delta}"
+                )
+                period_start_rooms = 0
+            if period_end_rooms < 0:
+                period_end_rooms = 0
+        if is_future:
+            period_end_rooms = period_start_rooms + occupancy_delta
         period_end_by_date[target_date] = int(period_end_rooms)
         occupancy_rate = period_end_rooms / TOTAL_PHYSICAL_ROOMS
 
