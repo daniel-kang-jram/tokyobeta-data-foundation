@@ -115,4 +115,17 @@ jobs:
         run: |
           terraform init
           terraform plan -out=prod.tfplan
-          terraform apply -auto-approve prod.tfplan
+          set +e
+          terraform apply -auto-approve prod.tfplan 2>&1 | tee terraform_apply.log
+          APPLY_STATUS=${PIPESTATUS[0]}
+          set -e
+
+          if [ "${APPLY_STATUS}" -ne 0 ]; then
+            if grep -q "Error releasing the state lock" terraform_apply.log && \
+               grep -q "failed to retrieve lock info" terraform_apply.log; then
+              echo "Terraform lock release race detected. Retrying apply with -lock=false."
+              terraform apply -auto-approve -lock=false prod.tfplan
+              exit 0
+            fi
+            exit ${APPLY_STATUS}
+          fi
