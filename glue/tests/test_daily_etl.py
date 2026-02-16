@@ -167,6 +167,21 @@ def test_validate_dump_continuity_fails_when_multiple_dates_missing():
         )
 
 
+def test_check_dump_continuity_warns_when_strict_disabled(capsys):
+    """Continuity gaps should not block the run when strict mode is disabled."""
+    missing = daily_etl.check_dump_continuity(
+        available_dump_dates={date(2026, 2, 16), date(2026, 2, 14)},
+        expected_date=date(2026, 2, 16),
+        max_stale_days=2,
+        strict=False,
+    )
+    assert missing == [date(2026, 2, 15)]
+
+    out = capsys.readouterr().out
+    assert "WARN" in out
+    assert "2026-02-15" in out
+
+
 def test_runtime_date_reads_valid_env(monkeypatch):
     monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-13")
     result = daily_etl.runtime_date("DAILY_TARGET_DATE", date(2026, 2, 1))
