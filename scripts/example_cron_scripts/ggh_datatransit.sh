@@ -6,7 +6,7 @@ set -Eeuo pipefail
 
 # Configuration
 AWS_REGION="ap-northeast-1"
-SECRET_NAME="${SECRET_NAME:-tokyobeta/prod/rds/cron-credentials-manual-20260216-staging}"
+SECRET_NAME="${SECRET_NAME:-tokyobeta/prod/rds/cron-credentials}"
 S3_BUCKET="jram-gghouse"
 S3_PREFIXES_CONFIG="${S3_PREFIXES_CSV:-dumps,dumps-managed}"
 IFS=',' read -r -a S3_PREFIXES <<< "${S3_PREFIXES_CONFIG}"
@@ -91,6 +91,10 @@ done
 if [[ -z "${SNS_TOPIC_ARN}" ]]; then
     echo "ERROR: SNS_TOPIC_ARN must be set for failure alerting." >&2
     exit 1
+fi
+
+if [[ "$SECRET_NAME" == *"-staging"* || "$SECRET_NAME" == *"manual-"* ]]; then
+    fail "Refusing to run with non-production or manual secret name: ${SECRET_NAME}"
 fi
 
 # Serialize runs in case cron overlaps
