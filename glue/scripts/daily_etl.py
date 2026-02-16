@@ -14,7 +14,7 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -50,6 +50,7 @@ secretsmanager = boto3.client('secretsmanager')
 rds = boto3.client('rds')
 
 TOTAL_PHYSICAL_ROOMS = 16108
+TOKYO_TIMEZONE = timezone(timedelta(hours=9))
 
 @contextmanager
 def timed_step(step_name: str, timings: Dict[str, Dict[str, Any]]):
@@ -230,8 +231,24 @@ def reset_staging_tables(cursor) -> int:
     return len(existing_tables)
 
 
-def get_latest_dump_key():
+def get_latest_dump_key(dump_candidates: list[dict] | None = None):
     """Find the most recent SQL dump file in S3."""
+    if dump_candidates is None:
+        dump_candidates = list_dump_candidates()
+
+    if not dump_candidates:
+        raise ValueError("No SQL dump files matching pattern gghouse_YYYYMMDD.sql found")
+
+    latest_key = dump_candidates[0]['Key']
+    print(
+        f"Latest dump: {latest_key} (modified: "
+        f"{dump_candidates[0].get('LastModified')})"
+    )
+    return latest_key
+
+
+def list_dump_candidates() -> list[dict]:
+    """List and sort S3 dump candidates from the configured prefix."""
     response = s3.list_objects_v2(
         Bucket=args['S3_SOURCE_BUCKET'],
         Prefix=args['S3_SOURCE_PREFIX']
@@ -240,21 +257,93 @@ def get_latest_dump_key():
     if 'Contents' not in response:
         raise ValueError(f"No files found in s3://{args['S3_SOURCE_BUCKET']}/{args['S3_SOURCE_PREFIX']}")
     
-    # Sort by LastModified descending
     files = sorted(response['Contents'], key=lambda x: x['LastModified'], reverse=True)
-    
-    # Filter for gghouse_YYYYMMDD.sql or .sql.gz pattern
     sql_files = [
         f for f in files
-        if re.match(r'.*gghouse_\d{8}\.sql(\.gz)?$', f['Key'])
+        if extract_dump_date_from_key(f['Key']) is not None and f.get('Key')
     ]
     
-    if not sql_files:
-        raise ValueError("No SQL dump files matching pattern gghouse_YYYYMMDD.sql found")
-    
-    latest_key = sql_files[0]['Key']
-    print(f"Latest dump: {latest_key} (modified: {sql_files[0]['LastModified']})")
-    return latest_key
+    return sql_files
+
+
+def get_dump_dates(dump_candidates: list[dict]) -> set[date]:
+    """Extract all dump dates from a list of candidate dump objects."""
+    return {
+        extract_dump_date_from_key(item['Key'])
+        for item in dump_candidates
+        if item.get('Key') and extract_dump_date_from_key(item['Key']) is not None
+    }
+
+
+def validate_dump_continuity(
+    available_dump_dates: set[date],
+    expected_date: date,
+    max_stale_days: int
+) -> None:
+    """
+    Ensure there are dumps for the required recency window.
+
+    Required window is every date from expected_date down to:
+    expected_date - max_stale_days.
+    """
+    missing_dates = []
+    for offset in range(max_stale_days + 1):
+        candidate = expected_date - timedelta(days=offset)
+        if candidate not in available_dump_dates:
+            missing_dates.append(candidate)
+
+    if missing_dates:
+        formatted_missing = ", ".join(d.isoformat() for d in missing_dates)
+        raise ValueError(
+            "Dump continuity check failed: missing dump file(s) for date(s): "
+            f"{formatted_missing}"
+        )
+
+
+def validate_dump_freshness(
+    latest_key: str,
+    latest_dump_date: date | None,
+    expected_date: date,
+    max_stale_days: int
+) -> None:
+    """
+    Ensure the latest dump is recent enough for expected processing date.
+
+    This blocks the ETL if the dump stream silently skipped days, preventing
+    false-confidence runs when upstream dump generation is delayed or missing.
+    """
+    if latest_dump_date is None:
+        raise ValueError(
+            f"Could not extract date from latest dump key: {latest_key}"
+        )
+
+    stale_days = (expected_date - latest_dump_date).days
+    if stale_days > max_stale_days:
+        raise ValueError(
+            "Dump freshness check failed: "
+            f"latest dump date={latest_dump_date} is {stale_days} day(s) "
+            f"older than expected_date={expected_date} "
+            f"(max allowed age={max_stale_days})."
+        )
+
+    if stale_days <= 0:
+        if stale_days < 0:
+            print(
+                "Info: latest dump date is in the future relative to expected date "
+                f"({latest_dump_date} > {expected_date}); continuing."
+            )
+        else:
+            print("Latest dump date matches expected date.")
+    else:
+        print(
+            f"Latest dump is {stale_days} day(s) behind expected date "
+            f"({latest_dump_date} vs {expected_date}) but within tolerance."
+        )
+
+
+def tokyo_today() -> date:
+    """Current date in Tokyo local time."""
+    return datetime.now(TOKYO_TIMEZONE).date()
 
 
 def get_processed_dump_key(source_key: str) -> str:
@@ -1882,9 +1971,24 @@ def main():
         latest_key = None
         local_path = None
         dump_date = None
+        max_stale_days = env_int("DAILY_MAX_DUMP_STALE_DAYS", 1, minimum=0)
+        expected_dump_date = runtime_date("DAILY_TARGET_DATE", tokyo_today())
         with timed_step("01_find_and_download_dump", step_timings):
-            latest_key = get_latest_dump_key()
+            dump_candidates = list_dump_candidates()
+            dump_dates = get_dump_dates(dump_candidates)
+            latest_key = get_latest_dump_key(dump_candidates)
             dump_date = extract_dump_date_from_key(latest_key)
+            validate_dump_freshness(
+                latest_key=latest_key,
+                latest_dump_date=dump_date,
+                expected_date=expected_dump_date,
+                max_stale_days=max_stale_days,
+            )
+            validate_dump_continuity(
+                available_dump_dates=dump_dates,
+                expected_date=expected_dump_date,
+                max_stale_days=max_stale_days,
+            )
             if dump_date is not None and "DAILY_TARGET_DATE" not in os.environ:
                 os.environ["DAILY_TARGET_DATE"] = dump_date.isoformat()
                 print(f"Anchored DAILY_TARGET_DATE to dump date: {dump_date.isoformat()}")
@@ -1892,7 +1996,7 @@ def main():
 
         occupancy_target_date = runtime_date(
             "DAILY_TARGET_DATE",
-            dump_date if dump_date is not None else datetime.now().date(),
+            dump_date if dump_date is not None else expected_dump_date,
         )
 
         # Step 2: Load to Aurora staging

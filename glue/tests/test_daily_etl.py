@@ -1,7 +1,8 @@
 import pathlib
 import subprocess
 import sys
-from datetime import date, timedelta
+import pytest
+from datetime import date, timedelta, datetime
 from unittest.mock import Mock
 
 
@@ -53,6 +54,117 @@ def test_extract_dump_date_from_key_parses_sql_and_gz():
     assert daily_etl.extract_dump_date_from_key("raw/dumps/gghouse_20260214.sql.gz") == date(2026, 2, 14)
     assert daily_etl.extract_dump_date_from_key("gghouse_20260214.sql") == date(2026, 2, 14)
     assert daily_etl.extract_dump_date_from_key("dumps/not_a_dump.sql") is None
+
+
+def test_get_latest_dump_key_selects_by_modified_date(monkeypatch):
+    mock_s3 = Mock()
+    mock_s3.list_objects_v2.return_value = {
+        "Contents": [
+            {"Key": "dumps/gghouse_20260205.sql", "LastModified": datetime(2026, 2, 5)},
+            {"Key": "dumps/gghouse_20260207.sql", "LastModified": datetime(2026, 2, 7)},
+            {"Key": "dumps/gghouse_20260206.sql", "LastModified": datetime(2026, 2, 6)},
+        ]
+    }
+    monkeypatch.setattr(daily_etl, "s3", mock_s3)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "test-bucket")
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_PREFIX", "dumps/")
+
+    assert daily_etl.get_latest_dump_key() == "dumps/gghouse_20260207.sql"
+    mock_s3.list_objects_v2.assert_called_once_with(
+        Bucket="test-bucket",
+        Prefix="dumps/"
+    )
+
+
+def test_list_dump_candidates_filters_and_sorts(monkeypatch):
+    mock_s3 = Mock()
+    mock_s3.list_objects_v2.return_value = {
+        "Contents": [
+            {"Key": "dumps/gghouse_20260213.sql", "LastModified": datetime(2026, 2, 13)},
+            {"Key": "dumps/gghouse_20260215.sql", "LastModified": datetime(2026, 2, 15)},
+            {"Key": "dumps/gghouse_20260214.sql.gz", "LastModified": datetime(2026, 2, 14)},
+            {"Key": "dumps/notes.txt", "LastModified": datetime(2026, 2, 16)},
+        ]
+    }
+    monkeypatch.setattr(daily_etl, "s3", mock_s3)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "test-bucket")
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_PREFIX", "dumps/")
+
+    candidates = daily_etl.list_dump_candidates()
+
+    assert [f["Key"] for f in candidates] == [
+        "dumps/gghouse_20260215.sql",
+        "dumps/gghouse_20260214.sql.gz",
+        "dumps/gghouse_20260213.sql",
+    ]
+
+
+def test_validate_dump_freshness_passes_within_tolerance():
+    daily_etl.validate_dump_freshness(
+        "dumps/gghouse_20260214.sql",
+        date(2026, 2, 14),
+        date(2026, 2, 15),
+        max_stale_days=1,
+    )
+
+
+def test_validate_dump_freshness_fails_if_too_stale():
+    with pytest.raises(
+        ValueError,
+        match="Dump freshness check failed: latest dump date=2026-02-14 is 2 day\\(s\\) older"
+    ):
+        daily_etl.validate_dump_freshness(
+            "dumps/gghouse_20260214.sql",
+            date(2026, 2, 14),
+            date(2026, 2, 16),
+            max_stale_days=1,
+        )
+
+
+def test_validate_dump_freshness_fails_without_parseable_date():
+    with pytest.raises(ValueError, match="Could not extract date"):
+        daily_etl.validate_dump_freshness(
+            "dumps/unknown_backup.sql",
+            None,
+            date(2026, 2, 16),
+            max_stale_days=1,
+        )
+
+
+def test_validate_dump_continuity_passes_when_window_is_complete():
+    daily_etl.validate_dump_continuity(
+        available_dump_dates={
+            date(2026, 2, 16),
+            date(2026, 2, 15),
+            date(2026, 2, 14),
+        },
+        expected_date=date(2026, 2, 16),
+        max_stale_days=2,
+    )
+
+
+def test_validate_dump_continuity_fails_when_expected_dates_missing():
+    with pytest.raises(
+        ValueError,
+        match="Dump continuity check failed: missing dump file\\(s\\) for date\\(s\\): 2026-02-16",
+    ):
+        daily_etl.validate_dump_continuity(
+            available_dump_dates={date(2026, 2, 15)},
+            expected_date=date(2026, 2, 16),
+            max_stale_days=1,
+        )
+
+
+def test_validate_dump_continuity_fails_when_multiple_dates_missing():
+    with pytest.raises(
+        ValueError,
+        match="Dump continuity check failed: missing dump file\\(s\\) for date\\(s\\): 2026-02-16, 2026-02-15",
+    ):
+        daily_etl.validate_dump_continuity(
+            available_dump_dates={date(2026, 2, 14)},
+            expected_date=date(2026, 2, 16),
+            max_stale_days=2,
+        )
 
 
 def test_runtime_date_reads_valid_env(monkeypatch):
