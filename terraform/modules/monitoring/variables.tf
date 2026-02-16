@@ -20,6 +20,12 @@ variable "alert_email" {
   type        = string
 }
 
+variable "alert_emails" {
+  description = "Additional email addresses for alert notifications"
+  type        = list(string)
+  default     = []
+}
+
 variable "cpu_threshold" {
   description = "CPU utilization threshold percentage"
   type        = number

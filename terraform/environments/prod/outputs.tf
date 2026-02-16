@@ -54,7 +54,7 @@ output "deployment_instructions" {
   2. Upload dbt project to S3:
      aws s3 sync dbt/ s3://${var.s3_source_bucket}/dbt-project/ --profile gghouse
   
-  3. Confirm SNS subscription email (check inbox for "${var.alert_email}")
+  3. Confirm SNS subscription email(s) (check inbox for "${var.alert_email}" and any addresses in alert_emails)
   
   4. Initialize database schemas:
      scripts/init_db.sh

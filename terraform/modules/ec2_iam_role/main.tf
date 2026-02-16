@@ -48,11 +48,17 @@ resource "aws_iam_policy" "s3_dumps_access" {
         Action = [
           "s3:PutObject",
           "s3:PutObjectAcl",
-          "s3:GetObject"
+          "s3:GetObject",
+          "s3:GetObjectAcl",
+          "s3:DeleteObject"
         ]
         Resource = [
-          "arn:aws:s3:::${var.s3_dumps_bucket}/dumps*/*",
-          "arn:aws:s3:::${var.s3_dumps_bucket}/dumps*",
+          "arn:aws:s3:::${var.s3_dumps_bucket}/dumps/*",
+          "arn:aws:s3:::${var.s3_dumps_bucket}/dumps",
+          "arn:aws:s3:::${var.s3_dumps_bucket}/dumps-managed/*",
+          "arn:aws:s3:::${var.s3_dumps_bucket}/dumps-managed",
+          "arn:aws:s3:::${var.s3_dumps_bucket}/processed/*",
+          "arn:aws:s3:::${var.s3_dumps_bucket}/processed",
           "arn:aws:s3:::${var.s3_dumps_bucket}/contractstatus/*"
         ]
       }
