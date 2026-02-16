@@ -16,6 +16,11 @@ resource "aws_lambda_function" "check_table_freshness" {
       AURORA_ENDPOINT   = var.aurora_endpoint
       AURORA_SECRET_ARN = var.aurora_secret_arn
       SNS_TOPIC_ARN     = aws_sns_topic.etl_alerts.arn
+      S3_BUCKET         = var.s3_bucket
+      S3_DUMP_PREFIXES  = var.s3_dump_prefixes
+      S3_DUMP_MIN_BYTES = var.s3_dump_min_bytes
+      S3_DUMP_ERROR_DAYS = var.s3_dump_error_days
+      S3_DUMP_REQUIRE_ALL_PREFIXES = var.s3_dump_require_all_prefixes ? "true" : "false"
     }
   }
 
@@ -79,9 +84,16 @@ resource "aws_iam_role_policy" "freshness_checker_policy" {
       {
         Effect = "Allow"
         Action = [
+          "s3:ListBucket",
+          "s3:GetObject",
+          "s3:HeadObject",
           "sns:Publish"
         ]
-        Resource = [aws_sns_topic.etl_alerts.arn]
+        Resource = [
+          "arn:aws:s3:::${var.s3_bucket}",
+          "arn:aws:s3:::${var.s3_bucket}/*",
+          aws_sns_topic.etl_alerts.arn,
+        ]
       },
       {
         Effect = "Allow"
