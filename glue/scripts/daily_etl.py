@@ -300,6 +300,43 @@ def validate_dump_continuity(
         )
 
 
+def check_dump_continuity(
+    available_dump_dates: set[date],
+    expected_date: date,
+    max_stale_days: int,
+    strict: bool,
+) -> list[date]:
+    """
+    Continuity check with optional "warn only" mode.
+
+    Args:
+        available_dump_dates: Dump dates present in S3.
+        expected_date: The date the ETL expects to process.
+        max_stale_days: How far back we require a continuous window.
+        strict: If True, raise on gaps. If False, print a warning and continue.
+
+    Returns:
+        List of missing dates (empty if continuous).
+    """
+    missing_dates: list[date] = []
+    for offset in range(max_stale_days + 1):
+        candidate = expected_date - timedelta(days=offset)
+        if candidate not in available_dump_dates:
+            missing_dates.append(candidate)
+
+    if missing_dates:
+        formatted_missing = ", ".join(d.isoformat() for d in missing_dates)
+        msg = (
+            "Dump continuity check failed: missing dump file(s) for date(s): "
+            f"{formatted_missing}"
+        )
+        if strict:
+            raise ValueError(msg)
+        print(f"WARN: {msg} (strict mode disabled; continuing)")
+
+    return missing_dates
+
+
 def validate_dump_freshness(
     latest_key: str,
     latest_dump_date: date | None,
@@ -1972,6 +2009,7 @@ def main():
         local_path = None
         dump_date = None
         max_stale_days = env_int("DAILY_MAX_DUMP_STALE_DAYS", 1, minimum=0)
+        strict_dump_continuity = runtime_bool("DAILY_STRICT_DUMP_CONTINUITY", True)
         expected_dump_date = runtime_date("DAILY_TARGET_DATE", tokyo_today())
         with timed_step("01_find_and_download_dump", step_timings):
             dump_candidates = list_dump_candidates()
@@ -1984,10 +2022,11 @@ def main():
                 expected_date=expected_dump_date,
                 max_stale_days=max_stale_days,
             )
-            validate_dump_continuity(
+            check_dump_continuity(
                 available_dump_dates=dump_dates,
                 expected_date=expected_dump_date,
                 max_stale_days=max_stale_days,
+                strict=strict_dump_continuity,
             )
             if dump_date is not None and "DAILY_TARGET_DATE" not in os.environ:
                 os.environ["DAILY_TARGET_DATE"] = dump_date.isoformat()
