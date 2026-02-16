@@ -1,12 +1,14 @@
 """
-Lambda Function: Table Freshness Checker
-Checks staging table freshness and publishes metrics to CloudWatch.
-Sends SNS alert if any table is > 2 days old.
+Lambda Function: Data Freshness Checker
+Checks staging table freshness and dump availability in S3.
+Sends SNS alert if table data or dump continuity degrades.
 """
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+from botocore.exceptions import ClientError
 import boto3
 import pymysql
 
@@ -14,9 +16,25 @@ import pymysql
 AURORA_ENDPOINT = os.environ['AURORA_ENDPOINT']
 AURORA_SECRET_ARN = os.environ['AURORA_SECRET_ARN']
 SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
+S3_BUCKET = os.environ['S3_BUCKET']
+S3_PREFIXES = [
+    p.strip()
+    for p in os.environ.get('S3_DUMP_PREFIXES', 'dumps').split(',')
+    if p.strip()
+]
+if not S3_PREFIXES:
+    S3_PREFIXES = ['dumps']
+
+DUMP_MIN_BYTES = int(os.environ.get('S3_DUMP_MIN_BYTES', '10485760'))
+DUMP_ERROR_DAYS = int(os.environ.get('S3_DUMP_ERROR_DAYS', '2'))
+REQUIRE_ALL_DUMP_PREFIXES = os.environ.get(
+    'S3_DUMP_REQUIRE_ALL_PREFIXES', 'true'
+).lower() in ('1', 'true', 'yes', 'y')
+
 
 # AWS clients
 secretsmanager = boto3.client('secretsmanager')
+s3 = boto3.client('s3')
 cloudwatch = boto3.client('cloudwatch')
 sns = boto3.client('sns')
 
@@ -33,25 +51,59 @@ def get_db_credentials():
 
 def check_table_freshness(cursor, table_name):
     """Check how old a table's data is."""
-    cursor.execute(f"""
-        SELECT 
+    cursor.execute(
+        f"""
+        SELECT
             COUNT(*) as row_count,
             MAX(updated_at) as last_updated,
             DATEDIFF(CURRENT_DATE, DATE(MAX(updated_at))) as days_old
         FROM staging.{table_name}
-    """)
-    
+    """
+    )
+
     result = cursor.fetchone()
     return {
         'table': table_name,
         'row_count': result[0],
         'last_updated': result[1].isoformat() if result[1] else None,
-        'days_old': result[2] if result[2] is not None else 999
+        'days_old': result[2] if result[2] is not None else 999,
+    }
+
+
+def current_jst_date():
+    """Return the current date in UTC+9 for daily dump checks."""
+    return (datetime.now(timezone.utc) + timedelta(hours=9)).date()
+
+
+def check_dump_file(prefix, date_str):
+    """Check existence and size for one dump file."""
+    key = f"{prefix.rstrip('/')}/gghouse_{date_str}.sql.gz"
+    try:
+        response = s3.head_object(Bucket=S3_BUCKET, Key=key)
+        size = int(response.get('ContentLength', 0))
+    except ClientError as err:
+        error_code = err.response['Error'].get('Code')
+        return {
+            'prefix': prefix,
+            'key': key,
+            'size_bytes': 0,
+            'ok': False,
+            'missing': True,
+            'error': str(error_code),
+        }
+
+    return {
+        'prefix': prefix,
+        'key': key,
+        'size_bytes': size,
+        'ok': size >= DUMP_MIN_BYTES,
+        'missing': False,
+        'error': None,
     }
 
 
 def publish_metric(table_name, days_old):
-    """Publish freshness metric to CloudWatch."""
+    """Publish staging-table freshness metric to CloudWatch."""
     cloudwatch.put_metric_data(
         Namespace='TokyoBeta/DataQuality',
         MetricData=[
@@ -59,93 +111,193 @@ def publish_metric(table_name, days_old):
                 'MetricName': f'Staging{table_name.capitalize()}DaysOld',
                 'Value': days_old,
                 'Unit': 'None',
-                'Timestamp': datetime.utcnow()
+                'Timestamp': datetime.utcnow(),
             }
-        ]
+        ],
+    )
+
+
+def publish_dump_metric(prefix, metric_name, value):
+    """Publish dump metric to CloudWatch."""
+    cloudwatch.put_metric_data(
+        Namespace='TokyoBeta/DataQuality',
+        MetricData=[
+            {
+                'MetricName': metric_name,
+                'Dimensions': [
+                    {
+                        'Name': 'DumpPrefix',
+                        'Value': prefix,
+                    }
+                ],
+                'Value': value,
+                'Unit': 'None',
+                'Timestamp': datetime.utcnow(),
+            }
+        ],
     )
 
 
 def send_alert(stale_tables):
     """Send SNS alert for stale tables."""
-    message = "⚠️ STAGING TABLE FRESHNESS ALERT\\n\\n"
-    message += "The following staging tables are stale:\\n\\n"
-    
+    message = '⚠️ STAGING TABLE FRESHNESS ALERT\n\n'
+    message += 'The following staging tables are stale:\n\n'
+
     for table_info in stale_tables:
-        status = "🔴 CRITICAL" if table_info['days_old'] >= ERROR_DAYS else "⚠️ WARNING"
-        message += f"{status} staging.{table_info['table']}\\n"
-        message += f"  Last updated: {table_info['last_updated']}\\n"
-        message += f"  Days old: {table_info['days_old']}\\n"
-        message += f"  Row count: {table_info['row_count']:,}\\n\\n"
-    
-    message += "Action required:\\n"
-    message += "1. Check if EC2 cron job is generating dumps\\n"
-    message += "2. Verify Glue staging_loader job is running\\n"
-    message += "3. Check S3 for recent dump files\\n\\n"
-    message += "Manual fix command:\\n"
-    message += "python3 scripts/emergency_staging_fix.py --tables movings tenants rooms\\n"
-    
+        status = '🔴 CRITICAL' if table_info['days_old'] >= ERROR_DAYS else '⚠️ WARNING'
+        message += f"{status} staging.{table_info['table']}\n"
+        message += f"  Last updated: {table_info['last_updated']}\n"
+        message += f"  Days old: {table_info['days_old']}\n"
+        message += f"  Row count: {table_info['row_count']:,}\n\n"
+
+    message += 'Action required:\n'
+    message += '1. Check if EC2 dump job is running\n'
+    message += '2. Verify Glue staging_loader job is healthy\n'
+    message += '3. Check S3 for recent dump files\n\n'
+    message += 'Manual fix command:\n'
+    message += 'python3 scripts/emergency_staging_fix.py --tables movings tenants rooms\n'
+
     sns.publish(
         TopicArn=SNS_TOPIC_ARN,
-        Subject=f"⚠️ Staging Table Freshness Alert - {len(stale_tables)} tables stale",
-        Message=message
+        Subject=f'⚠️ Staging Table Freshness Alert - {len(stale_tables)} tables stale',
+        Message=message,
+    )
+
+
+def send_dump_alert(stale_dumps):
+    """Send SNS alert for raw dump issues."""
+    message = '⚠️ RAW DUMP CHECK FAILED\n\n'
+    message += 'The following raw dump checks failed:\n\n'
+    for entry in stale_dumps[:25]:
+        message += (
+            f"- date={entry['date']} prefix={entry['prefix']} "
+            f"size={entry['size_bytes']} error={entry['error']}\n"
+        )
+
+    message += '\nAction required:\n'
+    message += '1. Validate EC2 dump job logs and IAM access to S3\n'
+    message += '2. Verify upstream script wrote both dump channels\n'
+    message += '3. Trigger downstream Glue staging job if raw dump is present\n'
+
+    sns.publish(
+        TopicArn=SNS_TOPIC_ARN,
+        Subject='⚠️ Raw Dump Freshness Alert',
+        Message=message,
     )
 
 
 def lambda_handler(event, context):
     """Main Lambda handler."""
-    print(f"Checking table freshness for: {TABLES_TO_CHECK}")
-    
-    # Get database credentials
+    print(f'Checking table freshness for: {TABLES_TO_CHECK}')
+
     creds = get_db_credentials()
-    
-    # Connect to database
+
     connection = pymysql.connect(
         host=AURORA_ENDPOINT.split(':')[0],
         user=creds['username'],
         password=creds['password'],
         database=creds.get('dbname', 'tokyobeta'),
-        charset='utf8mb4'
+        charset='utf8mb4',
     )
-    
+
     try:
         cursor = connection.cursor()
-        
+
         stale_tables = []
         results = []
-        
+        stale_dumps = []
+
         for table in TABLES_TO_CHECK:
             try:
                 table_info = check_table_freshness(cursor, table)
                 results.append(table_info)
-                
-                # Publish metric to CloudWatch
+
                 publish_metric(table, table_info['days_old'])
-                
-                # Check if stale
+
                 if table_info['days_old'] >= WARN_DAYS:
                     stale_tables.append(table_info)
-                    print(f"⚠️ Table {table} is {table_info['days_old']} days old")
+                    print(
+                        f"⚠️ Table {table} is {table_info['days_old']} days old"
+                    )
                 else:
-                    print(f"✅ Table {table} is fresh ({table_info['days_old']} days old)")
-                    
-            except Exception as e:
-                print(f"Error checking {table}: {e}")
-                # Publish error metric
+                    print(
+                        f"✅ Table {table} is fresh ({table_info['days_old']} days old)"
+                    )
+            except Exception as error:
+                print(f'Error checking {table}: {error}')
                 publish_metric(table, 999)
-        
-        # Send alert if any tables are stale
+
+        today = current_jst_date()
+        for day_shift in range(0, DUMP_ERROR_DAYS + 1):
+            date_str = (today - timedelta(days=day_shift)).strftime('%Y%m%d')
+            issues = []
+            healthy_prefixes = 0
+
+            for prefix in S3_PREFIXES:
+                dump_check = check_dump_file(prefix, date_str)
+                if dump_check['missing']:
+                    publish_dump_metric(prefix, 'DumpFileMissing', 1)
+                    issues.append(dump_check)
+                    print(
+                        f'⚠️ Missing dump file on {date_str} for {prefix}: '
+                        f"{dump_check['error']}"
+                    )
+                    continue
+
+                if not dump_check['ok']:
+                    publish_dump_metric(prefix, 'DumpFileTooSmall', 1)
+                    dump_check['error'] = 'size_below_min'
+                    issues.append(dump_check)
+                    print(
+                        f'⚠️ Dump too small on {date_str} for {prefix}: '
+                        f"{dump_check['size_bytes']} bytes"
+                    )
+                    continue
+
+                publish_dump_metric(prefix, 'DumpFileMissing', 0)
+                healthy_prefixes += 1
+
+            date_failed = False
+            if REQUIRE_ALL_DUMP_PREFIXES:
+                date_failed = len(issues) > 0
+            else:
+                date_failed = healthy_prefixes == 0
+
+            if date_failed:
+                for issue in issues:
+                    stale_dumps.append(
+                        {
+                            'date': date_str,
+                            'prefix': issue['prefix'],
+                            'size_bytes': issue['size_bytes'],
+                            'error': issue['error'] or 'no_issue_recorded',
+                        }
+                    )
+                print(f'⚠️ No healthy dump found for {date_str}')
+
+                if not REQUIRE_ALL_DUMP_PREFIXES:
+                    publish_dump_metric('global', 'NoHealthyDump', 1)
+                else:
+                    publish_dump_metric('global', 'DumpPrefixIssue', len(issues))
+        if stale_dumps:
+            publish_dump_metric('global', 'StaleDumpEntries', len(stale_dumps))
+            send_dump_alert(stale_dumps)
+
         if stale_tables:
             send_alert(stale_tables)
-            print(f"Alert sent for {len(stale_tables)} stale tables")
-        
+            print(f'Alert sent for {len(stale_tables)} stale tables')
+
         return {
-            'statusCode': 200 if not stale_tables else 400,
-            'body': json.dumps({
-                'message': 'Freshness check complete',
-                'stale_count': len(stale_tables),
-                'results': results
-            })
+            'statusCode': 200 if (not stale_tables and not stale_dumps) else 400,
+            'body': json.dumps(
+                {
+                    'message': 'Freshness check complete',
+                    'stale_count': len(stale_tables),
+                    'stale_dump_count': len(stale_dumps),
+                    'results': results,
+                    'stale_dumps': stale_dumps,
+                }
+            ),
         }
-        
     finally:
         connection.close()

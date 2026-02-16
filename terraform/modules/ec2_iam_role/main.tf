@@ -51,7 +51,8 @@ resource "aws_iam_policy" "s3_dumps_access" {
           "s3:GetObject"
         ]
         Resource = [
-          "arn:aws:s3:::${var.s3_dumps_bucket}/dumps/*",
+          "arn:aws:s3:::${var.s3_dumps_bucket}/dumps*/*",
+          "arn:aws:s3:::${var.s3_dumps_bucket}/dumps*",
           "arn:aws:s3:::${var.s3_dumps_bucket}/contractstatus/*"
         ]
       }

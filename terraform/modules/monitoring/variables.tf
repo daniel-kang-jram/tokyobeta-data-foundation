@@ -63,3 +63,32 @@ variable "security_group_id" {
   description = "Security group ID for Lambda"
   type        = string
 }
+
+variable "s3_bucket" {
+  description = "S3 bucket containing upstream dumps"
+  type        = string
+}
+
+variable "s3_dump_prefixes" {
+  description = "Comma-separated S3 prefixes for dump channels"
+  type        = string
+  default     = "dumps"
+}
+
+variable "s3_dump_min_bytes" {
+  description = "Minimum expected dump size in bytes for validity checks"
+  type        = number
+  default     = 10485760
+}
+
+variable "s3_dump_error_days" {
+  description = "Days of history to validate for dump continuity"
+  type        = number
+  default     = 2
+}
+
+variable "s3_dump_require_all_prefixes" {
+  description = "Whether every dump channel must exist for each expected date"
+  type        = bool
+  default     = true
+}
