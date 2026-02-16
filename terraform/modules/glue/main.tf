@@ -218,6 +218,7 @@ resource "aws_glue_job" "daily_etl" {
     "--AURORA_SECRET_ARN" = var.aurora_secret_arn
     "--ENVIRONMENT"       = var.environment
     "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
+    "--DAILY_MAX_DUMP_STALE_DAYS" = "0"
   }
 
   glue_version      = "4.0"
