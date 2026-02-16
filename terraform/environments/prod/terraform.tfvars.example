@@ -4,6 +4,10 @@
 
 # Email for monitoring alerts
 alert_email = "your-email@example.com"
+alert_emails = [
+  "your-email@example.com",
+  "oncall@example.com"
+]
 
 # External IPs allowed to access Aurora MySQL (optional)
 # Format: ["IP/32"] for single IP, or ["IP/24"] for IP range

@@ -2,11 +2,11 @@
 # Example: Full mysqldump with Secrets Manager integration
 # Schedule: 30 5 * * * (5:30 AM daily)
 
-set -euo pipefail
+set -Eeuo pipefail
 
 # Configuration
 AWS_REGION="ap-northeast-1"
-SECRET_NAME="tokyobeta/prod/rds/cron-credentials"
+SECRET_NAME="${SECRET_NAME:-tokyobeta/prod/rds/cron-credentials-manual-20260216-staging}"
 S3_BUCKET="jram-gghouse"
 S3_PREFIXES_CONFIG="${S3_PREFIXES_CSV:-dumps,dumps-managed}"
 IFS=',' read -r -a S3_PREFIXES <<< "${S3_PREFIXES_CONFIG}"
@@ -14,7 +14,7 @@ S3_PREFIX_PRIMARY="dumps"
 TIMESTAMP=$(date +%Y%m%d)
 RUN_TS=$(date -Iseconds)
 WORK_DIR="/tmp/mysql_dumps/gghouse_${TIMESTAMP}_$$"
-LOG_FILE="/var/log/ggh_datatransit.log"
+LOG_FILE="${LOG_FILE_PATH:-/var/log/ggh_datatransit.log}"
 LOCK_FILE="/tmp/ggh_datatransit.lock"
 
 RUN_ID="${TIMESTAMP}-$$"
@@ -42,6 +42,7 @@ notify_failure() {
 
 fail() {
     local message="$1"
+    trap - ERR
     log "ERROR: ${message}"
     notify_failure "[tokyobeta-dump] ${message}\nRun ID: ${RUN_ID}\nTimestamp: ${RUN_TS}\nLog: ${LOG_FILE}"
     exit 1
@@ -81,10 +82,16 @@ cleanup() {
 }
 
 trap cleanup EXIT
+trap 'fail "Unhandled error at line ${BASH_LINENO[0]}."' ERR
 
 for cmd in aws jq mysqldump gzip numfmt sha256sum flock stat; do
     require_command "$cmd"
 done
+
+if [[ -z "${SNS_TOPIC_ARN}" ]]; then
+    echo "ERROR: SNS_TOPIC_ARN must be set for failure alerting." >&2
+    exit 1
+fi
 
 # Serialize runs in case cron overlaps
 exec 9>"$LOCK_FILE"
@@ -95,6 +102,10 @@ fi
 log "Starting dump run id=${RUN_ID}"
 
 mkdir -p "$WORK_DIR"
+if ! touch "$LOG_FILE" 2>/tmp/ggh_datatransit_log_error.log; then
+    LOG_FILE="${WORK_DIR}/ggh_datatransit.log"
+    touch "$LOG_FILE"
+fi
 
 log "Fetching credentials from Secrets Manager (${SECRET_NAME})"
 if ! SECRET_JSON=$(aws secretsmanager get-secret-value \

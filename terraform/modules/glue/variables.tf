@@ -74,3 +74,9 @@ variable "job_timeout" {
   type        = number
   default     = 60
 }
+
+variable "daily_strict_dump_continuity" {
+  description = "Whether daily_etl should fail on missing dump dates"
+  type        = bool
+  default     = false
+}

@@ -1,6 +1,19 @@
 # Monitoring Module
 # Creates CloudWatch alarms and SNS topics for alerts
 
+locals {
+  alert_recipients = toset(
+    compact(
+      distinct(
+        concat(
+          [var.alert_email],
+          var.alert_emails
+        )
+      )
+    )
+  )
+}
+
 # SNS Topic for alerts
 resource "aws_sns_topic" "etl_alerts" {
   name = "tokyobeta-${var.environment}-dashboard-etl-alerts"
@@ -13,9 +26,10 @@ resource "aws_sns_topic" "etl_alerts" {
 
 # SNS Topic Subscription
 resource "aws_sns_topic_subscription" "etl_alerts_email" {
+  for_each  = local.alert_recipients
   topic_arn = aws_sns_topic.etl_alerts.arn
   protocol  = "email"
-  endpoint  = var.alert_email
+  endpoint  = each.value
 }
 
 # CloudWatch Alarm: Glue Job Failures
@@ -109,4 +123,3 @@ resource "aws_cloudwatch_metric_alarm" "aurora_storage" {
     Environment = var.environment
   }
 }
-

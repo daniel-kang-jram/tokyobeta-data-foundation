@@ -62,6 +62,7 @@ locals {
   environment  = "prod"
   project_name = "tokyobeta"
   alert_email  = var.alert_email
+  alert_emails = var.alert_emails
 }
 
 # Module: Networking
@@ -116,9 +117,10 @@ module "glue" {
   private_subnet_ids = module.networking.private_subnet_ids
   security_group_id  = module.networking.lambda_security_group_id
 
-  worker_type       = "G.2X"
-  number_of_workers = 2
-  job_timeout       = 120
+  worker_type                  = "G.2X"
+  number_of_workers            = 2
+  job_timeout                  = 120
+  daily_strict_dump_continuity = false
 }
 
 # Module: Step Functions (NEW - Orchestrates ETL layers)
@@ -160,6 +162,7 @@ module "monitoring" {
   glue_job_name     = module.glue.glue_job_name
   aurora_cluster_id = module.aurora.cluster_id
   alert_email       = local.alert_email
+  alert_emails      = local.alert_emails
 
   aurora_endpoint    = module.aurora.cluster_endpoint
   aurora_secret_arn  = module.secrets.aurora_secret_arn

@@ -10,7 +10,10 @@ from datetime import datetime, timedelta, timezone
 
 from botocore.exceptions import ClientError
 import boto3
-import pymysql
+try:
+    import pymysql
+except ImportError:
+    pymysql = None
 
 # Environment variables
 AURORA_ENDPOINT = os.environ['AURORA_ENDPOINT']
@@ -190,42 +193,47 @@ def lambda_handler(event, context):
     """Main Lambda handler."""
     print(f'Checking table freshness for: {TABLES_TO_CHECK}')
 
-    creds = get_db_credentials()
+    connection = None
+    db_checks_skipped = pymysql is None
 
-    connection = pymysql.connect(
-        host=AURORA_ENDPOINT.split(':')[0],
-        user=creds['username'],
-        password=creds['password'],
-        database=creds.get('dbname', 'tokyobeta'),
-        charset='utf8mb4',
-    )
+    if db_checks_skipped:
+        print("WARN: pymysql not available; skipping staging table checks and running dump checks only.")
+    else:
+        creds = get_db_credentials()
+        connection = pymysql.connect(
+            host=AURORA_ENDPOINT.split(':')[0],
+            user=creds['username'],
+            password=creds['password'],
+            database=creds.get('dbname', 'tokyobeta'),
+            charset='utf8mb4',
+        )
 
     try:
-        cursor = connection.cursor()
-
         stale_tables = []
         results = []
         stale_dumps = []
 
-        for table in TABLES_TO_CHECK:
-            try:
-                table_info = check_table_freshness(cursor, table)
-                results.append(table_info)
+        if connection is not None:
+            cursor = connection.cursor()
+            for table in TABLES_TO_CHECK:
+                try:
+                    table_info = check_table_freshness(cursor, table)
+                    results.append(table_info)
 
-                publish_metric(table, table_info['days_old'])
+                    publish_metric(table, table_info['days_old'])
 
-                if table_info['days_old'] >= WARN_DAYS:
-                    stale_tables.append(table_info)
-                    print(
-                        f"⚠️ Table {table} is {table_info['days_old']} days old"
-                    )
-                else:
-                    print(
-                        f"✅ Table {table} is fresh ({table_info['days_old']} days old)"
-                    )
-            except Exception as error:
-                print(f'Error checking {table}: {error}')
-                publish_metric(table, 999)
+                    if table_info['days_old'] >= WARN_DAYS:
+                        stale_tables.append(table_info)
+                        print(
+                            f"⚠️ Table {table} is {table_info['days_old']} days old"
+                        )
+                    else:
+                        print(
+                            f"✅ Table {table} is fresh ({table_info['days_old']} days old)"
+                        )
+                except Exception as error:
+                    print(f'Error checking {table}: {error}')
+                    publish_metric(table, 999)
 
         today = current_jst_date()
         for day_shift in range(0, DUMP_ERROR_DAYS + 1):
@@ -294,10 +302,12 @@ def lambda_handler(event, context):
                     'message': 'Freshness check complete',
                     'stale_count': len(stale_tables),
                     'stale_dump_count': len(stale_dumps),
+                    'db_checks_skipped': db_checks_skipped,
                     'results': results,
                     'stale_dumps': stale_dumps,
                 }
             ),
         }
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()

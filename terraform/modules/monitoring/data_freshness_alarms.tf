@@ -13,13 +13,13 @@ resource "aws_lambda_function" "check_table_freshness" {
 
   environment {
     variables = {
-      AURORA_ENDPOINT   = var.aurora_endpoint
-      AURORA_SECRET_ARN = var.aurora_secret_arn
-      SNS_TOPIC_ARN     = aws_sns_topic.etl_alerts.arn
-      S3_BUCKET         = var.s3_bucket
-      S3_DUMP_PREFIXES  = var.s3_dump_prefixes
-      S3_DUMP_MIN_BYTES = var.s3_dump_min_bytes
-      S3_DUMP_ERROR_DAYS = var.s3_dump_error_days
+      AURORA_ENDPOINT              = var.aurora_endpoint
+      AURORA_SECRET_ARN            = var.aurora_secret_arn
+      SNS_TOPIC_ARN                = aws_sns_topic.etl_alerts.arn
+      S3_BUCKET                    = var.s3_bucket
+      S3_DUMP_PREFIXES             = var.s3_dump_prefixes
+      S3_DUMP_MIN_BYTES            = var.s3_dump_min_bytes
+      S3_DUMP_ERROR_DAYS           = var.s3_dump_error_days
       S3_DUMP_REQUIRE_ALL_PREFIXES = var.s3_dump_require_all_prefixes ? "true" : "false"
     }
   }
@@ -129,10 +129,28 @@ resource "aws_cloudwatch_event_rule" "check_freshness_daily" {
   }
 }
 
+# EventBridge rule to trigger post-dump check (daily at 6 AM JST = 21:00 UTC)
+resource "aws_cloudwatch_event_rule" "check_freshness_post_dump" {
+  name                = "${var.project_name}-${var.environment}-check-freshness-post-dump"
+  description         = "Check dump availability shortly after dump schedule"
+  schedule_expression = "cron(0 21 * * ? *)"
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-freshness-post-dump"
+    Environment = var.environment
+  }
+}
+
 # EventBridge target
 resource "aws_cloudwatch_event_target" "freshness_checker_lambda" {
   rule      = aws_cloudwatch_event_rule.check_freshness_daily.name
   target_id = "FreshnessCheckerLambda"
+  arn       = aws_lambda_function.check_table_freshness.arn
+}
+
+resource "aws_cloudwatch_event_target" "freshness_checker_lambda_post_dump" {
+  rule      = aws_cloudwatch_event_rule.check_freshness_post_dump.name
+  target_id = "FreshnessCheckerLambdaPostDump"
   arn       = aws_lambda_function.check_table_freshness.arn
 }
 
@@ -143,6 +161,14 @@ resource "aws_lambda_permission" "allow_eventbridge_freshness" {
   function_name = aws_lambda_function.check_table_freshness.function_name
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.check_freshness_daily.arn
+}
+
+resource "aws_lambda_permission" "allow_eventbridge_freshness_post_dump" {
+  statement_id  = "AllowExecutionFromEventBridgePostDump"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.check_table_freshness.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.check_freshness_post_dump.arn
 }
 
 # CloudWatch Metric Alarm - Staging Movings Freshness

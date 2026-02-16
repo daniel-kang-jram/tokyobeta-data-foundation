@@ -17,6 +17,12 @@ variable "alert_email" {
   type        = string
 }
 
+variable "alert_emails" {
+  description = "Additional email addresses for monitoring alerts"
+  type        = list(string)
+  default     = []
+}
+
 variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to access Aurora MySQL (external access)"
   type        = list(string)

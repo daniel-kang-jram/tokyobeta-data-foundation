@@ -1,4 +1,5 @@
 import pathlib
+import json
 import subprocess
 import sys
 import pytest
@@ -74,6 +75,87 @@ def test_get_latest_dump_key_selects_by_modified_date(monkeypatch):
         Bucket="test-bucket",
         Prefix="dumps/"
     )
+
+
+def test_get_aurora_credentials_reads_legacy_and_standard_secret_keys(monkeypatch):
+    daily_etl._AURORA_CREDENTIALS = None
+    mock_sm = Mock()
+    mock_sm.get_secret_value.return_value = {"SecretString": json.dumps({
+        "username": "admin",
+        "password": "secret-pass"
+    })}
+
+    creds = daily_etl.get_aurora_credentials(mock_sm, "secret-arn")
+
+    assert creds == ("admin", "secret-pass")
+    mock_sm.get_secret_value.assert_called_once_with(SecretId="secret-arn")
+
+
+def test_get_aurora_credentials_falls_back_to_previous_version_if_current_invalid(monkeypatch):
+    daily_etl._AURORA_CREDENTIALS = None
+    mock_sm = Mock()
+    mock_sm.get_secret_value.side_effect = [
+        {"SecretString": json.dumps({"username": "admin"})},
+        {"SecretString": json.dumps({"username": "admin", "password": "previous-pass"})},
+    ]
+
+    creds = daily_etl.get_aurora_credentials(mock_sm, "secret-arn")
+
+    assert creds == ("admin", "previous-pass")
+    assert mock_sm.get_secret_value.call_count == 2
+    assert mock_sm.get_secret_value.call_args_list[0] == (({"SecretId": "secret-arn"},))
+
+
+def test_get_aurora_credentials_uses_valid_next_stage_when_current_password_blank(monkeypatch):
+    daily_etl._AURORA_CREDENTIALS = None
+    mock_sm = Mock()
+    mock_sm.get_secret_value.side_effect = [
+        {"SecretString": json.dumps({"username": "admin", "password": "   "})},
+        {"SecretString": json.dumps({"username": "admin", "password": "current-pass"})},
+    ]
+
+    creds = daily_etl.get_aurora_credentials(mock_sm, "secret-arn")
+
+    assert creds == ("admin", "current-pass")
+    assert mock_sm.get_secret_value.call_count == 2
+
+
+def test_get_aurora_credentials_raises_when_no_password_available(monkeypatch):
+    daily_etl._AURORA_CREDENTIALS = None
+    mock_sm = Mock()
+    mock_sm.get_secret_value.return_value = {"SecretString": json.dumps({"username": "admin"})}
+
+    with pytest.raises(RuntimeError, match="Failed to resolve Aurora credentials"):
+        daily_etl.get_aurora_credentials(mock_sm, "secret-arn")
+
+
+def test_create_aurora_connection_raises_on_empty_password(monkeypatch):
+    daily_etl._AURORA_CREDENTIALS = None
+    monkeypatch.setattr(daily_etl, "get_aurora_credentials", lambda: ("admin", ""))
+    monkeypatch.setitem(daily_etl.args, "AURORA_SECRET_ARN", "arn:secret:test")
+
+    with pytest.raises(RuntimeError, match="Empty Aurora password"):
+        daily_etl.create_aurora_connection()
+
+
+def test_recoverable_dbt_hook_auth_error_detected():
+    output = """
+Completed with 1 error and 0 warnings:
+  on-run-end failed, error:
+ 1045 (28000): Access denied for user 'admin'@'10.0.10.213' (using password: YES)
+Done. PASS=24 WARN=0 ERROR=1 SKIP=0 TOTAL=25
+"""
+    assert daily_etl.is_recoverable_dbt_hook_auth_error(output) is True
+
+
+def test_recoverable_dbt_hook_auth_error_not_detected_for_model_failure():
+    output = """
+Completed with 1 error and 0 warnings:
+  Database Error in model silver.tenant_status_history (models/silver/tenant_status_history.sql)
+  1205 (HY000): Lock wait timeout exceeded; try restarting transaction
+Done. PASS=23 WARN=0 ERROR=1 SKIP=0 TOTAL=24
+"""
+    assert daily_etl.is_recoverable_dbt_hook_auth_error(output) is False
 
 
 def test_list_dump_candidates_filters_and_sorts(monkeypatch):
