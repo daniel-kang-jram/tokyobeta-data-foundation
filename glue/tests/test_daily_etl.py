@@ -658,3 +658,87 @@ def test_compute_occupancy_kpis_forward_fills_missing_fact_day_from_next_snapsho
     out = capsys.readouterr().out
     assert "WARN" in out
     assert "2026-02-15" in out
+
+
+def test_update_gold_occupancy_kpis_repairs_stale_fact_dates_outside_primary_lookback(monkeypatch):
+    """Repair window should include stale fact rows (e.g., 0-room artifacts) older than lookback."""
+
+    class FakeCursor:
+        def __init__(self):
+            self._next_fetchone = None
+            self._next_fetchall = []
+
+        def execute(self, sql, params=None):
+            sql_compact = " ".join(sql.split())
+
+            if "SELECT MAX(snapshot_date) AS max_snapshot_date FROM silver.tenant_room_snapshot_daily" in sql_compact:
+                self._next_fetchone = {"max_snapshot_date": date(2026, 2, 16)}
+                return
+
+            if (
+                "SELECT DISTINCT snapshot_date FROM silver.tenant_room_snapshot_daily" in sql_compact
+                and "WHERE snapshot_date BETWEEN %s AND %s" in sql_compact
+            ):
+                self._next_fetchall = [
+                    {"snapshot_date": date(2026, 2, 11)},
+                    {"snapshot_date": date(2026, 2, 13)},
+                    {"snapshot_date": date(2026, 2, 14)},
+                    {"snapshot_date": date(2026, 2, 16)},
+                ]
+                return
+
+            if "SELECT snapshot_date FROM gold.occupancy_daily_metrics" in sql_compact:
+                self._next_fetchall = [{"snapshot_date": date(2026, 2, 12)}]
+                return
+
+            raise AssertionError(f"Unexpected SQL: {sql_compact}")
+
+        def fetchone(self):
+            result = self._next_fetchone
+            self._next_fetchone = None
+            return result
+
+        def fetchall(self):
+            result = self._next_fetchall
+            self._next_fetchall = []
+            return result
+
+        def close(self):
+            return None
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_obj = FakeCursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.committed = True
+
+        def close(self):
+            return None
+
+    captured_dates = {}
+    fake_connection = FakeConnection()
+
+    monkeypatch.setenv("DAILY_OCCUPANCY_REPAIR_LOOKBACK_DAYS", "30")
+    monkeypatch.setattr(daily_etl, "get_aurora_credentials", lambda: ("user", "pass"))
+    monkeypatch.setattr(daily_etl.pymysql, "connect", lambda **kwargs: fake_connection)
+    monkeypatch.setattr(daily_etl, "ensure_occupancy_kpi_table_exists", lambda cursor: None)
+
+    def fake_compute(cursor, target_dates):
+        captured_dates["dates"] = sorted(target_dates)
+        return len(target_dates)
+
+    monkeypatch.setattr(daily_etl, "compute_occupancy_kpis_for_dates", fake_compute)
+
+    processed = daily_etl.update_gold_occupancy_kpis(
+        target_date=date(2026, 2, 16),
+        lookback_days=3,
+        forward_days=1,
+    )
+
+    assert processed == len(captured_dates["dates"])
+    assert date(2026, 2, 12) in captured_dates["dates"]
