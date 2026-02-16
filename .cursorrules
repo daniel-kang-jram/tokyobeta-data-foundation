@@ -607,6 +607,31 @@ aws sso login --profile gghouse
 - All infrastructure (Glue, RDS, S3) is in account 343881458651
 - `.envrc` file automatically sets `AWS_PROFILE=gghouse` when you `cd` into this repo
 
+### Execution Enforcement (Key)
+
+1. **Always load and apply `.cursorrules` at session start for this repo**
+   - Do this even if user does not re-state it.
+
+2. **Always use `--profile gghouse` for AWS CLI commands in this repo**
+   - Include it explicitly on every `aws` command (S3, Glue, Logs, Secrets Manager, Terraform-related AWS calls).
+
+3. **Mandatory pre-run debrief before starting any new Glue production run**
+   - Share exact files changed.
+   - Share behavioral impact.
+   - Share test results.
+   - Share what was synced/deployed (for example S3 script upload).
+   - Share exact Glue run command.
+   - Wait for user confirmation before launch.
+
+4. **Glue failure reporting must be direct and evidence-based**
+   - Provide run ID, exact error message, and failing step.
+   - Distinguish root cause categories: dump continuity/freshness, Aurora auth, dbt model failure, dbt hook-only failure, code regression.
+   - Do not summarize without command-backed evidence from Glue and CloudWatch logs.
+
+5. **dbt hook-only auth edge case**
+   - If dbt models succeeded and only `on-run-end` fails with MySQL `1045`, treat as recoverable only when model success is clearly confirmed.
+   - Log warning and continue pipeline, but record incident and follow-up action.
+
 ---
 
 ## Data Quality & Monitoring - CRITICAL
