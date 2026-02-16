@@ -1888,6 +1888,111 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
     return len(target_dates)
 
 
+def _row_date_value(row: Any, key: str = "snapshot_date") -> date | None:
+    """Extract a DATE value from dict/tuple cursor rows."""
+    if row is None:
+        return None
+
+    value: Any = None
+    if isinstance(row, dict):
+        value = row.get(key)
+        if value is None and row:
+            value = next(iter(row.values()))
+    elif isinstance(row, (tuple, list)):
+        if row:
+            value = row[0]
+    else:
+        try:
+            value = row[0]
+        except (TypeError, IndexError, KeyError):
+            value = None
+
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def get_missing_silver_snapshot_dates(
+    cursor,
+    start_date: date,
+    end_date: date,
+) -> List[date]:
+    """
+    Find missing dates in silver snapshots within a bounded window.
+    Only checks between the earliest/latest observed dates in the window.
+    """
+    if start_date > end_date:
+        return []
+
+    cursor.execute(
+        """
+        SELECT DISTINCT snapshot_date
+        FROM silver.tenant_room_snapshot_daily
+        WHERE snapshot_date BETWEEN %s AND %s
+        ORDER BY snapshot_date
+        """,
+        (start_date, end_date),
+    )
+    observed_rows = cursor.fetchall() or []
+    observed_dates = sorted(
+        {
+            dt
+            for dt in (_row_date_value(row, "snapshot_date") for row in observed_rows)
+            if dt is not None
+        }
+    )
+    if not observed_dates:
+        return []
+
+    effective_start = max(start_date, observed_dates[0])
+    effective_end = min(end_date, observed_dates[-1])
+
+    missing: List[date] = []
+    current = effective_start
+    observed_set = set(observed_dates)
+    while current <= effective_end:
+        if current not in observed_set:
+            missing.append(current)
+        current += timedelta(days=1)
+    return missing
+
+
+def get_stale_gold_occupancy_dates(
+    cursor,
+    start_date: date,
+    end_date: date,
+) -> List[date]:
+    """
+    Find historical fact dates that likely carry stale KPI artifacts.
+    """
+    if start_date > end_date:
+        return []
+
+    cursor.execute(
+        """
+        SELECT snapshot_date
+        FROM gold.occupancy_daily_metrics
+        WHERE snapshot_date BETWEEN %s AND %s
+          AND (
+                period_end_rooms IS NULL
+                OR period_end_rooms <= 0
+                OR occupancy_rate IS NULL
+                OR occupancy_rate <= 0
+          )
+        ORDER BY snapshot_date
+        """,
+        (start_date, end_date),
+    )
+    rows = cursor.fetchall() or []
+    return [
+        dt
+        for dt in (_row_date_value(row, "snapshot_date") for row in rows)
+        if dt is not None
+    ]
+
+
 def update_gold_occupancy_kpis(target_date: date, lookback_days: int, forward_days: int) -> int:
     """Update gold.occupancy_daily_metrics for target +/- windows."""
     print(
@@ -1907,10 +2012,48 @@ def update_gold_occupancy_kpis(target_date: date, lookback_days: int, forward_da
     cursor = connection.cursor()
     try:
         ensure_occupancy_kpi_table_exists(cursor)
-        dates_to_process = [
+        base_dates = [
             target_date + timedelta(days=i)
             for i in range(-lookback_days, forward_days + 1)
         ]
+        cursor.execute(
+            """
+            SELECT MAX(snapshot_date) AS max_snapshot_date
+            FROM silver.tenant_room_snapshot_daily
+            """
+        )
+        snapshot_meta = cursor.fetchone()
+        as_of_snapshot_date = snapshot_meta["max_snapshot_date"] if snapshot_meta else None
+        if as_of_snapshot_date is None:
+            raise RuntimeError("No data in silver.tenant_room_snapshot_daily; cannot compute occupancy KPIs")
+
+        repair_lookback_days = env_int("DAILY_OCCUPANCY_REPAIR_LOOKBACK_DAYS", 30, minimum=0)
+        repair_start_date = min(
+            base_dates[0],
+            as_of_snapshot_date - timedelta(days=repair_lookback_days),
+        )
+        repair_end_date = as_of_snapshot_date
+
+        missing_fact_dates = get_missing_silver_snapshot_dates(
+            cursor,
+            repair_start_date,
+            repair_end_date,
+        )
+        stale_fact_dates = get_stale_gold_occupancy_dates(
+            cursor,
+            repair_start_date,
+            repair_end_date,
+        )
+
+        extra_repair_dates = sorted(set(missing_fact_dates + stale_fact_dates))
+        if extra_repair_dates:
+            print(
+                "Including occupancy repair dates outside primary window: "
+                f"{len(extra_repair_dates)} date(s), "
+                f"first={extra_repair_dates[0]}, last={extra_repair_dates[-1]}"
+            )
+
+        dates_to_process = sorted(set(base_dates + extra_repair_dates))
         processed_dates = compute_occupancy_kpis_for_dates(cursor, dates_to_process)
         connection.commit()
         print(f"Updated occupancy KPI rows for {processed_dates} date(s)")
