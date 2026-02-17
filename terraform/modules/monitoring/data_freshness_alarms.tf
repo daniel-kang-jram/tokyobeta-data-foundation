@@ -98,11 +98,12 @@ resource "aws_iam_role_policy" "freshness_checker_policy" {
       {
         Effect = "Allow"
         Action = [
+          "cloudwatch:PutMetricData",
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = ["arn:aws:logs:*:*:*"]
+        Resource = ["*"]
       },
       {
         Effect = "Allow"

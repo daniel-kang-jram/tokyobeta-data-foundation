@@ -169,7 +169,8 @@ module "monitoring" {
   private_subnet_ids = module.networking.private_subnet_ids
   security_group_id  = module.networking.lambda_security_group_id
   s3_bucket          = var.s3_source_bucket
-  s3_dump_prefixes   = "${var.s3_source_prefix},dumps-managed/"
+  # Primary-only monitoring during dump stabilization; managed channel is paused.
+  s3_dump_prefixes = var.s3_source_prefix
 }
 
 # Module: Evidence Hosting (CloudFront + S3 + Cognito MFA)
