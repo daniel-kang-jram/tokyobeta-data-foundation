@@ -59,6 +59,7 @@ WITH all_active_movings AS (
         m.rent as fixed_rent,
         m.movein_date as move_in_date,
         m.moveout_date as moveout_date,  -- 最終賃料日
+        m.moveout_date_integrated as moveout_date_integrated,
         m.moveout_plans_date as moveout_plans_date,  -- 実退去日
         DATEDIFF(
             COALESCE(m.moveout_date, CURDATE()),
@@ -127,7 +128,7 @@ tenant_room_assignments AS (
         fixed_rent,
         -- Dates
         move_in_date,
-        COALESCE(m.moveout_date_integrated, m.moveout_date, m.moveout_plans_date) AS moveout_date,
+        COALESCE(moveout_date_integrated, moveout_plans_date, moveout_date) AS moveout_date,
         moveout_plans_date,
         days_stayed,
         -- Foreign keys for joins

@@ -13,6 +13,7 @@ SNAPSHOT_MODEL_PATH = REPO_ROOT / "dbt" / "models" / "silver" / "tenant_room_sna
 TENANT_ROOM_INFO_MODEL_PATH = (
     REPO_ROOT / "dbt" / "models" / "silver" / "tokyo_beta_tenant_room_info.sql"
 )
+STG_MOVINGS_MODEL_PATH = REPO_ROOT / "dbt" / "models" / "silver" / "stg_movings.sql"
 
 
 def _seed_label_for_code(code: int) -> str:
@@ -57,3 +58,33 @@ def test_tenant_room_info_contract_type_code_6_matches_seed_label() -> None:
     actual = _model_label_for_code(model_sql, 6)
 
     assert actual == expected
+
+
+def test_cancel_flag_filter_present_for_ui_parity_models() -> None:
+    """Both tenant room models must exclude cancelled contracts."""
+    expected_predicate = "COALESCE(m.cancel_flag, 0) = 0"
+    snapshot_sql = SNAPSHOT_MODEL_PATH.read_text(encoding="utf-8")
+    tenant_room_info_sql = TENANT_ROOM_INFO_MODEL_PATH.read_text(encoding="utf-8")
+
+    assert expected_predicate in snapshot_sql
+    assert expected_predicate in tenant_room_info_sql
+
+
+def test_moveout_date_priority_matches_stg_movings() -> None:
+    """Moveout priority must be integrated > plans > final_rent across models."""
+    expected_pattern = (
+        r"COALESCE\(\s*(?:m\.)?moveout_date_integrated\s*,\s*"
+        r"(?:m\.)?moveout_plans_date\s*,\s*(?:m\.)?moveout_date\s*\)"
+    )
+
+    stg_movings_sql = STG_MOVINGS_MODEL_PATH.read_text(encoding="utf-8")
+    snapshot_sql = SNAPSHOT_MODEL_PATH.read_text(encoding="utf-8")
+    tenant_room_info_sql = TENANT_ROOM_INFO_MODEL_PATH.read_text(encoding="utf-8")
+
+    assert re.search(expected_pattern, stg_movings_sql), "Reference pattern missing in stg_movings.sql"
+    assert re.search(expected_pattern, snapshot_sql), (
+        "tenant_room_snapshot_daily.sql has inconsistent moveout date priority"
+    )
+    assert re.search(expected_pattern, tenant_room_info_sql), (
+        "tokyo_beta_tenant_room_info.sql has inconsistent moveout date priority"
+    )

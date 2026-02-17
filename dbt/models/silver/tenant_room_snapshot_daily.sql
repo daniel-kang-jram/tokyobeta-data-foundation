@@ -51,7 +51,7 @@ WITH all_active_movings AS (
         
         m.rent as fixed_rent,
         m.movein_date as move_in_date,
-        COALESCE(m.moveout_date_integrated, m.moveout_date, m.moveout_plans_date) as moveout_date,  -- 最終賃料日 (forecast)
+        COALESCE(m.moveout_date_integrated, m.moveout_plans_date, m.moveout_date) as moveout_date,  -- 最終賃料日 (forecast)
         m.moveout_plans_date as moveout_plans_date,  -- 実退去日 (actual)
         m.apartment_id,
         m.room_id,
