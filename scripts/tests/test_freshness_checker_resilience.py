@@ -115,3 +115,73 @@ def test_lambda_handler_reports_db_checks_enabled_with_pymysql(monkeypatch):
 
     assert result["statusCode"] == 200
     assert body["db_checks_skipped"] is False
+
+
+def test_lambda_handler_continues_when_dump_metric_publish_fails(monkeypatch):
+    """Should still send dump alerts if CloudWatch metric publish fails."""
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=True)
+
+    def _missing_dump(prefix, date_str):
+        return {
+            "prefix": prefix,
+            "key": f"{prefix.rstrip('/')}/gghouse_{date_str}.sql",
+            "size_bytes": 0,
+            "ok": False,
+            "missing": True,
+            "error": "404",
+        }
+
+    sent_alerts = []
+
+    monkeypatch.setattr(checker, "check_dump_file", _missing_dump)
+    monkeypatch.setattr(
+        checker,
+        "publish_dump_metric",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("metric publish failed")),
+    )
+    monkeypatch.setattr(checker, "send_dump_alert", lambda stale_dumps: sent_alerts.append(stale_dumps))
+    monkeypatch.setattr(checker, "publish_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(checker, "send_alert", lambda *args, **kwargs: None)
+
+    result = checker.lambda_handler({}, None)
+    body = json.loads(result["body"])
+
+    assert result["statusCode"] == 400
+    assert body["stale_dump_count"] == 1
+    assert sent_alerts
+
+
+def test_check_dump_file_prefers_plain_sql_when_present(monkeypatch):
+    """Should accept .sql dump files (legacy primary path)."""
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=True)
+
+    def _head_object(Bucket, Key):
+        if Key.endswith(".sql"):
+            return {"ContentLength": 123}
+        raise checker.ClientError({"Error": {"Code": "404"}}, "HeadObject")
+
+    monkeypatch.setattr(checker.s3, "head_object", _head_object)
+
+    result = checker.check_dump_file("dumps/", "20260217")
+
+    assert result["missing"] is False
+    assert result["ok"] is True
+    assert result["key"].endswith("gghouse_20260217.sql")
+
+
+def test_check_dump_file_falls_back_to_gzip_when_plain_missing(monkeypatch):
+    """Should fall back to .sql.gz when plain .sql is not present."""
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=True)
+
+    def _head_object(Bucket, Key):
+        if Key.endswith(".sql.gz"):
+            return {"ContentLength": 456}
+        raise checker.ClientError({"Error": {"Code": "404"}}, "HeadObject")
+
+    monkeypatch.setattr(checker.s3, "head_object", _head_object)
+
+    result = checker.check_dump_file("dumps/", "20260216")
+
+    assert result["missing"] is False
+    assert result["ok"] is True
+    assert result["key"].endswith("gghouse_20260216.sql.gz")

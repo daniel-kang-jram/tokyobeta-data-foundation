@@ -80,28 +80,42 @@ def current_jst_date():
 
 def check_dump_file(prefix, date_str):
     """Check existence and size for one dump file."""
-    key = f"{prefix.rstrip('/')}/gghouse_{date_str}.sql.gz"
-    try:
-        response = s3.head_object(Bucket=S3_BUCKET, Key=key)
-        size = int(response.get('ContentLength', 0))
-    except ClientError as err:
-        error_code = err.response['Error'].get('Code')
-        return {
-            'prefix': prefix,
-            'key': key,
-            'size_bytes': 0,
-            'ok': False,
-            'missing': True,
-            'error': str(error_code),
-        }
+    base_key = f"{prefix.rstrip('/')}/gghouse_{date_str}"
+    candidate_keys = [f"{base_key}.sql", f"{base_key}.sql.gz"]
+    last_error_code = None
+
+    for key in candidate_keys:
+        try:
+            response = s3.head_object(Bucket=S3_BUCKET, Key=key)
+            size = int(response.get('ContentLength', 0))
+            return {
+                'prefix': prefix,
+                'key': key,
+                'size_bytes': size,
+                'ok': size >= DUMP_MIN_BYTES,
+                'missing': False,
+                'error': None,
+            }
+        except ClientError as err:
+            error_code = str(err.response['Error'].get('Code'))
+            if error_code not in {'404', 'NoSuchKey', 'NotFound'}:
+                return {
+                    'prefix': prefix,
+                    'key': key,
+                    'size_bytes': 0,
+                    'ok': False,
+                    'missing': True,
+                    'error': error_code,
+                }
+            last_error_code = error_code
 
     return {
         'prefix': prefix,
-        'key': key,
-        'size_bytes': size,
-        'ok': size >= DUMP_MIN_BYTES,
-        'missing': False,
-        'error': None,
+        'key': candidate_keys[0],
+        'size_bytes': 0,
+        'ok': False,
+        'missing': True,
+        'error': last_error_code or 'NotFound',
     }
 
 
@@ -118,6 +132,16 @@ def publish_metric(table_name, days_old):
             }
         ],
     )
+
+
+def safe_publish_metric(table_name, days_old):
+    """Publish staging-table metric with best-effort behavior."""
+    try:
+        publish_metric(table_name, days_old)
+    except Exception as error:  # pragma: no cover - defensive runtime guard
+        print(
+            f"WARN: Failed to publish staging metric for {table_name}: {type(error).__name__}: {error}"
+        )
 
 
 def publish_dump_metric(prefix, metric_name, value):
@@ -139,6 +163,17 @@ def publish_dump_metric(prefix, metric_name, value):
             }
         ],
     )
+
+
+def safe_publish_dump_metric(prefix, metric_name, value):
+    """Publish dump metric with best-effort behavior."""
+    try:
+        publish_dump_metric(prefix, metric_name, value)
+    except Exception as error:  # pragma: no cover - defensive runtime guard
+        print(
+            "WARN: Failed to publish dump metric "
+            f"(prefix={prefix}, metric={metric_name}): {type(error).__name__}: {error}"
+        )
 
 
 def send_alert(stale_tables):
@@ -220,7 +255,7 @@ def lambda_handler(event, context):
                     table_info = check_table_freshness(cursor, table)
                     results.append(table_info)
 
-                    publish_metric(table, table_info['days_old'])
+                    safe_publish_metric(table, table_info['days_old'])
 
                     if table_info['days_old'] >= WARN_DAYS:
                         stale_tables.append(table_info)
@@ -233,7 +268,7 @@ def lambda_handler(event, context):
                         )
                 except Exception as error:
                     print(f'Error checking {table}: {error}')
-                    publish_metric(table, 999)
+                    safe_publish_metric(table, 999)
 
         today = current_jst_date()
         for day_shift in range(0, DUMP_ERROR_DAYS + 1):
@@ -244,7 +279,7 @@ def lambda_handler(event, context):
             for prefix in S3_PREFIXES:
                 dump_check = check_dump_file(prefix, date_str)
                 if dump_check['missing']:
-                    publish_dump_metric(prefix, 'DumpFileMissing', 1)
+                    safe_publish_dump_metric(prefix, 'DumpFileMissing', 1)
                     issues.append(dump_check)
                     print(
                         f'⚠️ Missing dump file on {date_str} for {prefix}: '
@@ -253,7 +288,7 @@ def lambda_handler(event, context):
                     continue
 
                 if not dump_check['ok']:
-                    publish_dump_metric(prefix, 'DumpFileTooSmall', 1)
+                    safe_publish_dump_metric(prefix, 'DumpFileTooSmall', 1)
                     dump_check['error'] = 'size_below_min'
                     issues.append(dump_check)
                     print(
@@ -262,7 +297,7 @@ def lambda_handler(event, context):
                     )
                     continue
 
-                publish_dump_metric(prefix, 'DumpFileMissing', 0)
+                safe_publish_dump_metric(prefix, 'DumpFileMissing', 0)
                 healthy_prefixes += 1
 
             date_failed = False
@@ -284,11 +319,11 @@ def lambda_handler(event, context):
                 print(f'⚠️ No healthy dump found for {date_str}')
 
                 if not REQUIRE_ALL_DUMP_PREFIXES:
-                    publish_dump_metric('global', 'NoHealthyDump', 1)
+                    safe_publish_dump_metric('global', 'NoHealthyDump', 1)
                 else:
-                    publish_dump_metric('global', 'DumpPrefixIssue', len(issues))
+                    safe_publish_dump_metric('global', 'DumpPrefixIssue', len(issues))
         if stale_dumps:
-            publish_dump_metric('global', 'StaleDumpEntries', len(stale_dumps))
+            safe_publish_dump_metric('global', 'StaleDumpEntries', len(stale_dumps))
             send_dump_alert(stale_dumps)
 
         if stale_tables:
