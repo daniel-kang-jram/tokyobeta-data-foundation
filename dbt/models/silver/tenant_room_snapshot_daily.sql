@@ -36,12 +36,22 @@ WITH all_active_movings AS (
     SELECT
         t.id as tenant_id,
         t.status as management_status_code,
-        t.full_name as tenant_name,
+        COALESCE(
+            NULLIF(TRIM(t.full_name), ''),
+            NULLIF(
+                CONCAT_WS(
+                    ' ',
+                    NULLIF(TRIM(t.last_name), ''),
+                    NULLIF(TRIM(t.first_name), '')
+                ),
+                ''
+            )
+        ) as tenant_name,
         m.moving_agreement_type as contract_type,  -- Use moving_agreement_type (original), not tenant.contract_type
         
         m.rent as fixed_rent,
         m.movein_date as move_in_date,
-        m.moveout_date as moveout_date,  -- 最終賃料日 (forecast)
+        COALESCE(m.moveout_date_integrated, m.moveout_date, m.moveout_plans_date) as moveout_date,  -- 最終賃料日 (forecast)
         m.moveout_plans_date as moveout_plans_date,  -- 実退去日 (actual)
         m.apartment_id,
         m.room_id,
@@ -153,7 +163,9 @@ final AS (
             WHEN 1 THEN '一般'
             WHEN 2 THEN '法人契約'
             WHEN 3 THEN '法人契約（個人）'
-            WHEN 6 THEN '一般（保証会社）'
+            WHEN 6 THEN '定期契約'
+            WHEN 7 THEN '一般（保証会社）'  -- Current source code for guarantor contracts
+            WHEN 9 THEN '一般2'
             ELSE '一般2'  -- Default fallback
         END as contract_category,
         

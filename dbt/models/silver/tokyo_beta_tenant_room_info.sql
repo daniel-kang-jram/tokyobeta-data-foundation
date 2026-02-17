@@ -32,7 +32,17 @@ WITH all_active_movings AS (
     SELECT
         t.id as tenant_id,
         t.status as management_status_code,
-        t.full_name as tenant_name,
+        COALESCE(
+            NULLIF(TRIM(t.full_name), ''),
+            NULLIF(
+                CONCAT_WS(
+                    ' ',
+                    NULLIF(TRIM(t.last_name), ''),
+                    NULLIF(TRIM(t.first_name), '')
+                ),
+                ''
+            )
+        ) as tenant_name,
         t.full_name_kana as tenant_name_kana,
         m.moving_agreement_type as contract_type,  -- Use moving_agreement_type (original), not tenant.contract_type
         t.gender_type as gender_code,
@@ -85,6 +95,8 @@ WITH all_active_movings AS (
         )
         -- Filter 2: Only movings marked as active (is_moveout = 0)
         AND m.is_moveout = 0
+        -- Filter 3: Exclude cancelled contracts for UI parity
+        AND COALESCE(m.cancel_flag, 0) = 0
 ),
 
 tenant_room_assignments AS (
@@ -115,7 +127,7 @@ tenant_room_assignments AS (
         fixed_rent,
         -- Dates
         move_in_date,
-        moveout_date,
+        COALESCE(m.moveout_date_integrated, m.moveout_date, m.moveout_plans_date) AS moveout_date,
         moveout_plans_date,
         days_stayed,
         -- Foreign keys for joins
@@ -173,7 +185,9 @@ final AS (
             WHEN 1 THEN '一般'
             WHEN 2 THEN '法人契約'
             WHEN 3 THEN '法人契約（個人）'
-            WHEN 6 THEN '一般（保証会社）'
+            WHEN 6 THEN '定期契約'
+            WHEN 7 THEN '一般（保証会社）'  -- Current source code for guarantor contracts
+            WHEN 9 THEN '一般2'
             ELSE '一般2'  -- Default fallback
         END as contract_category,
         
