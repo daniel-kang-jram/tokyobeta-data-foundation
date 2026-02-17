@@ -36,6 +36,8 @@ dbt/.venv/
 *.tfstate.*
 *.tfvars
 *.tfplan
+tfplan*
+terraform/environments/**/tfplan*
 .terraform/
 .terraform.lock.hcl
 
