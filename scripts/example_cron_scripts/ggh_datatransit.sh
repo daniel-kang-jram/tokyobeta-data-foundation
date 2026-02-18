@@ -42,9 +42,12 @@ notify_failure() {
 
 fail() {
     local message="$1"
+    local alert_message
     trap - ERR
     log "ERROR: ${message}"
-    notify_failure "[tokyobeta-dump] ${message}\nRun ID: ${RUN_ID}\nTimestamp: ${RUN_TS}\nLog: ${LOG_FILE}"
+    printf -v alert_message '[tokyobeta-dump] %s\nRun ID: %s\nTimestamp: %s\nLog: %s' \
+        "$message" "$RUN_ID" "$RUN_TS" "$LOG_FILE"
+    notify_failure "$alert_message"
     exit 1
 }
 
