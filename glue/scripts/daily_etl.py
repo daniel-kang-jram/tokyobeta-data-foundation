@@ -139,6 +139,21 @@ def runtime_bool(name: str, default: bool) -> bool:
     return arg_val.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def runtime_int(name: str, default: int, minimum: int = 0) -> int:
+    """Read integer runtime setting from env/argv, applying minimum bound."""
+    if name in os.environ:
+        return env_int(name, default, minimum=minimum)
+
+    arg_val = optional_argv_value(name)
+    if arg_val is None:
+        return default
+    try:
+        value = int(arg_val.strip())
+    except ValueError:
+        return default
+    return value if value >= minimum else minimum
+
+
 def runtime_date(name: str, default: date) -> date:
     """Read YYYY-MM-DD runtime date from env/argv, else return default."""
     raw = os.environ.get(name)
@@ -2331,7 +2346,7 @@ def main():
         latest_key = None
         local_path = None
         dump_date = None
-        max_stale_days = env_int("DAILY_MAX_DUMP_STALE_DAYS", 1, minimum=0)
+        max_stale_days = runtime_int("DAILY_MAX_DUMP_STALE_DAYS", 1, minimum=0)
         strict_dump_continuity = runtime_bool("DAILY_STRICT_DUMP_CONTINUITY", False)
         expected_dump_date = runtime_date("DAILY_TARGET_DATE", tokyo_today())
         with timed_step("01_find_and_download_dump", step_timings):

@@ -276,6 +276,34 @@ def test_runtime_date_falls_back_on_invalid(monkeypatch):
     assert result == date(2026, 2, 1)
 
 
+def test_runtime_int_reads_valid_env(monkeypatch):
+    monkeypatch.setenv("DAILY_MAX_DUMP_STALE_DAYS", "0")
+    result = daily_etl.runtime_int("DAILY_MAX_DUMP_STALE_DAYS", 1, minimum=0)
+    assert result == 0
+
+
+def test_runtime_int_reads_argv_when_env_missing(monkeypatch):
+    monkeypatch.delenv("DAILY_MAX_DUMP_STALE_DAYS", raising=False)
+    monkeypatch.setattr(
+        daily_etl,
+        "optional_argv_value",
+        lambda name: "2" if name == "DAILY_MAX_DUMP_STALE_DAYS" else None,
+    )
+    result = daily_etl.runtime_int("DAILY_MAX_DUMP_STALE_DAYS", 1, minimum=0)
+    assert result == 2
+
+
+def test_runtime_int_enforces_minimum(monkeypatch):
+    monkeypatch.delenv("DAILY_MAX_DUMP_STALE_DAYS", raising=False)
+    monkeypatch.setattr(
+        daily_etl,
+        "optional_argv_value",
+        lambda name: "-5" if name == "DAILY_MAX_DUMP_STALE_DAYS" else None,
+    )
+    result = daily_etl.runtime_int("DAILY_MAX_DUMP_STALE_DAYS", 1, minimum=0)
+    assert result == 0
+
+
 def test_run_dbt_transformations_pre_phase_then_main_phase(monkeypatch):
     calls = []
 
