@@ -31,6 +31,8 @@ jobs:
       TERRAFORM_STATE_BUCKET: tokyobeta-terraform-state
       TERRAFORM_STATE_KEY: prod/terraform.tfstate
       TF_VAR_alert_email: ${{ secrets.TF_VAR_ALERT_EMAIL }}
+      TF_VAR_alert_emails: '["jram-ggh@outlook.com","daniel.kang@jram.jp"]'
+      TF_VAR_allowed_cidr_blocks: '["85.115.98.80/32","13.112.83.65/32"]'
       # Keep Evidence Basic Auth enabled in Terraform-managed CloudFront config.
       # Value should be a JSON map string, e.g. {"admin":"<password>"}.
       TF_VAR_evidence_auth_users: ${{ secrets.TF_VAR_EVIDENCE_AUTH_USERS }}
@@ -43,6 +45,22 @@ jobs:
         run: |
           if [[ -z "${TF_VAR_alert_email}" ]]; then
             echo "::error::Missing Actions secret TF_VAR_ALERT_EMAIL (used as TF_VAR_alert_email)."
+            exit 1
+          fi
+          if [[ -z "${TF_VAR_alert_emails}" ]]; then
+            echo "::error::Missing TF_VAR_alert_emails."
+            exit 1
+          fi
+          if [[ "${TF_VAR_alert_emails}" != *"daniel.kang@jram.jp"* ]]; then
+            echo "::error::TF_VAR_alert_emails must include daniel.kang@jram.jp."
+            exit 1
+          fi
+          if [[ -z "${TF_VAR_allowed_cidr_blocks}" ]]; then
+            echo "::error::Missing TF_VAR_allowed_cidr_blocks."
+            exit 1
+          fi
+          if [[ "${TF_VAR_allowed_cidr_blocks}" != *"13.112.83.65/32"* ]]; then
+            echo "::error::TF_VAR_allowed_cidr_blocks must include EC2 dump EIP 13.112.83.65/32."
             exit 1
           fi
           if [[ -z "${TF_VAR_evidence_auth_users}" ]]; then

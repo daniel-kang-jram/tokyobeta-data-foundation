@@ -20,14 +20,17 @@ variable "alert_email" {
 variable "alert_emails" {
   description = "Additional email addresses for monitoring alerts"
   type        = list(string)
-  default     = []
+  default = [
+    "daniel.kang@jram.jp"
+  ]
 }
 
 variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to access Aurora MySQL (external access)"
   type        = list(string)
   default = [
-    "85.115.98.80/32" # Current admin IP - update if your IP changes
+    "85.115.98.80/32", # Current admin IP - update if your IP changes
+    "13.112.83.65/32"  # EC2 dump host EIP
   ]
 }
 
