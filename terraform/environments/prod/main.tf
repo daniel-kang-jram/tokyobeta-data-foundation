@@ -120,7 +120,7 @@ module "glue" {
   worker_type                  = "G.2X"
   number_of_workers            = 2
   job_timeout                  = 120
-  daily_strict_dump_continuity = false
+  daily_strict_dump_continuity = true
 }
 
 # Module: Step Functions (NEW - Orchestrates ETL layers)
