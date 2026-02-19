@@ -5,6 +5,7 @@ import sys
 import pytest
 from datetime import date, timedelta, datetime
 from unittest.mock import Mock
+from io import BytesIO
 
 
 SCRIPTS_DIR = pathlib.Path(__file__).resolve().parents[1] / "scripts"
@@ -75,6 +76,193 @@ def test_get_latest_dump_key_selects_by_modified_date(monkeypatch):
         Bucket="test-bucket",
         Prefix="dumps/"
     )
+
+
+def test_get_latest_dump_key_requires_manifest_and_skips_invalid(monkeypatch):
+    mock_s3 = Mock()
+    mock_s3.list_objects_v2.return_value = {
+        "Contents": [
+            {"Key": "dumps/gghouse_20260218.sql", "LastModified": datetime(2026, 2, 18)},
+            {"Key": "dumps/gghouse_20260217.sql", "LastModified": datetime(2026, 2, 17)},
+        ]
+    }
+
+    def _get_object(Bucket, Key):
+        if Key == "dumps-manifest/gghouse_20260218.json":
+            payload = {"valid_for_etl": False, "reason": "source_mismatch"}
+        elif Key == "dumps-manifest/gghouse_20260217.json":
+            payload = {
+                "valid_for_etl": True,
+                "source_host": "source.example",
+                "source_database": "gghouse",
+                "source_table_max_updated_at": {
+                    "tenants": "2026-02-17T00:10:00+09:00",
+                    "movings": "2026-02-17T00:10:00+09:00",
+                    "rooms": "2026-02-17T00:10:00+09:00",
+                    "inquiries": "2026-02-17T00:10:00+09:00",
+                },
+            }
+        else:
+            raise ValueError(f"unexpected key: {Key}")
+        return {"Body": BytesIO(json.dumps(payload).encode("utf-8"))}
+
+    mock_s3.get_object.side_effect = _get_object
+    monkeypatch.setattr(daily_etl, "s3", mock_s3)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "test-bucket")
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_PREFIX", "dumps/")
+
+    result = daily_etl.get_latest_dump_key(require_manifest=True)
+
+    assert result == "dumps/gghouse_20260217.sql"
+
+
+def test_get_latest_dump_key_manifest_required_fails_without_valid_candidates(monkeypatch):
+    mock_s3 = Mock()
+    mock_s3.list_objects_v2.return_value = {
+        "Contents": [
+            {"Key": "dumps/gghouse_20260218.sql", "LastModified": datetime(2026, 2, 18)},
+        ]
+    }
+    mock_s3.get_object.return_value = {
+        "Body": BytesIO(json.dumps({"valid_for_etl": False}).encode("utf-8"))
+    }
+    monkeypatch.setattr(daily_etl, "s3", mock_s3)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "test-bucket")
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_PREFIX", "dumps/")
+
+    with pytest.raises(ValueError, match="No manifest-valid SQL dump files"):
+        daily_etl.get_latest_dump_key(require_manifest=True)
+
+
+def test_get_latest_dump_key_manifest_load_error_falls_back_to_older_candidate(monkeypatch):
+    dump_candidates = [
+        {"Key": "dumps/gghouse_20260218.sql", "LastModified": datetime(2026, 2, 18)},
+        {"Key": "dumps/gghouse_20260217.sql", "LastModified": datetime(2026, 2, 17)},
+    ]
+
+    def _load_manifest(dump_date):
+        if dump_date == date(2026, 2, 18):
+            raise json.JSONDecodeError("bad manifest", "{", 1)
+        if dump_date == date(2026, 2, 17):
+            return {
+                "valid_for_etl": True,
+                "source_host": "source.example",
+                "source_database": "gghouse",
+                "source_table_max_updated_at": {
+                    "tenants": "2026-02-17T00:10:00+09:00",
+                },
+            }
+        raise AssertionError(f"unexpected dump date: {dump_date}")
+
+    monkeypatch.setattr(daily_etl, "load_dump_manifest", _load_manifest)
+
+    result = daily_etl.get_latest_dump_key(
+        dump_candidates=dump_candidates,
+        require_manifest=True,
+        expected_date=date(2026, 2, 18),
+    )
+
+    assert result == "dumps/gghouse_20260217.sql"
+
+
+def test_validate_dump_manifest_fails_when_source_too_stale():
+    manifest = {
+        "valid_for_etl": True,
+        "source_host": "source.example",
+        "source_database": "gghouse",
+        "source_table_max_updated_at": {
+            "tenants": "2026-02-10T00:21:26+09:00",
+            "movings": "2026-02-10T00:21:26+09:00",
+            "rooms": "2026-02-10T00:21:26+09:00",
+            "inquiries": "2026-02-10T00:21:26+09:00",
+        },
+    }
+
+    with pytest.raises(ValueError, match="Manifest source freshness check failed"):
+        daily_etl.validate_dump_manifest(
+            manifest=manifest,
+            expected_date=date(2026, 2, 18),
+            max_source_stale_days=3,
+        )
+
+
+def test_validate_dump_manifest_passes_when_recent():
+    manifest = {
+        "valid_for_etl": True,
+        "source_host": "source.example",
+        "source_database": "gghouse",
+        "source_table_max_updated_at": {
+            "tenants": "2026-02-17T00:21:26+09:00",
+            "movings": "2026-02-17T00:21:26+09:00",
+            "rooms": "2026-02-17T00:21:26+09:00",
+            "inquiries": "2026-02-17T00:21:26+09:00",
+        },
+    }
+
+    daily_etl.validate_dump_manifest(
+        manifest=manifest,
+        expected_date=date(2026, 2, 18),
+        max_source_stale_days=2,
+    )
+
+
+def test_validate_dump_manifest_accepts_max_updated_at_by_table_key():
+    manifest = {
+        "valid_for_etl": True,
+        "source_host": "source.example",
+        "source_database": "gghouse",
+        "max_updated_at_by_table": {
+            "tenants": "2026-02-17T00:21:26+09:00",
+            "movings": "2026-02-17T00:21:26+09:00",
+            "rooms": "2026-02-17T00:21:26+09:00",
+            "inquiries": "2026-02-17T00:21:26+09:00",
+        },
+    }
+
+    daily_etl.validate_dump_manifest(
+        manifest=manifest,
+        expected_date=date(2026, 2, 18),
+        max_source_stale_days=2,
+    )
+
+
+def test_build_data_quality_calendar_entries_marks_invalid_and_missing(monkeypatch):
+    manifests = {
+        date(2026, 2, 18): {
+            "valid_for_etl": True,
+            "source_host": "source.example",
+            "source_database": "gghouse",
+        },
+        date(2026, 2, 17): {
+            "valid_for_etl": False,
+            "reason": "source_mismatch",
+            "source_host": "bad-source.example",
+            "source_database": "staging",
+        },
+    }
+
+    monkeypatch.setattr(
+        daily_etl,
+        "load_dump_manifest",
+        lambda dump_date: manifests.get(dump_date),
+    )
+
+    entries = daily_etl.build_data_quality_calendar_entries(
+        expected_date=date(2026, 2, 18),
+        lookback_days=2,
+    )
+    by_date = {entry["check_date"]: entry for entry in entries}
+
+    assert by_date[date(2026, 2, 18)]["dump_status"] == "valid"
+    assert by_date[date(2026, 2, 18)]["is_gap"] == 0
+
+    assert by_date[date(2026, 2, 17)]["dump_status"] == "invalid_or_missing"
+    assert by_date[date(2026, 2, 17)]["reason"] == "source_mismatch"
+    assert by_date[date(2026, 2, 17)]["is_gap"] == 1
+
+    assert by_date[date(2026, 2, 16)]["dump_status"] == "invalid_or_missing"
+    assert by_date[date(2026, 2, 16)]["reason"] == "manifest_missing"
+    assert by_date[date(2026, 2, 16)]["is_gap"] == 1
 
 
 def test_get_aurora_credentials_reads_legacy_and_standard_secret_keys(monkeypatch):
@@ -209,6 +397,19 @@ def test_validate_dump_freshness_fails_without_parseable_date():
             "dumps/unknown_backup.sql",
             None,
             date(2026, 2, 16),
+            max_stale_days=1,
+        )
+
+
+def test_validate_dump_freshness_fails_if_dump_date_is_in_future():
+    with pytest.raises(
+        ValueError,
+        match="Dump freshness check failed: latest dump date=2026-02-18 is in the future",
+    ):
+        daily_etl.validate_dump_freshness(
+            "dumps/gghouse_20260218.sql",
+            date(2026, 2, 18),
+            date(2026, 2, 17),
             max_stale_days=1,
         )
 
