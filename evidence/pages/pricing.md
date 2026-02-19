@@ -181,7 +181,16 @@ order by try_cast(feature_value as integer) asc nulls last
 ```
 
 ```sql property_risk
-select *
+select
+  property_norm,
+  municipality,
+  movein_count,
+  moveout_count,
+  net_change,
+  avg_movein_rent,
+  avg_moveout_rent,
+  price_gap_avg_rent,
+  risk_score
 from snapshot_csv.property_risk_rank
 order by risk_score desc, moveout_count desc
 ```
@@ -203,7 +212,12 @@ limit 40
 ```
 
 ```sql pricing_bullets
-select *
+select
+  theme,
+  observation,
+  evidence_metric,
+  recommended_action,
+  priority
 from snapshot_csv.insight_bullets
 where theme in ('Demand Pressure', 'Pricing Risk', 'Property Churn')
 order by priority
