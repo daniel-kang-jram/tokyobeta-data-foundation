@@ -16,6 +16,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timedelta, date, timezone
+from botocore.exceptions import ClientError
 from awsglue.utils import getResolvedOptions
 from awsglue.context import GlueContext
 from awsglue.job import Job
@@ -248,20 +249,317 @@ def reset_staging_tables(cursor) -> int:
     return len(existing_tables)
 
 
-def get_latest_dump_key(dump_candidates: list[dict] | None = None):
-    """Find the most recent SQL dump file in S3."""
+def get_dump_manifest_key(dump_date: date) -> str:
+    """Build manifest key for a dump date."""
+    prefix = (
+        os.environ.get("DAILY_DUMP_MANIFEST_PREFIX")
+        or optional_argv_value("DAILY_DUMP_MANIFEST_PREFIX")
+        or "dumps-manifest/"
+    )
+    clean_prefix = prefix.rstrip("/")
+    return f"{clean_prefix}/gghouse_{dump_date.strftime('%Y%m%d')}.json"
+
+
+def load_dump_manifest(dump_date: date) -> dict | None:
+    """Load per-date dump manifest from S3."""
+    manifest_key = get_dump_manifest_key(dump_date)
+    try:
+        response = s3.get_object(
+            Bucket=args['S3_SOURCE_BUCKET'],
+            Key=manifest_key,
+        )
+    except ClientError as err:
+        code = str(err.response.get("Error", {}).get("Code", ""))
+        if code in {"NoSuchKey", "404", "NotFound"}:
+            return None
+        raise
+
+    body = response["Body"].read().decode("utf-8")
+    return json.loads(body)
+
+
+def manifest_is_valid_for_etl(manifest: dict | None) -> bool:
+    """Manifest flag gate for ETL eligibility."""
+    if not isinstance(manifest, dict):
+        return False
+    if "valid_for_etl" in manifest:
+        return bool(manifest["valid_for_etl"])
+    if "source_valid" in manifest:
+        return bool(manifest["source_valid"])
+    return False
+
+
+def parse_manifest_datetime(raw_value: str) -> datetime | None:
+    """Parse ISO8601-ish timestamp from manifest."""
+    if not raw_value:
+        return None
+    candidate = raw_value.strip()
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(TOKYO_TIMEZONE)
+
+
+def extract_manifest_max_source_date(manifest: dict) -> date | None:
+    """Extract latest source date from table-level source freshness map."""
+    table_map = (
+        manifest.get("max_updated_at_by_table")
+        if isinstance(manifest.get("max_updated_at_by_table"), dict)
+        else manifest.get("source_table_max_updated_at")
+    )
+    if not isinstance(table_map, dict):
+        return None
+
+    parsed_dates: list[date] = []
+    for value in table_map.values():
+        if not isinstance(value, str):
+            continue
+        parsed = parse_manifest_datetime(value)
+        if parsed is None:
+            continue
+        parsed_dates.append(parsed.date())
+
+    if not parsed_dates:
+        return None
+    return max(parsed_dates)
+
+
+def validate_dump_manifest(
+    manifest: dict,
+    expected_date: date,
+    max_source_stale_days: int,
+) -> None:
+    """Validate dump manifest source identity and freshness contract."""
+    if not manifest_is_valid_for_etl(manifest):
+        raise ValueError(
+            "Manifest validity check failed: valid_for_etl/source_valid is not true."
+        )
+
+    source_host = str(manifest.get("source_host", "")).strip()
+    source_database = str(manifest.get("source_database", "")).strip()
+    if not source_host or not source_database:
+        raise ValueError(
+            "Manifest source contract failed: source_host/source_database must be non-empty."
+        )
+
+    max_source_date = extract_manifest_max_source_date(manifest)
+    if max_source_date is None:
+        raise ValueError(
+            "Manifest source freshness check failed: max_updated_at_by_table/source_table_max_updated_at missing or invalid."
+        )
+
+    stale_days = (expected_date - max_source_date).days
+    if stale_days > max_source_stale_days:
+        raise ValueError(
+            "Manifest source freshness check failed: "
+            f"source max date={max_source_date} is {stale_days} day(s) "
+            f"behind expected date={expected_date} "
+            f"(max allowed={max_source_stale_days})."
+        )
+
+    print(
+        "Manifest validated: "
+        f"host={source_host}, database={source_database}, "
+        f"source_max_date={max_source_date}, stale_days={stale_days}"
+    )
+
+
+def classify_manifest_status(manifest: dict | None) -> tuple[str, str | None]:
+    """Classify manifest into ETL-valid or gap status."""
+    if manifest is None:
+        return "invalid_or_missing", "manifest_missing"
+
+    if manifest_is_valid_for_etl(manifest):
+        return "valid", None
+
+    reason = str(manifest.get("reason", "")).strip()
+    if not reason:
+        reason = "manifest_invalid"
+    return "invalid_or_missing", reason
+
+
+def build_data_quality_calendar_entries(
+    expected_date: date,
+    lookback_days: int,
+) -> list[dict[str, Any]]:
+    """Build data-quality calendar rows from per-day manifest validity."""
+    rows: list[dict[str, Any]] = []
+
+    for offset in range(lookback_days + 1):
+        target_date = expected_date - timedelta(days=offset)
+        manifest = load_dump_manifest(target_date)
+        status, reason = classify_manifest_status(manifest)
+
+        source_host = ""
+        source_database = ""
+        if isinstance(manifest, dict):
+            source_host = str(manifest.get("source_host", "")).strip()
+            source_database = str(manifest.get("source_database", "")).strip()
+
+        rows.append(
+            {
+                "check_date": target_date,
+                "dump_status": status,
+                "reason": reason,
+                "source_host": source_host,
+                "source_database": source_database,
+                "manifest_key": get_dump_manifest_key(target_date),
+                "is_gap": 0 if status == "valid" else 1,
+            }
+        )
+
+    return rows
+
+
+def ensure_data_quality_calendar_table_exists(cursor) -> None:
+    """Create gold.data_quality_calendar table if missing."""
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS gold.data_quality_calendar (
+            check_date DATE NOT NULL,
+            dump_status VARCHAR(32) NOT NULL,
+            reason VARCHAR(255),
+            source_host VARCHAR(255),
+            source_database VARCHAR(128),
+            manifest_key VARCHAR(255) NOT NULL,
+            is_gap TINYINT(1) NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (check_date),
+            INDEX idx_dump_status (dump_status),
+            INDEX idx_is_gap (is_gap)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        COMMENT='Calendar of valid vs invalid/missing dump dates for downstream filtering'
+    """)
+
+
+def upsert_data_quality_calendar_entries(
+    cursor,
+    rows: list[dict[str, Any]],
+) -> int:
+    """Upsert data-quality calendar rows into gold schema."""
+    if not rows:
+        return 0
+
+    payload = [
+        (
+            row["check_date"],
+            row["dump_status"],
+            row["reason"],
+            row["source_host"],
+            row["source_database"],
+            row["manifest_key"],
+            row["is_gap"],
+        )
+        for row in rows
+    ]
+
+    cursor.executemany(
+        """
+        INSERT INTO gold.data_quality_calendar (
+            check_date,
+            dump_status,
+            reason,
+            source_host,
+            source_database,
+            manifest_key,
+            is_gap
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            dump_status = VALUES(dump_status),
+            reason = VALUES(reason),
+            source_host = VALUES(source_host),
+            source_database = VALUES(source_database),
+            manifest_key = VALUES(manifest_key),
+            is_gap = VALUES(is_gap),
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        payload,
+    )
+    return len(payload)
+
+
+def get_latest_dump_key_with_manifest(
+    dump_candidates: list[dict] | None = None,
+    require_manifest: bool = False,
+    expected_date: date | None = None,
+    max_source_stale_days: int = 14,
+):
+    """Find the most recent SQL dump key, optionally requiring a valid manifest."""
     if dump_candidates is None:
         dump_candidates = list_dump_candidates()
 
     if not dump_candidates:
         raise ValueError("No SQL dump files matching pattern gghouse_YYYYMMDD.sql found")
 
-    latest_key = dump_candidates[0]['Key']
-    print(
-        f"Latest dump: {latest_key} (modified: "
-        f"{dump_candidates[0].get('LastModified')})"
+    if not require_manifest:
+        latest_key = dump_candidates[0]['Key']
+        print(
+            f"Latest dump: {latest_key} (modified: "
+            f"{dump_candidates[0].get('LastModified')})"
+        )
+        return latest_key
+
+    manifest_expected_date = expected_date or tokyo_today()
+    rejected_reasons: list[str] = []
+
+    for candidate in dump_candidates:
+        candidate_key = candidate['Key']
+        candidate_date = extract_dump_date_from_key(candidate_key)
+        if candidate_date is None:
+            rejected_reasons.append(f"{candidate_key}:unparseable_date")
+            continue
+
+        try:
+            manifest = load_dump_manifest(candidate_date)
+        except Exception as err:
+            rejected_reasons.append(
+                f"{candidate_key}:manifest_load_error:{type(err).__name__}:{str(err)}"
+            )
+            continue
+
+        if manifest is None:
+            rejected_reasons.append(f"{candidate_key}:manifest_missing")
+            continue
+
+        try:
+            validate_dump_manifest(
+                manifest=manifest,
+                expected_date=manifest_expected_date,
+                max_source_stale_days=max_source_stale_days,
+            )
+        except ValueError as err:
+            rejected_reasons.append(f"{candidate_key}:{str(err)}")
+            continue
+
+        print(
+            f"Latest manifest-valid dump: {candidate_key} "
+            f"(modified: {candidate.get('LastModified')})"
+        )
+        return candidate_key
+
+    reason_text = "; ".join(rejected_reasons[-10:]) if rejected_reasons else "no_candidates"
+    raise ValueError(f"No manifest-valid SQL dump files available. rejected={reason_text}")
+
+
+def get_latest_dump_key(
+    dump_candidates: list[dict] | None = None,
+    require_manifest: bool = False,
+    expected_date: date | None = None,
+    max_source_stale_days: int = 14,
+):
+    """Find latest dump key with optional manifest validation gate."""
+    return get_latest_dump_key_with_manifest(
+        dump_candidates=dump_candidates,
+        require_manifest=require_manifest,
+        expected_date=expected_date,
+        max_source_stale_days=max_source_stale_days,
     )
-    return latest_key
 
 
 def list_dump_candidates() -> list[dict]:
@@ -372,6 +670,13 @@ def validate_dump_freshness(
         )
 
     stale_days = (expected_date - latest_dump_date).days
+    if stale_days < 0:
+        raise ValueError(
+            "Dump freshness check failed: "
+            f"latest dump date={latest_dump_date} is in the future "
+            f"relative to expected_date={expected_date}."
+        )
+
     if stale_days > max_stale_days:
         raise ValueError(
             "Dump freshness check failed: "
@@ -380,14 +685,8 @@ def validate_dump_freshness(
             f"(max allowed age={max_stale_days})."
         )
 
-    if stale_days <= 0:
-        if stale_days < 0:
-            print(
-                "Info: latest dump date is in the future relative to expected date "
-                f"({latest_dump_date} > {expected_date}); continuing."
-            )
-        else:
-            print("Latest dump date matches expected date.")
+    if stale_days == 0:
+        print("Latest dump date matches expected date.")
     else:
         print(
             f"Latest dump is {stale_days} day(s) behind expected date "
@@ -2341,18 +2640,28 @@ def main():
         dbt_success = False
         occupancy_rows_processed = 0
         freshness_snapshot: Dict[str, Any] = {}
+        quality_calendar_rows = 0
+        quality_calendar_gap_days = 0
 
         # Step 1: Always find and download latest dump
         latest_key = None
         local_path = None
         dump_date = None
         max_stale_days = runtime_int("DAILY_MAX_DUMP_STALE_DAYS", 1, minimum=0)
+        max_source_stale_days = runtime_int("DAILY_MAX_SOURCE_STALE_DAYS", 14, minimum=0)
+        require_dump_manifest = runtime_bool("DAILY_REQUIRE_DUMP_MANIFEST", True)
         strict_dump_continuity = runtime_bool("DAILY_STRICT_DUMP_CONTINUITY", False)
+        data_quality_lookback_days = runtime_int("DAILY_QUALITY_LOOKBACK_DAYS", 14, minimum=0)
         expected_dump_date = runtime_date("DAILY_TARGET_DATE", tokyo_today())
         with timed_step("01_find_and_download_dump", step_timings):
             dump_candidates = list_dump_candidates()
             dump_dates = get_dump_dates(dump_candidates)
-            latest_key = get_latest_dump_key(dump_candidates)
+            latest_key = get_latest_dump_key(
+                dump_candidates=dump_candidates,
+                require_manifest=require_dump_manifest,
+                expected_date=expected_dump_date,
+                max_source_stale_days=max_source_stale_days,
+            )
             dump_date = extract_dump_date_from_key(latest_key)
             validate_dump_freshness(
                 latest_key=latest_key,
@@ -2370,6 +2679,29 @@ def main():
                 os.environ["DAILY_TARGET_DATE"] = dump_date.isoformat()
                 print(f"Anchored DAILY_TARGET_DATE to dump date: {dump_date.isoformat()}")
             local_path = download_and_parse_dump(latest_key)
+
+        # Step 1.5: Keep explicit valid/invalid dump calendar for downstream filtering
+        with timed_step("01_5_update_data_quality_calendar", step_timings):
+            quality_rows = build_data_quality_calendar_entries(
+                expected_date=expected_dump_date,
+                lookback_days=data_quality_lookback_days,
+            )
+            quality_calendar_gap_days = sum(row["is_gap"] for row in quality_rows)
+
+            connection = create_aurora_connection()
+            try:
+                cursor = connection.cursor()
+                ensure_data_quality_calendar_table_exists(cursor)
+                quality_calendar_rows = upsert_data_quality_calendar_entries(cursor, quality_rows)
+                connection.commit()
+            finally:
+                connection.close()
+
+            print(
+                "Data quality calendar updated: "
+                f"rows={quality_calendar_rows}, gap_days={quality_calendar_gap_days}, "
+                f"window={data_quality_lookback_days + 1} days"
+            )
 
         occupancy_target_date = runtime_date(
             "DAILY_TARGET_DATE",
@@ -2481,6 +2813,8 @@ def main():
         print(f"SQL statements executed: {stmt_count}")
         print(f"dbt transformations: {'Success' if dbt_success else 'Failed'}")
         print(f"Gold occupancy KPI dates processed: {occupancy_rows_processed}")
+        print(f"Data quality calendar rows upserted: {quality_calendar_rows}")
+        print(f"Data quality gap days in window: {quality_calendar_gap_days}")
         if freshness_snapshot:
             print(
                 "Layer freshness max dates: "
