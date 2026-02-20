@@ -24,7 +24,7 @@ MAX_RETRIES="${MAX_RETRIES:-3}"
 RETRY_BASE_SECONDS="${RETRY_BASE_SECONDS:-10}"
 MYSQL_CONNECT_TIMEOUT="${MYSQL_CONNECT_TIMEOUT:-8}"
 REQUIRED_TABLES_CSV="${REQUIRED_TABLES_CSV:-movings,tenants,rooms,inquiries,apartments}"
-FORBIDDEN_HOST_REGEX="${FORBIDDEN_HOST_REGEX:-(^localhost$|^127\\.0\\.0\\.1$|^invalid\\.host\\.example$)}"
+FORBIDDEN_HOST_REGEX="${FORBIDDEN_HOST_REGEX:-(^localhost$|^127\\.0\\.0\\.1$|^invalid\\.host\\.example$|^tokyobeta-prod-aurora.*)}"
 FORBIDDEN_DB_REGEX="${FORBIDDEN_DB_REGEX:-(^mysql$|^information_schema$|^performance_schema$|^sys$)}"
 ALERT_SENT=0
 

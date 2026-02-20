@@ -51,6 +51,13 @@ resource "aws_secretsmanager_secret" "rds_cron_credentials" {
     Environment = var.environment
     Purpose     = "EC2 Cron Jobs"
   }
+
+  lifecycle {
+    precondition {
+      condition     = var.environment != "prod"
+      error_message = "Production dump-source secret values must be managed outside Terraform."
+    }
+  }
 }
 
 resource "aws_secretsmanager_secret_version" "rds_cron_credentials" {
@@ -64,4 +71,11 @@ resource "aws_secretsmanager_secret_version" "rds_cron_credentials" {
     port     = var.rds_cron_port
     engine   = "mysql"
   })
+
+  lifecycle {
+    precondition {
+      condition     = var.environment != "prod"
+      error_message = "Production dump-source secret values must be managed outside Terraform."
+    }
+  }
 }
