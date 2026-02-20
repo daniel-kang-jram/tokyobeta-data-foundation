@@ -137,6 +137,15 @@ jobs:
         run: |
           terraform init
           terraform plan -out=prod.tfplan
+          terraform show -json prod.tfplan > prod.tfplan.json
+
+          DELETE_ADDRESSES="$(jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | .address' prod.tfplan.json)"
+          if [[ -n "${DELETE_ADDRESSES}" ]]; then
+            echo "::error::Terraform plan contains delete actions. Refusing apply in production."
+            echo "${DELETE_ADDRESSES}" | sed 's/^/ - /'
+            exit 1
+          fi
+
           set +e
           terraform apply -auto-approve prod.tfplan 2>&1 | tee terraform_apply.log
           APPLY_STATUS=${PIPESTATUS[0]}

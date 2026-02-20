@@ -100,3 +100,58 @@ variable "evidence_repo_branch" {
   type        = string
   default     = "main"
 }
+
+variable "evidence_snapshot_custom_domain" {
+  description = "Custom domain for hosted snapshot Evidence app"
+  type        = string
+  default     = "evidence-snapshot.jram.jp"
+}
+
+variable "evidence_snapshot_enable_custom_domain" {
+  description = "Attach snapshot custom domain + ACM cert"
+  type        = bool
+  default     = false
+}
+
+variable "evidence_snapshot_auth_base_url" {
+  description = "Base URL used for snapshot app auth callbacks"
+  type        = string
+  default     = null
+}
+
+variable "evidence_snapshot_enable_auth" {
+  description = "Enable HTTP Basic Auth for snapshot dashboard"
+  type        = bool
+  default     = true
+}
+
+variable "evidence_snapshot_auth_users" {
+  description = "Map of username to password for snapshot Basic Auth"
+  type        = map(string)
+  default     = {}
+  sensitive   = true
+}
+
+variable "evidence_snapshot_cognito_domain_prefix" {
+  description = "Cognito domain prefix for snapshot Evidence app"
+  type        = string
+  default     = "tokyobeta-prod-evidence-snapshot"
+}
+
+variable "evidence_snapshot_codestar_connection_arn" {
+  description = "CodeStar connection ARN for snapshot builds"
+  type        = string
+  default     = "arn:aws:codestar-connections:ap-northeast-1:343881458651:connection/c800e762-0967-4d1b-aa8f-2b5fd17bf97c"
+}
+
+variable "evidence_snapshot_repo_full_name" {
+  description = "GitHub repo full name for snapshot dashboard build"
+  type        = string
+  default     = "daniel-kang-jram/tokyobeta-data-foundation"
+}
+
+variable "evidence_snapshot_repo_branch" {
+  description = "Branch for snapshot dashboard build"
+  type        = string
+  default     = "main"
+}
