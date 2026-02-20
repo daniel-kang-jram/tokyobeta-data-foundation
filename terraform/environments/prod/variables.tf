@@ -29,9 +29,20 @@ variable "allowed_cidr_blocks" {
   description = "CIDR blocks allowed to access Aurora MySQL (external access)"
   type        = list(string)
   default = [
-    "85.115.98.80/32", # Current admin IP - update if your IP changes
-    "13.112.83.65/32"  # EC2 dump host EIP
+    "85.115.98.80/32",   # Current admin IP - update if your IP changes
+    "13.112.83.65/32",   # EC2 dump host EIP
+    "54.168.114.197/32", # V3 upstream sync source IP
   ]
+
+  validation {
+    condition     = contains(var.allowed_cidr_blocks, "13.112.83.65/32")
+    error_message = "allowed_cidr_blocks must include 13.112.83.65/32 (EC2 dump host EIP)."
+  }
+
+  validation {
+    condition     = contains(var.allowed_cidr_blocks, "54.168.114.197/32")
+    error_message = "allowed_cidr_blocks must include 54.168.114.197/32 (V3 upstream sync source IP)."
+  }
 }
 
 # Evidence hosting (CloudFront + S3 + Cognito)

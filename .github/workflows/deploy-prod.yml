@@ -32,7 +32,7 @@ jobs:
       TERRAFORM_STATE_KEY: prod/terraform.tfstate
       TF_VAR_alert_email: ${{ secrets.TF_VAR_ALERT_EMAIL }}
       TF_VAR_alert_emails: '["jram-ggh@outlook.com","daniel.kang@jram.jp"]'
-      TF_VAR_allowed_cidr_blocks: '["85.115.98.80/32","13.112.83.65/32"]'
+      TF_VAR_allowed_cidr_blocks: '["85.115.98.80/32","13.112.83.65/32","54.168.114.197/32"]'
       # Keep Evidence Basic Auth enabled in Terraform-managed CloudFront config.
       # Value should be a JSON map string, e.g. {"admin":"<password>"}.
       TF_VAR_evidence_auth_users: ${{ secrets.TF_VAR_EVIDENCE_AUTH_USERS }}
@@ -61,6 +61,10 @@ jobs:
           fi
           if [[ "${TF_VAR_allowed_cidr_blocks}" != *"13.112.83.65/32"* ]]; then
             echo "::error::TF_VAR_allowed_cidr_blocks must include EC2 dump EIP 13.112.83.65/32."
+            exit 1
+          fi
+          if [[ "${TF_VAR_allowed_cidr_blocks}" != *"54.168.114.197/32"* ]]; then
+            echo "::error::TF_VAR_allowed_cidr_blocks must include V3 upstream IP 54.168.114.197/32."
             exit 1
           fi
           if [[ -z "${TF_VAR_evidence_auth_users}" ]]; then
