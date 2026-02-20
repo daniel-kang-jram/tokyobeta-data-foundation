@@ -201,6 +201,32 @@ module "evidence_hosting" {
   evidence_repo_branch         = var.evidence_repo_branch
 }
 
+module "evidence_snapshot_hosting" {
+  source = "../../modules/evidence_hosting"
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  environment           = local.environment
+  project_name          = "${local.project_name}-snapshot"
+  custom_domain_name    = var.evidence_snapshot_custom_domain
+  auth_base_url         = var.evidence_snapshot_auth_base_url
+  enable_auth           = var.evidence_snapshot_enable_auth
+  auth_users            = length(var.evidence_snapshot_auth_users) > 0 ? var.evidence_snapshot_auth_users : var.evidence_auth_users
+  enable_custom_domain  = var.evidence_snapshot_enable_custom_domain
+  cognito_domain_prefix = var.evidence_snapshot_cognito_domain_prefix
+
+  vpc_id                      = module.networking.vpc_id
+  private_subnet_ids          = module.networking.private_subnet_ids
+  codebuild_security_group_id = module.networking.lambda_security_group_id
+
+  evidence_repo_connection_arn = var.evidence_snapshot_codestar_connection_arn
+  evidence_repo_full_name      = var.evidence_snapshot_repo_full_name
+  evidence_repo_branch         = var.evidence_snapshot_repo_branch
+}
+
 # --- GitHub OIDC + Deploy Role for CI/CD ---
 
 resource "aws_iam_openid_connect_provider" "github_actions" {

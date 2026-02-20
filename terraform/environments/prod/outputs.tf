@@ -95,3 +95,18 @@ output "evidence_cognito_domain" {
   description = "Cognito hosted UI domain"
   value       = module.evidence_hosting.cognito_domain
 }
+
+output "evidence_snapshot_cloudfront_domain" {
+  description = "CloudFront distribution domain for snapshot Evidence"
+  value       = module.evidence_snapshot_hosting.cloudfront_domain_name
+}
+
+output "evidence_snapshot_acm_validation_records" {
+  description = "DNS CNAME records to validate snapshot Evidence ACM certificate"
+  value       = module.evidence_snapshot_hosting.acm_validation_records
+}
+
+output "evidence_snapshot_codebuild_project_name" {
+  description = "CodeBuild project name for snapshot dashboard refresh"
+  value       = module.evidence_snapshot_hosting.codebuild_project_name
+}
