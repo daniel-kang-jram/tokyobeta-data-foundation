@@ -55,18 +55,18 @@ jobs:
         run: |
           required_cidrs=("13.112.83.65/32" "54.168.114.197/32")
           for cidr in "${required_cidrs[@]}"; do
-            if ! rg -q "${cidr}" terraform/environments/prod/variables.tf; then
+            if ! grep -Fq "${cidr}" terraform/environments/prod/variables.tf; then
               echo "::error::terraform/environments/prod/variables.tf must include ${cidr}."
               exit 1
             fi
-            if ! rg -q "${cidr}" .github/workflows/deploy-prod.yml; then
+            if ! grep -Fq "${cidr}" .github/workflows/deploy-prod.yml; then
               echo "::error::.github/workflows/deploy-prod.yml must include ${cidr}."
               exit 1
             fi
           done
       - name: Enforce prod dump-secret Terraform isolation
         run: |
-          if rg -q "create_rds_cron_secret|rds_cron_" terraform/environments/prod/main.tf; then
+          if grep -Eq "create_rds_cron_secret|rds_cron_" terraform/environments/prod/main.tf; then
             echo "::error::terraform/environments/prod/main.tf must not wire RDS cron secret values in production."
             exit 1
           fi
