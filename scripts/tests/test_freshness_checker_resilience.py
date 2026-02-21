@@ -346,3 +346,58 @@ def test_load_latest_dump_manifest_paginates_before_selecting_latest(monkeypatch
     assert manifest_key == second_key
     assert manifest == {"marker": "new"}
     assert requested_tokens == [None, "next-page"]
+
+
+def test_lambda_handler_does_not_alert_for_warning_only_freshness(monkeypatch):
+    """Warning-only table age should not trigger stale-table SNS alerts."""
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=False)
+
+    warning_updated_at = datetime.now(timezone.utc) - timedelta(hours=25)
+
+    class _DummyCursor:
+        def execute(self, _sql):
+            return None
+
+        def fetchone(self):
+            return (10, warning_updated_at.replace(tzinfo=None), 1)
+
+    class _DummyConn:
+        def cursor(self):
+            return _DummyCursor()
+
+        def close(self):
+            return None
+
+    table_alerts = []
+
+    monkeypatch.setattr(checker, "get_db_credentials", lambda: {"username": "u", "password": "p"})
+    monkeypatch.setattr(checker.pymysql, "connect", lambda **kwargs: _DummyConn())
+    monkeypatch.setattr(checker, "publish_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(checker, "publish_dump_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        checker,
+        "check_dump_file",
+        lambda prefix, date_str: {
+            "prefix": prefix,
+            "key": f"{prefix.rstrip('/')}/gghouse_{date_str}.sql",
+            "size_bytes": 1024 * 1024 * 100,
+            "ok": True,
+            "missing": False,
+            "error": None,
+        },
+    )
+    monkeypatch.setattr(
+        checker,
+        "check_upstream_sync_staleness",
+        lambda: {"manifest_key": None, "stale_entries": []},
+    )
+    monkeypatch.setattr(checker, "send_alert", lambda stale: table_alerts.append(stale))
+    monkeypatch.setattr(checker, "send_dump_alert", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(checker, "send_upstream_sync_alert", lambda *_args, **_kwargs: None)
+
+    result = checker.lambda_handler({}, None)
+    body = json.loads(result["body"])
+
+    assert result["statusCode"] == 200
+    assert body["stale_count"] == 0
+    assert table_alerts == []

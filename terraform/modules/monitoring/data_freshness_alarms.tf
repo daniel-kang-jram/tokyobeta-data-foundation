@@ -192,7 +192,7 @@ resource "aws_cloudwatch_metric_alarm" "staging_movings_stale" {
   evaluation_periods  = 1
   metric_name         = "StagingMovingsDaysOld"
   namespace           = "TokyoBeta/DataQuality"
-  period              = 3600 # Check every hour
+  period              = 86400 # Evaluate daily based on freshness-check cadence
   statistic           = "Maximum"
   threshold           = 2 # Alert if > 2 days old
   alarm_description   = "Staging movings table is more than 2 days old"
@@ -212,7 +212,7 @@ resource "aws_cloudwatch_metric_alarm" "staging_tenants_stale" {
   evaluation_periods  = 1
   metric_name         = "StagingTenantsDaysOld"
   namespace           = "TokyoBeta/DataQuality"
-  period              = 3600
+  period              = 86400 # Evaluate daily based on freshness-check cadence
   statistic           = "Maximum"
   threshold           = 2
   alarm_description   = "Staging tenants table is more than 2 days old"
