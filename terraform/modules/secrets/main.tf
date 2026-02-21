@@ -46,7 +46,7 @@ resource "aws_secretsmanager_secret" "rds_cron_credentials" {
 }
 
 resource "aws_secretsmanager_secret_version" "rds_cron_credentials" {
-  count     = var.create_rds_cron_secret ? 1 : 0
+  count     = var.create_rds_cron_secret && var.manage_rds_cron_secret_value ? 1 : 0
   secret_id = aws_secretsmanager_secret.rds_cron_credentials[0].id
   secret_string = jsonencode({
     host     = var.rds_cron_host
