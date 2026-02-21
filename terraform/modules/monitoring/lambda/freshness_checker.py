@@ -424,6 +424,7 @@ def lambda_handler(event, context):
 
     try:
         stale_tables = []
+        warning_tables = []
         results = []
         stale_dumps = []
         stale_upstream = []
@@ -438,10 +439,17 @@ def lambda_handler(event, context):
 
                     safe_publish_metric(table, table_info['days_old'])
 
-                    if table_info['days_old'] >= WARN_DAYS:
+                    if table_info['days_old'] >= ERROR_DAYS:
                         stale_tables.append(table_info)
                         print(
-                            f"⚠️ Table {table} is {table_info['days_old']} days old"
+                            f"⚠️ Table {table} is critically stale "
+                            f"({table_info['days_old']} days old)"
+                        )
+                    elif table_info['days_old'] >= WARN_DAYS:
+                        warning_tables.append(table_info)
+                        print(
+                            f"⚠️ Table {table} is nearing stale threshold "
+                            f"({table_info['days_old']} days old)"
                         )
                     else:
                         print(
@@ -527,10 +535,12 @@ def lambda_handler(event, context):
                 {
                     'message': 'Freshness check complete',
                     'stale_count': len(stale_tables),
+                    'warning_count': len(warning_tables),
                     'stale_dump_count': len(stale_dumps),
                     'stale_upstream_count': len(stale_upstream),
                     'db_checks_skipped': db_checks_skipped,
                     'results': results,
+                    'warning_tables': warning_tables,
                     'stale_dumps': stale_dumps,
                     'stale_upstream': stale_upstream,
                     'upstream_manifest_key': upstream_manifest_key,
