@@ -52,3 +52,4 @@ def test_deploy_workflow_imports_existing_prod_cron_secret_before_plan() -> None
     assert "Import existing prod cron secret into Terraform state" in source
     assert "tokyobeta/prod/rds/cron-credentials" in source
     assert "module.secrets.aws_secretsmanager_secret.rds_cron_credentials[0]" in source
+    assert 'grep -Fqx "${CRON_SECRET_ADDR}"' in source

@@ -173,7 +173,7 @@ jobs:
           CRON_SECRET_ID="tokyobeta/prod/rds/cron-credentials"
           CRON_SECRET_ADDR="module.secrets.aws_secretsmanager_secret.rds_cron_credentials[0]"
           if aws secretsmanager describe-secret --secret-id "${CRON_SECRET_ID}" >/dev/null 2>&1; then
-            if ! terraform state list | grep -qx "${CRON_SECRET_ADDR}"; then
+            if ! terraform state list | grep -Fqx "${CRON_SECRET_ADDR}"; then
               echo "Importing existing cron secret into Terraform state: ${CRON_SECRET_ID}"
               terraform import "${CRON_SECRET_ADDR}" "${CRON_SECRET_ID}"
             fi
