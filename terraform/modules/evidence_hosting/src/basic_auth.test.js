@@ -243,6 +243,28 @@ function testOpenRedirectProtectionFallbacksToRoot() {
   assert.strictEqual(getHeader(resp, "location"), "/");
 }
 
+function testOpenRedirectProtectionRejectsBackslashBasedTargets() {
+  const handler = loadHandler({
+    authUsers: [toBase64("demo:pass")],
+    authUiMode: "login_page",
+  });
+  const absoluteLikeResp = handler(
+    eventOf("/__auth/login", "return_to=%5C%5Cevil.com", {
+      authorization: { value: `Basic ${toBase64("demo:pass")}` },
+    })
+  );
+  assert.strictEqual(getStatus(absoluteLikeResp), 302);
+  assert.strictEqual(getHeader(absoluteLikeResp, "location"), "/");
+
+  const slashBackslashResp = handler(
+    eventOf("/__auth/login", "return_to=%2F%5C%5Cevil.com", {
+      authorization: { value: `Basic ${toBase64("demo:pass")}` },
+    })
+  );
+  assert.strictEqual(getStatus(slashBackslashResp), 302);
+  assert.strictEqual(getHeader(slashBackslashResp, "location"), "/");
+}
+
 function testBrowserBasicModeBackCompat() {
   const handler = loadHandler({
     authUsers: [toBase64("demo:pass")],
@@ -346,6 +368,7 @@ function runAllTests() {
     testExpiredOrInvalidSessionRedirectsToLogin,
     testLogoutClearsCookieAndRedirectsToLogin,
     testOpenRedirectProtectionFallbacksToRoot,
+    testOpenRedirectProtectionRejectsBackslashBasedTargets,
     testBrowserBasicModeBackCompat,
     testRenderedFunctionSizeWithinCloudFrontLimit,
     testQuerystringObjectShapeDoesNotCrashAndUsesReturnTo,
