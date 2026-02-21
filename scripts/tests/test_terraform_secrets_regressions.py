@@ -13,25 +13,26 @@ DEPLOY_WORKFLOW_YML = (
 )
 
 
-def test_rds_cron_preconditions_gate_on_secret_creation_flag() -> None:
-    """Both cron secret preconditions must apply when secret creation is enabled."""
+def test_rds_cron_preconditions_gate_on_secret_value_management_flag() -> None:
+    """Cron secret preconditions should trigger only when Terraform manages secret values."""
     source = SECRETS_MAIN_TF.read_text(encoding="utf-8")
 
     # Two preconditions protect required connection fields and password policy.
-    assert source.count("!var.create_rds_cron_secret") >= 2
+    assert source.count("!var.manage_rds_cron_secret_value") >= 2
 
 
-def test_prod_defaults_disable_cron_secret_creation() -> None:
-    """Production variables must disable cron secret creation by default."""
+def test_prod_defaults_keep_cron_secret_creation_enabled() -> None:
+    """Production defaults should preserve existing cron secret resources in state."""
     source = PROD_VARIABLES_TF.read_text(encoding="utf-8")
 
     block = source.split('variable "create_rds_cron_secret"')[1].split("}", 1)[0]
-    assert "default     = false" in block
+    assert "default     = true" in block
 
 
-def test_deploy_workflow_enforces_cron_secret_creation_disabled() -> None:
-    """Deploy workflow must explicitly pass create_rds_cron_secret=false."""
+def test_deploy_workflow_enforces_safe_cron_secret_flags() -> None:
+    """Deploy workflow must preserve secret resource and freeze secret value mutation."""
     source = DEPLOY_WORKFLOW_YML.read_text(encoding="utf-8")
 
-    assert 'TF_VAR_create_rds_cron_secret: "false"' in source
-    assert 'TF_VAR_create_rds_cron_secret must be false in production.' in source
+    assert 'TF_VAR_create_rds_cron_secret: "true"' in source
+    assert 'TF_VAR_create_rds_cron_secret must be true in production.' in source
+    assert 'TF_VAR_manage_rds_cron_secret_value: "false"' in source
