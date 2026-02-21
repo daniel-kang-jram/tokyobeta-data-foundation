@@ -11,7 +11,8 @@ terraform {
 }
 
 locals {
-  name_prefix = "${var.project_name}-${var.environment}-evidence"
+  name_prefix      = "${var.project_name}-${var.environment}-evidence"
+  schedule_enabled = var.evidence_repo_connection_arn != null && var.enable_schedule
 
   tags = {
     Project     = var.project_name
@@ -81,11 +82,14 @@ resource "aws_cloudfront_function" "basic_auth" {
   runtime = "cloudfront-js-2.0"
   comment = "HTTP Basic Auth for Evidence dashboard"
   publish = true
-  code    = templatefile("${path.module}/src/basic_auth.js", {
+  code = templatefile("${path.module}/src/basic_auth.js", {
     auth_users_json = jsonencode([
       for username, password in var.auth_users :
       base64encode("${username}:${password}")
     ])
+    auth_ui_mode                 = var.auth_ui_mode
+    auth_session_max_age_seconds = var.auth_session_max_age_seconds
+    auth_login_copy_language     = var.auth_login_copy_language
   })
 }
 
@@ -96,7 +100,7 @@ resource "aws_cloudfront_function" "basic_auth" {
 # Cognito user pool (MFA required, TOTP)
 resource "aws_cognito_user_pool" "pool" {
   count = 0 # Disabled - using CloudFront Functions Basic Auth instead
-  name = "${local.name_prefix}-user-pool"
+  name  = "${local.name_prefix}-user-pool"
 
   # MFA is OPTIONAL to avoid redirect loops during initial setup
   # Users can enable MFA after first login through Cognito Hosted UI
@@ -501,7 +505,7 @@ resource "aws_codebuild_project" "refresh" {
   source {
     # Source is provided by CodePipeline (which uses CodeStar Connections).
     type      = "CODEPIPELINE"
-    buildspec = "evidence/buildspec.yml"
+    buildspec = var.buildspec_path
   }
 
   vpc_config {
@@ -657,7 +661,7 @@ resource "aws_codepipeline" "refresh" {
 }
 
 resource "aws_cloudwatch_event_rule" "schedule" {
-  count = var.evidence_repo_connection_arn == null ? 0 : 1
+  count = local.schedule_enabled ? 1 : 0
 
   name                = "${local.name_prefix}-daily-refresh"
   description         = "Daily Evidence sources/build refresh"
@@ -665,7 +669,7 @@ resource "aws_cloudwatch_event_rule" "schedule" {
 }
 
 resource "aws_iam_role" "events" {
-  count = var.evidence_repo_connection_arn == null ? 0 : 1
+  count = local.schedule_enabled ? 1 : 0
 
   name = "${local.name_prefix}-events-role"
 
@@ -684,7 +688,7 @@ resource "aws_iam_role" "events" {
 }
 
 resource "aws_iam_role_policy" "events_invoke_codebuild" {
-  count = var.evidence_repo_connection_arn == null ? 0 : 1
+  count = local.schedule_enabled ? 1 : 0
 
   name = "${local.name_prefix}-events-invoke-codebuild"
   role = aws_iam_role.events[0].id
@@ -704,7 +708,7 @@ resource "aws_iam_role_policy" "events_invoke_codebuild" {
 }
 
 resource "aws_cloudwatch_event_target" "schedule" {
-  count = var.evidence_repo_connection_arn == null ? 0 : 1
+  count = local.schedule_enabled ? 1 : 0
 
   rule      = aws_cloudwatch_event_rule.schedule[0].name
   target_id = "codepipeline"
