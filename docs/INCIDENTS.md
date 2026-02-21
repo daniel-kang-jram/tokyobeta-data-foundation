@@ -153,9 +153,9 @@ The `inquiries_count` metric in `gold.daily_activity_summary` is severely underc
 
 ## Incident #5: Occupancy Data Discrepancy vs Miyago Report (Feb 11, 2026)
 
-**Date:** 2026-02-11  
-**Detected:** 2026-02-11 17:30 JST (external report), investigated on 2026-02-13  
-**Severity:** High  
+**Date:** 2026-02-11
+**Detected:** 2026-02-11 17:30 JST (external report), investigated on 2026-02-13
+**Severity:** High
 **Status:** ✅ Resolved (Logic fixes implemented)
 
 ### Summary
@@ -226,6 +226,153 @@ Implemented changes:
 
 1. Use `MAX(snapshot_date)` as KPI as-of anchor for all future projections.
 2. Keep occupancy KPI future projections anchored to a single as-of snapshot (not wall-clock date) when snapshot ingestion can lag.
+
+---
+
+## Incident #6: Dump Source Drift, Missing Dump Days, and Quarantine Recovery (Feb 18, 2026)
+
+**Date:** 2026-02-11 to 2026-02-18
+**Detected:** 2026-02-16 (dump failures), escalated 2026-02-18
+**Severity:** Critical
+**Status:** ⚠️ Mitigated (baseline recovered, quarantine active)
+
+### Summary
+
+Daily raw dumps became unreliable due to source drift and missing continuity controls.
+The legacy upstream source (`basis-instance-1`, DB `basis`) was no longer resolvable, while active dump execution shifted to Aurora staging without a strict source contract. Missing days and invalid-source days were quarantined, and `2026-02-18` was republished as the new baseline with a signed manifest.
+
+### Impact
+
+- Missing dump days: `20260211`, `20260212`, `20260215`
+- Invalid-source dump days quarantined: `20260213`, `20260214`, `20260216`, `20260217`
+- Original `20260218` object preserved in quarantine before overwrite
+- Risk of downstream processing stale source data without provenance checks
+
+### Timeline
+
+| Date/Time | Event |
+|-----------|-------|
+| 2026-02-11 to 2026-02-17 | Daily dump continuity breaks (missing/invalid-source mix) |
+| 2026-02-18 11:30 JST | Dump cron + daily ETL trigger frozen for recovery window |
+| 2026-02-18 11:30-11:32 JST | Incident inventory + object quarantine snapshots created |
+| 2026-02-18 11:41 JST | `tokyobeta/prod/rds/cron-credentials` restored as authoritative secret |
+| 2026-02-18 11:46 JST | Manual rerun republished `dumps/gghouse_20260218.sql` |
+| 2026-02-18 11:46 JST | Manifest published: `dumps-manifest/gghouse_20260218.json` |
+| 2026-02-18 11:47 JST | Invalid manifests published for `20260211`-`20260217` |
+
+### Root Cause
+
+1. Legacy source endpoint decommissioned/unresolvable (`basis-instance-1...` DNS failure).
+2. Runtime secret contract for dump source was not enforced end-to-end.
+3. Dump script had fallback behavior that allowed unintended source execution.
+4. Glue pipeline lacked required source-provenance manifest gating.
+5. Freshness checker allowed dependency-missing path to degrade into partial checks.
+
+### Resolution
+
+1. **Freeze + preserve evidence**
+   - Paused cron and EventBridge ETL trigger during correction window.
+   - Created immutable incident inventory and quarantine copies in S3.
+
+2. **Restore authoritative secret path**
+   - Created `tokyobeta/prod/rds/cron-credentials`.
+   - Updated live dump script to require secret-driven source fields (no host/db fallback).
+
+3. **Republish trusted baseline**
+   - Re-ran dump for `20260218`.
+   - Overwrote `dumps/gghouse_20260218.sql` after quarantine copy.
+   - Published manifest with `valid_for_etl=true` and source metadata.
+
+4. **Quarantine invalid window**
+   - Added invalid manifests for `20260211`-`20260217` with explicit reason codes.
+   - Tagged invalid source objects `valid_for_etl=false`.
+
+5. **Guardrails in code/IaC**
+   - `glue/scripts/daily_etl.py`: require manifest-valid candidate before staging load.
+   - `terraform/modules/monitoring/lambda/freshness_checker.py`: missing `pymysql` is now critical runtime failure.
+   - `terraform/modules/monitoring/data_freshness_alarms.tf`: added Lambda runtime error alarm.
+   - `terraform/modules/secrets/main.tf`: preconditions for non-empty dump source fields.
+
+### Prevention Measures
+
+1. Keep dump + manifest pair as atomic publish contract.
+2. Keep quarantine-by-manifest policy for unrecoverable windows (no synthetic backfill).
+3. Block Glue staging load when manifest provenance is invalid.
+4. Treat freshness-checker dependency/runtime failures as paging events, not warnings.
+
+---
+
+## Incident #7: Daily ETL False-Fail at Archive Step + Alerting Control Gaps (Feb 21, 2026)
+
+**Date:** 2026-02-21
+**Detected:** 2026-02-21 09:19 JST
+**Severity:** High
+**Status:** ✅ Resolved in code/IaC (deployment verification required in prod run)
+
+### Summary
+
+`tokyobeta-prod-daily-etl` failed at the final archive phase (`10_archive_processed_dump`) after staging/silver/gold succeeded.
+The failure was caused by missing Glue IAM permissions for S3 object tagging operations used by archive logic.
+In parallel, the primary Glue failure alarm path had remained ineffective (`INSUFFICIENT_DATA`), and freshness checker had a degraded dependency behavior risk.
+
+### Impact
+
+- Daily ETL produced core outputs but ended in terminal failure status due to non-critical archive step.
+- Glue failure alert path reliability was reduced (metric alarm misconfiguration + insufficient-data posture).
+- Freshness checker dependency failures could degrade to partial-check behavior without hard stop.
+
+### Timeline
+
+| Date/Time | Event |
+|-----------|-------|
+| 2026-02-21 09:19 JST | `tokyobeta-prod-daily-etl` failed at `10_archive_processed_dump` (`CopyObject AccessDenied`) |
+| 2026-02-21 | Investigation confirmed dump tagging fields in objects and missing Glue tagging IAM actions |
+| 2026-02-21 | Monitoring audit found Glue failure metric alarm dimension/missing-data configuration gap |
+| 2026-02-21 | Freshness checker runtime posture reviewed; dependency-missing path hardened to fail-fast |
+| 2026-02-21 | IaC/code fixes prepared: archive fail-open, EventBridge Glue-failure alerts, release-versioned deploys |
+
+### Root Cause
+
+1. Glue service role lacked `s3:GetObjectTagging` and `s3:PutObjectTagging`.
+2. Archive phase was treated as hard-fail even though it is non-critical for primary data availability.
+3. CloudWatch Glue failure alarm dimensions/missing-data handling were not robust for production signaling.
+4. Freshness checker had a degraded dependency path risk (runtime dependency handling not strictly fail-fast in all cases).
+5. Deploy pipeline used mutable artifact prefixes, allowing partial deploy drift risk.
+
+### Resolution
+
+1. **ETL Archive fail-open contract**
+   - `glue/scripts/daily_etl.py` now supports non-critical archive errors by default.
+   - Strict mode remains opt-in via `DAILY_FAIL_ON_ARCHIVE_ERROR=true`.
+   - Added unit tests in `glue/tests/test_daily_etl.py` for success/fail-open/fail-closed behavior.
+
+2. **Glue IAM tagging permissions**
+   - `terraform/modules/glue/main.tf` updated to include:
+     - `s3:GetObjectTagging`
+     - `s3:PutObjectTagging`
+
+3. **Failure alert routing hardening**
+   - `terraform/modules/monitoring/main.tf` adds EventBridge Glue job-state rule (`FAILED`, `TIMEOUT`) to SNS.
+   - CloudWatch Glue alarms updated as secondary path with corrected dimensions and `treat_missing_data=notBreaching`.
+   - SNS topic policy now explicitly allows EventBridge/CloudWatch publish.
+
+4. **Freshness checker hard-fail + upstream staleness detector**
+   - `terraform/modules/monitoring/lambda/freshness_checker.py` now raises runtime error when `pymysql` is unavailable.
+   - Added upstream recency check from dump manifest timestamps (`movings`, `tenants`, `rooms`, `apartments`; `inquiries` excluded).
+   - `terraform/modules/monitoring/data_freshness_alarms.tf` enforces layer attachment and upstream-check env wiring.
+
+5. **Atomic release deployment**
+   - `.github/workflows/deploy-prod.yml` now publishes immutable artifact paths by commit SHA.
+   - Glue Terraform paths are release-driven (`terraform/modules/glue/main.tf` + env wiring).
+   - Post-deploy conformance checks validate IAM tagging, Lambda layer, EventBridge rule target, and SNS endpoints.
+
+### Prevention Measures
+
+1. Keep archive behavior fail-open by default; use strict mode only when operationally justified.
+2. Keep EventBridge Glue state-change alerts as primary failure signal, metric alarms as secondary.
+3. Block “successful” freshness runs when DB dependency path is unavailable.
+4. Keep deploy immutable-by-release to prevent mutable-prefix runtime drift.
+5. Periodically exercise controlled-failure drills to confirm both alert recipients receive notifications.
 
 ---
 

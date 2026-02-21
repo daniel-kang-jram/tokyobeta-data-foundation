@@ -1,6 +1,6 @@
 # Operations & Runbooks
 
-**Last Updated:** February 11, 2026
+**Last Updated:** February 21, 2026
 
 This document consolidates all operational procedures, setup guides, and troubleshooting runbooks for the TokyoBeta Data Consolidation project.
 
@@ -13,7 +13,9 @@ This document consolidates all operational procedures, setup guides, and trouble
 4. [Evidence Gold Reporting POC](#evidence-gold-reporting-poc)
 5. [Backup & Recovery](#backup--recovery)
 6. [Dump Generation](#dump-generation)
-7. [Troubleshooting](#troubleshooting)
+7. [Reliability Guardrails](#reliability-guardrails-feb-2026-hardening)
+8. [Ownership Matrix](#ownership-matrix-upstream-vs-jram)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -179,6 +181,16 @@ npm run sources
 - Keep Aurora credentials in `.env` (not committed).
 - Use SSL setting `Amazon RDS` in the source connection.
 
+#### Dashboard Login Protection (CloudFront)
+- Both Evidence endpoints use CloudFront viewer-request authentication:
+  - Gold-connected dashboard: `https://d2lnx09sw8wka0.cloudfront.net/`
+  - Snapshot dashboard: `https://d20nv2k4q5ngoc.cloudfront.net/`
+- Auth mode is a dedicated branded login page (`/__auth/login`) rather than browser popup Basic Auth.
+- Session cookie: `evidence_session` (HttpOnly, Secure, SameSite=Lax, max age 8 hours).
+- Logout endpoint: `GET /__auth/logout` (clears session and redirects to login page).
+- Open-redirect protection: login `return_to` accepts only relative paths under `/`.
+- Retired endpoint: `https://d3c81kja45lr6l.cloudfront.net/` is not an active distribution.
+
 ### Success Criteria (Hobby Feasibility)
 1. **Connectivity:** Aurora connection is stable over repeated source runs.
 2. **Performance:** `npm run sources` completes within agreed window.
@@ -250,10 +262,49 @@ aws rds create-db-cluster-snapshot \
 ### Current Production Setup
 **Daily at 5:30 AM JST:**
 1. EC2 instance (`i-00523f387117d497b`) runs cron job
-2. `ggh_datatransit.sh` executes `mysqldump` against Nazca's RDS
-3. Dump compressed and uploaded to `s3://jram-gghouse/dumps/`
-4. File size: ~945MB (compressed)
-5. Glue ETL downloads at 7:00 AM JST
+2. `/home/ubuntu/rds-backup/ggh_datatransit.sh` reads source credentials from `tokyobeta/prod/rds/cron-credentials`
+3. Script hard-fails if secret fields (`host/database/username/password/port`) are missing or preflight checks fail
+4. Primary dump is uploaded to `s3://jram-gghouse/dumps/gghouse_YYYYMMDD.sql`
+5. Per-day manifest is uploaded to `s3://jram-gghouse/dumps-manifest/gghouse_YYYYMMDD.json`
+6. Glue daily ETL requires a manifest-valid dump candidate before staging load
+
+### Dump Contract (Prod)
+
+- Required secret: `tokyobeta/prod/rds/cron-credentials`
+- Required dump key: `dumps/gghouse_YYYYMMDD.sql`
+- Required manifest key: `dumps-manifest/gghouse_YYYYMMDD.json`
+- Required manifest fields:
+  - `source_host`
+  - `source_database`
+  - `run_id`
+  - `dump_sha256`
+  - `valid_for_etl`
+  - `max_updated_at_by_table` (or backward-compatible `source_table_max_updated_at`)
+
+### Quarantine Policy (Feb 2026 Recovery)
+
+- Recovery baseline: `2026-02-18`
+- Quarantine window: `2026-02-11` to `2026-02-17`
+- Missing dumps (`20260211`, `20260212`, `20260215`) are represented with invalid manifests (`valid_for_etl=false`)
+- Invalid-source dumps are preserved under:
+  - `s3://jram-gghouse/quarantine/raw-source-mismatch/20260218/`
+- Quarantine index:
+  - `s3://jram-gghouse/dumps-manifest/quarantine_index_20260211_20260217_20260218_113139.json`
+
+### Verification Commands
+
+```bash
+# Check latest dump object
+aws s3 ls s3://jram-gghouse/dumps/ | tail -5
+
+# Check latest manifest
+aws s3 cp s3://jram-gghouse/dumps-manifest/gghouse_$(date +%Y%m%d).json - | jq
+
+# Confirm alert subscribers
+aws sns list-subscriptions-by-topic \
+  --topic-arn arn:aws:sns:ap-northeast-1:343881458651:tokyobeta-prod-dashboard-etl-alerts \
+  --profile gghouse
+```
 
 ### Alternatives (Documented but Not Implemented)
 
@@ -266,6 +317,58 @@ aws rds create-db-cluster-snapshot \
 - **Benefits:** Uses Secrets Manager + IAM roles (no hardcoded credentials).
 - **Status:** Documented in `docs/SECURITY_MIGRATION_PLAN.md`, not implemented.
 - **Trigger:** If security audit requires credential management.
+
+---
+
+## Reliability Guardrails (Feb 2026 Hardening)
+
+### Daily ETL Archive Behavior
+- `10_archive_processed_dump` is now non-critical by default.
+- `archive_processed_dump` logs warning and continues on copy/tagging errors unless strict mode is enabled.
+- Strict mode can be enabled only with `DAILY_FAIL_ON_ARCHIVE_ERROR=true`.
+
+### Glue Failure Alerting (Primary + Secondary)
+- Primary: EventBridge rule `tokyobeta-prod-glue-job-state-failures` captures Glue `FAILED`/`TIMEOUT` and publishes to SNS.
+- Secondary: CloudWatch metric alarms remain enabled, with corrected dimensions (`JobName`, `JobRunId=ALL`, `Type=count`) and `treat_missing_data=notBreaching`.
+- SNS recipients are Terraform-managed from merged set of `alert_email` + `alert_emails`.
+
+### Freshness Checker Runtime Contract
+- Lambda layer `pymysql_layer.zip` is mandatory and attached in Terraform.
+- Missing `pymysql` is a hard runtime failure (no degraded success path).
+- Post-deploy smoke check validates `db_checks_skipped=false`.
+
+### Immutable Artifact Release Contract
+- Deploy uploads Glue/dbt artifacts under immutable prefixes:
+  - `s3://jram-gghouse/glue-scripts/releases/<commit-sha>/`
+  - `s3://jram-gghouse/dbt-project/releases/<commit-sha>/`
+- Glue jobs run against release-specific paths, so Terraform apply failure does not break active runtime.
+- Deploy workflow now includes post-deploy conformance checks:
+  - Glue IAM tagging actions present
+  - Freshness Lambda has attached layer
+  - EventBridge Glue-failure rule targets SNS
+  - Both required SNS email endpoints are confirmed
+
+---
+
+## Ownership Matrix (Upstream vs JRAM)
+
+### JRAM Self-Healable (Same Day)
+- Basis security-group allowlist drift (CIDR/IP changes in Terraform/live SG)
+- Glue IAM policy gaps (including S3 object tagging permissions)
+- Glue script/runtime bugs and archive-step behavior
+- Monitoring/alert routing (EventBridge/CloudWatch/SNS subscriptions)
+- Freshness checker runtime packaging and Lambda layer attachment
+
+### External Action Required
+- V3 -> basis upstream sync process execution/restart
+- Upstream-side sync SQL/logic failures
+- Upstream-side source DB connectivity inside V3 environment
+
+### Upstream Staleness Rule
+- Freshness checker validates `max_updated_at_by_table` from latest dump manifest for:
+  - `movings`, `tenants`, `rooms`, `apartments`
+- `inquiries` is excluded from upstream recency incident gating.
+- If lag exceeds threshold (`UPSTREAM_SYNC_STALE_HOURS`, prod default 24h), checker emits critical alert.
 
 ---
 

@@ -79,8 +79,15 @@ module "networking" {
 module "secrets" {
   source = "../../modules/secrets"
 
-  environment = local.environment
-  db_username = "admin"
+  environment                  = local.environment
+  db_username                  = "admin"
+  create_rds_cron_secret       = var.create_rds_cron_secret
+  manage_rds_cron_secret_value = var.manage_rds_cron_secret_value
+  rds_cron_host                = var.rds_cron_host
+  rds_cron_username            = var.rds_cron_username
+  rds_cron_password            = var.rds_cron_password
+  rds_cron_database            = var.rds_cron_database
+  rds_cron_port                = var.rds_cron_port
 }
 
 # Module: Aurora MySQL
@@ -121,6 +128,7 @@ module "glue" {
   number_of_workers            = 2
   job_timeout                  = 120
   daily_strict_dump_continuity = true
+  artifact_release             = var.artifact_release
 }
 
 # Module: Step Functions (NEW - Orchestrates ETL layers)
@@ -170,7 +178,12 @@ module "monitoring" {
   security_group_id  = module.networking.lambda_security_group_id
   s3_bucket          = var.s3_source_bucket
   # Primary-only monitoring during dump stabilization; managed channel is paused.
-  s3_dump_prefixes = var.s3_source_prefix
+  s3_dump_prefixes   = var.s3_source_prefix
+  s3_manifest_prefix = "dumps-manifest"
+
+  upstream_sync_check_enabled = true
+  upstream_sync_stale_hours   = 24
+  upstream_sync_tables        = "movings,tenants,rooms,apartments"
 }
 
 # Module: Evidence Hosting (CloudFront + S3 + Cognito MFA)

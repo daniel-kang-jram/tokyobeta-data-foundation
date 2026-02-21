@@ -2,6 +2,14 @@
 
 ## Core Principles
 
+### 0. Critical Production Boundary (External V3 Sync)
+- **NEVER** modify, restart, stop, or operate the upstream **V3→basis sync job** from this repository or AWS account workflows.
+- Treat V3 sync execution as **external-owner only**; JRAM-side actions are limited to:
+  - network allowlist and connectivity on JRAM-managed RDS side
+  - downstream dump/Glue/alerting remediation
+  - detection and escalation with concrete evidence
+- Any request that could alter V3 sync runtime must be redirected as an escalation item, not executed locally.
+
 ### 1. Test-Driven Development (TDD) - STRICTLY ENFORCED
 - **RED-GREEN-REFACTOR cycle is MANDATORY**
 - ALWAYS write tests BEFORE implementation code

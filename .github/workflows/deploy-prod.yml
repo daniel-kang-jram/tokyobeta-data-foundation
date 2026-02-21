@@ -33,6 +33,8 @@ jobs:
       TF_VAR_alert_email: ${{ secrets.TF_VAR_ALERT_EMAIL }}
       TF_VAR_alert_emails: '["jram-ggh@outlook.com","daniel.kang@jram.jp"]'
       TF_VAR_allowed_cidr_blocks: '["85.115.98.80/32","13.112.83.65/32","54.168.114.197/32"]'
+      TF_VAR_artifact_release: ${{ github.sha }}
+      TF_VAR_manage_rds_cron_secret_value: "false"
       # Keep Evidence Basic Auth enabled in Terraform-managed CloudFront config.
       # Value should be a JSON map string, e.g. {"admin":"<password>"}.
       TF_VAR_evidence_auth_users: ${{ secrets.TF_VAR_EVIDENCE_AUTH_USERS }}
@@ -59,12 +61,20 @@ jobs:
             echo "::error::Missing TF_VAR_allowed_cidr_blocks."
             exit 1
           fi
+          if [[ -z "${TF_VAR_artifact_release}" ]]; then
+            echo "::error::Missing TF_VAR_artifact_release."
+            exit 1
+          fi
           if [[ "${TF_VAR_allowed_cidr_blocks}" != *"13.112.83.65/32"* ]]; then
             echo "::error::TF_VAR_allowed_cidr_blocks must include EC2 dump EIP 13.112.83.65/32."
             exit 1
           fi
           if [[ "${TF_VAR_allowed_cidr_blocks}" != *"54.168.114.197/32"* ]]; then
             echo "::error::TF_VAR_allowed_cidr_blocks must include V3 upstream IP 54.168.114.197/32."
+            exit 1
+          fi
+          if [[ "${TF_VAR_manage_rds_cron_secret_value}" != "false" ]]; then
+            echo "::error::TF_VAR_manage_rds_cron_secret_value must be false in production."
             exit 1
           fi
           if [[ -z "${TF_VAR_evidence_auth_users}" ]]; then
@@ -83,9 +93,25 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Build freshness checker PyMySQL layer artifact
+        run: |
+          set -euo pipefail
+          rm -f terraform/modules/monitoring/pymysql_layer.zip
+          layer_build_dir="$(mktemp -d)"
+          python -m pip install --upgrade pip
+          python -m pip install --target "${layer_build_dir}/python" "pymysql==1.1.1"
+          (
+            cd "${layer_build_dir}"
+            zip -qr "${GITHUB_WORKSPACE}/terraform/modules/monitoring/pymysql_layer.zip" python
+          )
+          if [[ ! -s terraform/modules/monitoring/pymysql_layer.zip ]]; then
+            echo "::error::Failed to build terraform/modules/monitoring/pymysql_layer.zip."
+            exit 1
+          fi
+
       - name: Sync Glue scripts to S3
         run: |
-          aws s3 sync glue/scripts s3://${S3_ARTIFACT_BUCKET}/glue-scripts/ \
+          aws s3 sync glue/scripts s3://${S3_ARTIFACT_BUCKET}/glue-scripts/releases/${TF_VAR_artifact_release}/ \
             --exclude "*" --include "*.py" --delete
 
       - name: Install dbt CLI
@@ -98,7 +124,7 @@ jobs:
           cd dbt
           dbt deps
           cd ..
-          aws s3 sync dbt s3://${S3_ARTIFACT_BUCKET}/dbt-project/ \
+          aws s3 sync dbt s3://${S3_ARTIFACT_BUCKET}/dbt-project/releases/${TF_VAR_artifact_release}/ \
             --exclude ".user.yml" \
             --exclude "target/*" \
             --exclude ".venv/*" \
@@ -159,4 +185,88 @@ jobs:
               exit 0
             fi
             exit ${APPLY_STATUS}
+          fi
+
+      - name: Post-deploy conformance checks
+        run: |
+          set -euo pipefail
+
+          TOPIC_ARN="arn:aws:sns:${AWS_REGION}:343881458651:tokyobeta-prod-dashboard-etl-alerts"
+          RULE_NAME="tokyobeta-prod-glue-job-state-failures"
+          GLUE_ROLE_NAME="tokyobeta-prod-glue-service-role"
+          FRESHNESS_FN="tokyobeta-prod-table-freshness-checker"
+
+          policy_json="$(aws iam get-role-policy \
+            --role-name "${GLUE_ROLE_NAME}" \
+            --policy-name "tokyobeta-prod-glue-policy" \
+            --query 'PolicyDocument' \
+            --output json)"
+          echo "${policy_json}" | jq -e '
+            .Statement
+            | map(.Action)
+            | flatten
+            | index("s3:GetObjectTagging")
+          ' >/dev/null
+          echo "${policy_json}" | jq -e '
+            .Statement
+            | map(.Action)
+            | flatten
+            | index("s3:PutObjectTagging")
+          ' >/dev/null
+
+          layer_count="$(aws lambda get-function-configuration \
+            --function-name "${FRESHNESS_FN}" \
+            --query 'length(Layers)' \
+            --output text)"
+          if [[ "${layer_count}" == "None" || "${layer_count}" -lt 1 ]]; then
+            echo "::error::Freshness checker Lambda has no layers attached."
+            exit 1
+          fi
+
+          aws events describe-rule --name "${RULE_NAME}" >/dev/null
+          target_count="$(aws events list-targets-by-rule \
+            --rule "${RULE_NAME}" \
+            --query "length(Targets[?Arn=='${TOPIC_ARN}'])" \
+            --output text)"
+          if [[ "${target_count}" -lt 1 ]]; then
+            echo "::error::Glue failure EventBridge rule is not targeting SNS topic."
+            exit 1
+          fi
+
+          subs_json="$(aws sns list-subscriptions-by-topic --topic-arn "${TOPIC_ARN}" --output json)"
+          for endpoint in "daniel.kang@jram.jp" "jram-ggh@outlook.com"; do
+            arn="$(echo "${subs_json}" | jq -r --arg endpoint "${endpoint}" '.Subscriptions[] | select(.Endpoint==$endpoint) | .SubscriptionArn' | head -n 1)"
+            if [[ -z "${arn}" || "${arn}" == "PendingConfirmation" ]]; then
+              echo "::error::SNS subscription for ${endpoint} is missing or pending."
+              exit 1
+            fi
+          done
+
+      - name: Freshness checker smoke test
+        run: |
+          set -euo pipefail
+          output_file="$(mktemp)"
+          aws lambda invoke \
+            --function-name tokyobeta-prod-table-freshness-checker \
+            --payload '{}' \
+            "${output_file}" >/dev/null
+
+          if jq -e '.errorMessage' "${output_file}" >/dev/null 2>&1; then
+            echo "::error::Freshness checker invocation returned runtime error."
+            cat "${output_file}"
+            exit 1
+          fi
+
+          body_json="$(jq -r '.body // empty' "${output_file}")"
+          if [[ -z "${body_json}" ]]; then
+            echo "::error::Freshness checker response body is empty."
+            cat "${output_file}"
+            exit 1
+          fi
+
+          db_checks_skipped="$(echo "${body_json}" | jq -r '.db_checks_skipped')"
+          if [[ "${db_checks_skipped}" != "false" ]]; then
+            echo "::error::Freshness checker smoke test indicates DB checks were skipped."
+            cat "${output_file}"
+            exit 1
           fi

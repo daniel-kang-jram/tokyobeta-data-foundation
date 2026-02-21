@@ -10,6 +10,7 @@ resource "aws_lambda_function" "check_table_freshness" {
   source_code_hash = data.archive_file.freshness_checker_zip.output_base64sha256
   runtime          = "python3.11"
   timeout          = 60
+  layers           = [aws_lambda_layer_version.freshness_checker_pymysql.arn]
 
   environment {
     variables = {
@@ -21,6 +22,10 @@ resource "aws_lambda_function" "check_table_freshness" {
       S3_DUMP_MIN_BYTES            = var.s3_dump_min_bytes
       S3_DUMP_ERROR_DAYS           = var.s3_dump_error_days
       S3_DUMP_REQUIRE_ALL_PREFIXES = var.s3_dump_require_all_prefixes ? "true" : "false"
+      S3_MANIFEST_PREFIX           = var.s3_manifest_prefix
+      UPSTREAM_SYNC_CHECK_ENABLED  = var.upstream_sync_check_enabled ? "true" : "false"
+      UPSTREAM_SYNC_STALE_HOURS    = tostring(var.upstream_sync_stale_hours)
+      UPSTREAM_SYNC_TABLES         = var.upstream_sync_tables
     }
   }
 
@@ -142,6 +147,14 @@ resource "aws_cloudwatch_event_rule" "check_freshness_post_dump" {
   }
 }
 
+resource "aws_lambda_layer_version" "freshness_checker_pymysql" {
+  filename            = "${path.module}/pymysql_layer.zip"
+  layer_name          = "${var.project_name}-${var.environment}-freshness-checker-pymysql"
+  source_code_hash    = filebase64sha256("${path.module}/pymysql_layer.zip")
+  compatible_runtimes = ["python3.11"]
+  description         = "PyMySQL dependency layer for freshness checker Lambda"
+}
+
 # EventBridge target
 resource "aws_cloudwatch_event_target" "freshness_checker_lambda" {
   rule      = aws_cloudwatch_event_rule.check_freshness_daily.name
@@ -212,12 +225,37 @@ resource "aws_cloudwatch_metric_alarm" "staging_tenants_stale" {
   }
 }
 
+# CloudWatch Metric Alarm - Freshness checker runtime failures
+resource "aws_cloudwatch_metric_alarm" "freshness_checker_runtime_errors" {
+  alarm_name          = "${var.project_name}-${var.environment}-freshness-checker-errors"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Errors"
+  namespace           = "AWS/Lambda"
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 0
+  alarm_description   = "Freshness checker Lambda runtime failures detected"
+  alarm_actions       = [aws_sns_topic.etl_alerts.arn]
+  treat_missing_data  = "notBreaching"
+
+  dimensions = {
+    FunctionName = aws_lambda_function.check_table_freshness.function_name
+  }
+
+  tags = {
+    Name        = "${var.project_name}-${var.environment}-freshness-checker-errors"
+    Environment = var.environment
+  }
+}
+
 # Output alarm ARNs
 output "freshness_alarm_arns" {
   description = "ARNs of data freshness alarms"
   value = {
-    movings = aws_cloudwatch_metric_alarm.staging_movings_stale.arn
-    tenants = aws_cloudwatch_metric_alarm.staging_tenants_stale.arn
+    movings        = aws_cloudwatch_metric_alarm.staging_movings_stale.arn
+    tenants        = aws_cloudwatch_metric_alarm.staging_tenants_stale.arn
+    lambda_runtime = aws_cloudwatch_metric_alarm.freshness_checker_runtime_errors.arn
   }
 }
 

@@ -32,14 +32,6 @@ resource "aws_secretsmanager_secret_version" "aurora_credentials" {
 # RDS Credentials for EC2 Cron Jobs
 # Separate secret for the legacy RDS instance accessed by cron scripts
 
-# Generate random password for RDS cron access (if creating new credentials)
-resource "random_password" "rds_cron_password" {
-  count            = var.create_rds_cron_secret ? 1 : 0
-  length           = 32
-  special          = true
-  override_special = "!#$%&*()-_=+[]{}<>:?"
-}
-
 # Store RDS cron job credentials in Secrets Manager
 resource "aws_secretsmanager_secret" "rds_cron_credentials" {
   count       = var.create_rds_cron_secret ? 1 : 0
@@ -51,13 +43,6 @@ resource "aws_secretsmanager_secret" "rds_cron_credentials" {
     Environment = var.environment
     Purpose     = "EC2 Cron Jobs"
   }
-
-  lifecycle {
-    precondition {
-      condition     = var.environment != "prod"
-      error_message = "Production dump-source secret values must be managed outside Terraform."
-    }
-  }
 }
 
 resource "aws_secretsmanager_secret_version" "rds_cron_credentials" {
@@ -66,16 +51,37 @@ resource "aws_secretsmanager_secret_version" "rds_cron_credentials" {
   secret_string = jsonencode({
     host     = var.rds_cron_host
     username = var.rds_cron_username
-    password = var.rds_cron_password != "" ? var.rds_cron_password : random_password.rds_cron_password[0].result
+    # If explicit password is omitted, default to Aurora admin password so
+    # prod can keep credentials aligned when dumping from Aurora staging.
+    password = trimspace(var.rds_cron_password) != "" ? var.rds_cron_password : random_password.aurora_password.result
     database = var.rds_cron_database
     port     = var.rds_cron_port
     engine   = "mysql"
   })
 
   lifecycle {
+    # Keep cron secret value external to Terraform to prevent accidental source rewrites.
+    ignore_changes = [secret_string]
+
     precondition {
-      condition     = var.environment != "prod"
-      error_message = "Production dump-source secret values must be managed outside Terraform."
+      condition = (
+        !var.manage_rds_cron_secret_value
+        || (
+          trimspace(var.rds_cron_host) != ""
+          && trimspace(var.rds_cron_username) != ""
+          && trimspace(var.rds_cron_database) != ""
+        )
+      )
+      error_message = "rds_cron_host, rds_cron_username, and rds_cron_database must be non-empty when creating cron credentials."
+    }
+
+    precondition {
+      condition = (
+        !var.manage_rds_cron_secret_value
+        || trimspace(var.rds_cron_password) != ""
+        || can(regex("tokyobeta-prod-aurora", var.rds_cron_host))
+      )
+      error_message = "rds_cron_password must be provided unless the dump source host is the managed Aurora endpoint."
     }
   }
 }

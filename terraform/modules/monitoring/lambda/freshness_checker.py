@@ -33,6 +33,19 @@ DUMP_ERROR_DAYS = int(os.environ.get('S3_DUMP_ERROR_DAYS', '2'))
 REQUIRE_ALL_DUMP_PREFIXES = os.environ.get(
     'S3_DUMP_REQUIRE_ALL_PREFIXES', 'true'
 ).lower() in ('1', 'true', 'yes', 'y')
+UPSTREAM_SYNC_CHECK_ENABLED = os.environ.get(
+    'UPSTREAM_SYNC_CHECK_ENABLED', 'false'
+).lower() in ('1', 'true', 'yes', 'y')
+UPSTREAM_SYNC_STALE_HOURS = int(os.environ.get('UPSTREAM_SYNC_STALE_HOURS', '24'))
+UPSTREAM_SYNC_TABLES = [
+    table.strip()
+    for table in os.environ.get(
+        'UPSTREAM_SYNC_TABLES',
+        'movings,tenants,rooms,apartments',
+    ).split(',')
+    if table.strip()
+]
+S3_MANIFEST_PREFIX = os.environ.get('S3_MANIFEST_PREFIX', 'dumps-manifest').rstrip('/')
 
 
 # AWS clients
@@ -224,6 +237,141 @@ def send_dump_alert(stale_dumps):
     )
 
 
+def send_runtime_alert(message):
+    """Send SNS alert for freshness-checker runtime failures."""
+    payload = '⚠️ FRESHNESS CHECKER RUNTIME FAILURE\n\n'
+    payload += f'{message}\n\n'
+    payload += 'Action required:\n'
+    payload += '1. Validate Lambda package dependencies (pymysql)\n'
+    payload += '2. Verify VPC access to Aurora endpoint\n'
+    payload += '3. Re-run freshness checker after fixing runtime dependency/config\n'
+
+    sns.publish(
+        TopicArn=SNS_TOPIC_ARN,
+        Subject='⚠️ Freshness Checker Runtime Failure',
+        Message=payload,
+    )
+
+
+def parse_manifest_datetime(raw_value):
+    """Parse ISO datetime string from manifest into JST-aware datetime."""
+    if not raw_value or not isinstance(raw_value, str):
+        return None
+    candidate = raw_value.strip()
+    if candidate.endswith('Z'):
+        candidate = candidate[:-1] + '+00:00'
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone(timedelta(hours=9)))
+
+
+def load_latest_dump_manifest():
+    """Load the most recent dump manifest from S3."""
+    prefix = f'{S3_MANIFEST_PREFIX}/gghouse_'
+    response = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix)
+    contents = response.get('Contents', [])
+    if not contents:
+        return None, None
+
+    latest = max(contents, key=lambda item: item.get('LastModified'))
+    manifest_key = latest['Key']
+    manifest_obj = s3.get_object(Bucket=S3_BUCKET, Key=manifest_key)
+    manifest = json.loads(manifest_obj['Body'].read().decode('utf-8'))
+    return manifest_key, manifest
+
+
+def evaluate_upstream_sync_staleness(
+    manifest,
+    now_jst=None,
+    stale_hours=24,
+    tables=None,
+):
+    """Evaluate upstream manifest timestamps and return stale table entries."""
+    if not isinstance(manifest, dict):
+        return []
+
+    target_tables = tables or UPSTREAM_SYNC_TABLES
+    if now_jst is None:
+        now_jst = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9)))
+
+    table_map = manifest.get('max_updated_at_by_table')
+    if not isinstance(table_map, dict):
+        table_map = manifest.get('source_table_max_updated_at')
+    if not isinstance(table_map, dict):
+        return []
+
+    stale_entries = []
+    for table in target_tables:
+        raw_value = table_map.get(table)
+        parsed = parse_manifest_datetime(raw_value)
+        if parsed is None:
+            stale_entries.append(
+                {
+                    'table': table,
+                    'max_updated_at': raw_value,
+                    'lag_hours': None,
+                    'reason': 'missing_or_invalid_timestamp',
+                }
+            )
+            continue
+
+        lag_hours = round((now_jst - parsed).total_seconds() / 3600, 2)
+        if lag_hours > stale_hours:
+            stale_entries.append(
+                {
+                    'table': table,
+                    'max_updated_at': parsed.isoformat(),
+                    'lag_hours': lag_hours,
+                    'reason': 'stale_upstream_sync',
+                }
+            )
+
+    return stale_entries
+
+
+def check_upstream_sync_staleness():
+    """Check manifest table timestamps for upstream sync staleness."""
+    if not UPSTREAM_SYNC_CHECK_ENABLED:
+        return {'manifest_key': None, 'stale_entries': []}
+
+    manifest_key, manifest = load_latest_dump_manifest()
+    stale_entries = evaluate_upstream_sync_staleness(
+        manifest=manifest,
+        stale_hours=UPSTREAM_SYNC_STALE_HOURS,
+        tables=UPSTREAM_SYNC_TABLES,
+    )
+    return {'manifest_key': manifest_key, 'stale_entries': stale_entries}
+
+
+def send_upstream_sync_alert(stale_entries, manifest_key):
+    """Send SNS alert for stale upstream sync state."""
+    message = '⚠️ UPSTREAM SYNC STALE\n\n'
+    message += f'Manifest key: {manifest_key or "N/A"}\n\n'
+    message += 'The following upstream tables are stale based on manifest timestamps:\n\n'
+    for entry in stale_entries:
+        message += (
+            f"- table={entry['table']} "
+            f"max_updated_at={entry.get('max_updated_at')} "
+            f"lag_hours={entry.get('lag_hours')} "
+            f"reason={entry.get('reason')}\n"
+        )
+
+    message += '\nAction required:\n'
+    message += '1. Verify V3 -> basis upstream sync job execution\n'
+    message += '2. Confirm basis allowlist still includes V3 source IP\n'
+    message += '3. Re-run upstream sync and validate MAX(updated_at) recovery\n'
+
+    sns.publish(
+        TopicArn=SNS_TOPIC_ARN,
+        Subject='⚠️ Upstream Sync Stale',
+        Message=message,
+    )
+
+
 def lambda_handler(event, context):
     """Main Lambda handler."""
     print(f'Checking table freshness for: {TABLES_TO_CHECK}')
@@ -232,7 +380,13 @@ def lambda_handler(event, context):
     db_checks_skipped = pymysql is None
 
     if db_checks_skipped:
-        print("WARN: pymysql not available; skipping staging table checks and running dump checks only.")
+        message = (
+            "pymysql dependency is missing. DB freshness checks are required; "
+            "aborting instead of running partial dump-only checks."
+        )
+        print(f"ERROR: {message}")
+        send_runtime_alert(message)
+        raise RuntimeError(message)
     else:
         creds = get_db_credentials()
         connection = pymysql.connect(
@@ -247,6 +401,8 @@ def lambda_handler(event, context):
         stale_tables = []
         results = []
         stale_dumps = []
+        stale_upstream = []
+        upstream_manifest_key = None
 
         if connection is not None:
             cursor = connection.cursor()
@@ -326,20 +482,33 @@ def lambda_handler(event, context):
             safe_publish_dump_metric('global', 'StaleDumpEntries', len(stale_dumps))
             send_dump_alert(stale_dumps)
 
+        upstream_result = check_upstream_sync_staleness()
+        upstream_manifest_key = upstream_result.get('manifest_key')
+        stale_upstream = upstream_result.get('stale_entries', [])
+        if stale_upstream:
+            print(
+                f"⚠️ Upstream sync stale entries detected: {len(stale_upstream)} "
+                f"(manifest={upstream_manifest_key})"
+            )
+            send_upstream_sync_alert(stale_upstream, upstream_manifest_key)
+
         if stale_tables:
             send_alert(stale_tables)
             print(f'Alert sent for {len(stale_tables)} stale tables')
 
         return {
-            'statusCode': 200 if (not stale_tables and not stale_dumps) else 400,
+            'statusCode': 200 if (not stale_tables and not stale_dumps and not stale_upstream) else 400,
             'body': json.dumps(
                 {
                     'message': 'Freshness check complete',
                     'stale_count': len(stale_tables),
                     'stale_dump_count': len(stale_dumps),
+                    'stale_upstream_count': len(stale_upstream),
                     'db_checks_skipped': db_checks_skipped,
                     'results': results,
                     'stale_dumps': stale_dumps,
+                    'stale_upstream': stale_upstream,
+                    'upstream_manifest_key': upstream_manifest_key,
                 }
             ),
         }

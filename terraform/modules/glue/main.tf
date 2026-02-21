@@ -1,6 +1,12 @@
 # AWS Glue Module
 # Creates Glue crawler, ETL jobs, and data quality rulesets
 
+locals {
+  artifact_release  = trimspace(var.artifact_release)
+  glue_scripts_path = "glue-scripts/releases/${local.artifact_release}"
+  dbt_project_path  = "dbt-project/releases/${local.artifact_release}"
+}
+
 # IAM Role for Glue
 resource "aws_iam_role" "glue_service_role" {
   name = "tokyobeta-${var.environment}-glue-service-role"
@@ -37,7 +43,9 @@ resource "aws_iam_role_policy" "glue_service_policy" {
         Action = [
           "s3:GetObject",
           "s3:ListBucket",
-          "s3:PutObject"
+          "s3:PutObject",
+          "s3:GetObjectTagging",
+          "s3:PutObjectTagging"
         ]
         Resource = [
           "arn:aws:s3:::${var.s3_source_bucket}",
@@ -196,7 +204,7 @@ resource "aws_glue_job" "daily_etl" {
 
   command {
     name            = "glueetl"
-    script_location = "s3://${var.s3_source_bucket}/glue-scripts/daily_etl.py"
+    script_location = "s3://${var.s3_source_bucket}/${local.glue_scripts_path}/daily_etl.py"
     python_version  = "3"
   }
 
@@ -217,8 +225,10 @@ resource "aws_glue_job" "daily_etl" {
     "--AURORA_DATABASE"              = var.aurora_database
     "--AURORA_SECRET_ARN"            = var.aurora_secret_arn
     "--ENVIRONMENT"                  = var.environment
-    "--DBT_PROJECT_PATH"             = "s3://${var.s3_source_bucket}/dbt-project/"
+    "--DBT_PROJECT_PATH"             = "s3://${var.s3_source_bucket}/${local.dbt_project_path}/"
     "--DAILY_MAX_DUMP_STALE_DAYS"    = "0"
+    "--DAILY_REQUIRE_DUMP_MANIFEST"  = "true"
+    "--DAILY_MAX_SOURCE_STALE_DAYS"  = "14"
     "--DAILY_STRICT_DUMP_CONTINUITY" = tostring(var.daily_strict_dump_continuity)
   }
 
@@ -255,7 +265,7 @@ resource "aws_glue_job" "staging_loader" {
 
   command {
     name            = "glueetl"
-    script_location = "s3://${var.s3_source_bucket}/glue-scripts/staging_loader.py"
+    script_location = "s3://${var.s3_source_bucket}/${local.glue_scripts_path}/staging_loader.py"
     python_version  = "3"
   }
 
@@ -305,7 +315,7 @@ resource "aws_glue_job" "silver_transformer" {
 
   command {
     name            = "glueetl"
-    script_location = "s3://${var.s3_source_bucket}/glue-scripts/silver_transformer.py"
+    script_location = "s3://${var.s3_source_bucket}/${local.glue_scripts_path}/silver_transformer.py"
     python_version  = "3"
   }
 
@@ -321,7 +331,7 @@ resource "aws_glue_job" "silver_transformer" {
 
     # Custom parameters
     "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
-    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
+    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/${local.dbt_project_path}/"
     "--AURORA_ENDPOINT"   = var.aurora_endpoint
     "--AURORA_DATABASE"   = var.aurora_database
     "--AURORA_SECRET_ARN" = var.aurora_secret_arn
@@ -356,7 +366,7 @@ resource "aws_glue_job" "gold_transformer" {
 
   command {
     name            = "glueetl"
-    script_location = "s3://${var.s3_source_bucket}/glue-scripts/gold_transformer.py"
+    script_location = "s3://${var.s3_source_bucket}/${local.glue_scripts_path}/gold_transformer.py"
     python_version  = "3"
   }
 
@@ -372,7 +382,7 @@ resource "aws_glue_job" "gold_transformer" {
 
     # Custom parameters
     "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
-    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
+    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/${local.dbt_project_path}/"
     "--AURORA_ENDPOINT"   = var.aurora_endpoint
     "--AURORA_DATABASE"   = var.aurora_database
     "--AURORA_SECRET_ARN" = var.aurora_secret_arn
@@ -410,7 +420,7 @@ resource "aws_glue_job" "data_quality_test" {
 
   command {
     name            = "glueetl"
-    script_location = "s3://${var.s3_source_bucket}/glue-scripts/data_quality_test.py"
+    script_location = "s3://${var.s3_source_bucket}/${local.glue_scripts_path}/data_quality_test.py"
     python_version  = "3"
   }
 
@@ -426,7 +436,7 @@ resource "aws_glue_job" "data_quality_test" {
 
     # Custom parameters
     "--S3_SOURCE_BUCKET"  = var.s3_source_bucket
-    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/dbt-project/"
+    "--DBT_PROJECT_PATH"  = "s3://${var.s3_source_bucket}/${local.dbt_project_path}/"
     "--AURORA_ENDPOINT"   = var.aurora_endpoint
     "--AURORA_DATABASE"   = var.aurora_database
     "--AURORA_SECRET_ARN" = var.aurora_secret_arn

@@ -51,6 +51,62 @@ def test_get_processed_dump_key_maps_dump_prefixes():
     assert daily_etl.get_processed_dump_key("gghouse_20260213.sql") == "processed/gghouse_20260213.sql"
 
 
+def test_archive_processed_dump_returns_true_on_success(monkeypatch):
+    mock_s3 = Mock()
+    monkeypatch.setattr(daily_etl, "s3", mock_s3)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "test-bucket")
+
+    archived = daily_etl.archive_processed_dump("dumps/gghouse_20260219.sql")
+
+    assert archived is True
+    mock_s3.copy_object.assert_called_once_with(
+        Bucket="test-bucket",
+        CopySource={"Bucket": "test-bucket", "Key": "dumps/gghouse_20260219.sql"},
+        Key="processed/gghouse_20260219.sql",
+    )
+
+
+def test_archive_processed_dump_returns_false_on_access_denied(monkeypatch):
+    mock_s3 = Mock()
+    mock_s3.copy_object.side_effect = daily_etl.ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "denied"}},
+        "CopyObject",
+    )
+    monkeypatch.setattr(daily_etl, "s3", mock_s3)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "test-bucket")
+
+    archived = daily_etl.archive_processed_dump("dumps/gghouse_20260219.sql")
+
+    assert archived is False
+
+
+def test_archive_processed_dump_raises_when_fail_on_error_enabled(monkeypatch):
+    mock_s3 = Mock()
+    mock_s3.copy_object.side_effect = daily_etl.ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "denied"}},
+        "CopyObject",
+    )
+    monkeypatch.setattr(daily_etl, "s3", mock_s3)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "test-bucket")
+
+    with pytest.raises(daily_etl.ClientError):
+        daily_etl.archive_processed_dump(
+            "dumps/gghouse_20260219.sql",
+            fail_on_error=True,
+        )
+
+
+def test_archive_processed_dump_returns_false_on_unexpected_exception(monkeypatch):
+    mock_s3 = Mock()
+    mock_s3.copy_object.side_effect = RuntimeError("unexpected failure")
+    monkeypatch.setattr(daily_etl, "s3", mock_s3)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "test-bucket")
+
+    archived = daily_etl.archive_processed_dump("dumps/gghouse_20260219.sql")
+
+    assert archived is False
+
+
 def test_extract_dump_date_from_key_parses_sql_and_gz():
     assert daily_etl.extract_dump_date_from_key("dumps/gghouse_20260214.sql") == date(2026, 2, 14)
     assert daily_etl.extract_dump_date_from_key("raw/dumps/gghouse_20260214.sql.gz") == date(2026, 2, 14)
@@ -511,6 +567,11 @@ def test_run_dbt_transformations_pre_phase_then_main_phase(monkeypatch):
     monkeypatch.setattr(daily_etl, "get_aurora_credentials", lambda: ("user", "pass"))
     monkeypatch.setattr(daily_etl, "cleanup_dbt_tmp_tables", lambda: 0)
     monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "unit-test-bucket")
+    monkeypatch.setitem(
+        daily_etl.args,
+        "DBT_PROJECT_PATH",
+        "s3://unit-test-bucket/dbt-project/releases/test-release/",
+    )
     monkeypatch.setitem(daily_etl.args, "AURORA_ENDPOINT", "test.cluster.amazonaws.com")
     monkeypatch.setitem(daily_etl.args, "ENVIRONMENT", "prod")
     monkeypatch.setenv("DBT_EXCLUDE_MODELS", "")
@@ -534,6 +595,10 @@ def test_run_dbt_transformations_pre_phase_then_main_phase(monkeypatch):
     monkeypatch.setattr(daily_etl.subprocess, "run", fake_run)
 
     assert daily_etl.run_dbt_transformations() is True
+
+    sync_commands = [cmd for cmd in calls if cmd[:3] == ["aws", "s3", "sync"]]
+    assert len(sync_commands) >= 1
+    assert sync_commands[0][3] == "s3://unit-test-bucket/dbt-project/releases/test-release/"
 
     run_commands = [cmd for cmd in calls if len(cmd) > 1 and cmd[0].endswith("/dbt") and cmd[1] == "run"]
     assert len(run_commands) == 3

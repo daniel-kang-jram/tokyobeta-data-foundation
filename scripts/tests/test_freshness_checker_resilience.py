@@ -3,9 +3,11 @@
 import builtins
 import json
 import types
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 
 TEMPLATE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -45,8 +47,8 @@ def _load_checker_module(monkeypatch, fail_pymysql_import: bool):
     return module
 
 
-def test_lambda_handler_runs_dump_checks_when_pymysql_missing(monkeypatch):
-    """Should continue dump checks even if DB dependency import fails."""
+def test_lambda_handler_fails_when_pymysql_missing(monkeypatch):
+    """Missing DB dependency must fail fast (no silent partial success)."""
     checker = _load_checker_module(monkeypatch, fail_pymysql_import=True)
 
     dump_check_calls = []
@@ -67,14 +69,19 @@ def test_lambda_handler_runs_dump_checks_when_pymysql_missing(monkeypatch):
     monkeypatch.setattr(checker, "send_dump_alert", lambda *args, **kwargs: None)
     monkeypatch.setattr(checker, "publish_metric", lambda *args, **kwargs: None)
     monkeypatch.setattr(checker, "send_alert", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        checker,
+        "check_upstream_sync_staleness",
+        lambda: {"manifest_key": None, "stale_entries": []},
+    )
+    runtime_alerts = []
+    monkeypatch.setattr(checker, "send_runtime_alert", lambda msg: runtime_alerts.append(msg))
 
-    result = checker.lambda_handler({}, None)
-    body = json.loads(result["body"])
+    with pytest.raises(RuntimeError):
+        checker.lambda_handler({}, None)
 
-    assert result["statusCode"] == 200
-    assert body["stale_dump_count"] == 0
-    assert body["db_checks_skipped"] is True
-    assert dump_check_calls
+    assert dump_check_calls == []
+    assert runtime_alerts
 
 
 def test_lambda_handler_reports_db_checks_enabled_with_pymysql(monkeypatch):
@@ -119,7 +126,21 @@ def test_lambda_handler_reports_db_checks_enabled_with_pymysql(monkeypatch):
 
 def test_lambda_handler_continues_when_dump_metric_publish_fails(monkeypatch):
     """Should still send dump alerts if CloudWatch metric publish fails."""
-    checker = _load_checker_module(monkeypatch, fail_pymysql_import=True)
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=False)
+
+    class _DummyCursor:
+        def execute(self, _sql):
+            return None
+
+        def fetchone(self):
+            return (10, None, 0)
+
+    class _DummyConn:
+        def cursor(self):
+            return _DummyCursor()
+
+        def close(self):
+            return None
 
     def _missing_dump(prefix, date_str):
         return {
@@ -133,6 +154,8 @@ def test_lambda_handler_continues_when_dump_metric_publish_fails(monkeypatch):
 
     sent_alerts = []
 
+    monkeypatch.setattr(checker, "get_db_credentials", lambda: {"username": "u", "password": "p"})
+    monkeypatch.setattr(checker.pymysql, "connect", lambda **kwargs: _DummyConn())
     monkeypatch.setattr(checker, "check_dump_file", _missing_dump)
     monkeypatch.setattr(
         checker,
@@ -185,3 +208,87 @@ def test_check_dump_file_falls_back_to_gzip_when_plain_missing(monkeypatch):
     assert result["missing"] is False
     assert result["ok"] is True
     assert result["key"].endswith("gghouse_20260216.sql.gz")
+
+
+def test_evaluate_upstream_sync_staleness_excludes_inquiries(monkeypatch):
+    """Upstream staleness checks must exclude inquiries table from incident gating."""
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=False)
+
+    now_jst = datetime(2026, 2, 21, 8, 0, tzinfo=timezone(timedelta(hours=9)))
+    manifest = {
+        "max_updated_at_by_table": {
+            "movings": "2026-02-20T02:00:00+09:00",
+            "tenants": "2026-02-20T09:30:00+09:00",
+            "rooms": "2026-02-20T09:30:00+09:00",
+            "apartments": "2026-02-20T09:30:00+09:00",
+            "inquiries": "2026-02-10T00:00:00+09:00",
+        }
+    }
+
+    stale = checker.evaluate_upstream_sync_staleness(
+        manifest=manifest,
+        now_jst=now_jst,
+        stale_hours=24,
+        tables=["movings", "tenants", "rooms", "apartments"],
+    )
+
+    assert [entry["table"] for entry in stale] == ["movings"]
+
+
+def test_lambda_handler_reports_upstream_sync_staleness(monkeypatch):
+    """Lambda should return non-200 and alert when upstream sync is stale."""
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=False)
+
+    class _DummyCursor:
+        def execute(self, _sql):
+            return None
+
+        def fetchone(self):
+            return (10, None, 0)
+
+    class _DummyConn:
+        def cursor(self):
+            return _DummyCursor()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(checker, "get_db_credentials", lambda: {"username": "u", "password": "p"})
+    monkeypatch.setattr(checker.pymysql, "connect", lambda **kwargs: _DummyConn())
+    monkeypatch.setattr(checker, "check_dump_file", lambda prefix, date_str: {
+        "prefix": prefix,
+        "key": f"{prefix.rstrip('/')}/gghouse_{date_str}.sql.gz",
+        "size_bytes": 100,
+        "ok": True,
+        "missing": False,
+        "error": None,
+    })
+    monkeypatch.setattr(checker, "publish_dump_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(checker, "send_dump_alert", lambda *args, **kwargs: None)
+    monkeypatch.setattr(checker, "publish_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(checker, "send_alert", lambda *args, **kwargs: None)
+
+    upstream_alerts = []
+    monkeypatch.setattr(
+        checker,
+        "check_upstream_sync_staleness",
+        lambda: {
+            "manifest_key": "dumps-manifest/gghouse_20260221.json",
+            "stale_entries": [
+                {"table": "movings", "max_updated_at": "2026-02-19T00:00:00+09:00", "lag_hours": 36.0}
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        checker,
+        "send_upstream_sync_alert",
+        lambda stale_entries, manifest_key: upstream_alerts.append((manifest_key, stale_entries)),
+    )
+
+    result = checker.lambda_handler({}, None)
+    body = json.loads(result["body"])
+
+    assert result["statusCode"] == 400
+    assert body["stale_upstream_count"] == 1
+    assert body["stale_upstream"][0]["table"] == "movings"
+    assert upstream_alerts
