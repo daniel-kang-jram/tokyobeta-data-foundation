@@ -78,6 +78,12 @@ evidence/build/
 evidence/.evidence/
 evidence/sources/**/connection.options.yaml
 evidence/screenshots/
+evidence/static/__auth/assets/
+evidence_snapshot/
 
 # Terraform evidence_hosting build artifacts
 terraform/modules/evidence_hosting/.build/
+
+# Codex local workspace artifacts
+.codex/
+.codex-artifacts/
