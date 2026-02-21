@@ -18,6 +18,12 @@ variable "create_rds_cron_secret" {
   default     = false
 }
 
+variable "manage_rds_cron_secret_value" {
+  type        = bool
+  description = "Whether Terraform is allowed to rotate/write the RDS cron secret value"
+  default     = true
+}
+
 variable "rds_cron_host" {
   type        = string
   description = "RDS hostname for cron job database dumps"
@@ -27,7 +33,7 @@ variable "rds_cron_host" {
 variable "rds_cron_username" {
   type        = string
   description = "RDS username for cron jobs"
-  default     = "readonly_user"
+  default     = "admin"
 }
 
 variable "rds_cron_password" {
@@ -40,7 +46,7 @@ variable "rds_cron_password" {
 variable "rds_cron_database" {
   type        = string
   description = "RDS database name for dumps"
-  default     = "gghouse"
+  default     = "staging"
 }
 
 variable "rds_cron_port" {

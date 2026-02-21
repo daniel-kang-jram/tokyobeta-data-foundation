@@ -80,3 +80,9 @@ variable "daily_strict_dump_continuity" {
   type        = bool
   default     = false
 }
+
+variable "artifact_release" {
+  description = "Immutable artifact release identifier used for Glue scripts and dbt project paths"
+  type        = string
+  default     = "legacy"
+}

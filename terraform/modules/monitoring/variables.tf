@@ -98,3 +98,27 @@ variable "s3_dump_require_all_prefixes" {
   type        = bool
   default     = true
 }
+
+variable "s3_manifest_prefix" {
+  description = "S3 prefix containing per-day dump manifests"
+  type        = string
+  default     = "dumps-manifest"
+}
+
+variable "upstream_sync_check_enabled" {
+  description = "Whether freshness checker validates upstream sync recency from manifest timestamps"
+  type        = bool
+  default     = true
+}
+
+variable "upstream_sync_stale_hours" {
+  description = "Staleness threshold in hours for upstream sync table timestamps"
+  type        = number
+  default     = 24
+}
+
+variable "upstream_sync_tables" {
+  description = "Comma-separated upstream tables to validate for staleness (inquiries excluded by default)"
+  type        = string
+  default     = "movings,tenants,rooms,apartments"
+}

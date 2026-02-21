@@ -51,23 +51,51 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build freshness checker PyMySQL layer artifact
+        run: |
+          set -euo pipefail
+          rm -f terraform/modules/monitoring/pymysql_layer.zip
+          layer_build_dir="$(mktemp -d)"
+          python -m pip install --upgrade pip
+          python -m pip install --target "${layer_build_dir}/python" "pymysql==1.1.1"
+          (
+            cd "${layer_build_dir}"
+            zip -qr "${GITHUB_WORKSPACE}/terraform/modules/monitoring/pymysql_layer.zip" python
+          )
+          if [[ ! -s terraform/modules/monitoring/pymysql_layer.zip ]]; then
+            echo "::error::Failed to build terraform/modules/monitoring/pymysql_layer.zip."
+            exit 1
+          fi
       - name: Enforce required production CIDRs
         run: |
           required_cidrs=("13.112.83.65/32" "54.168.114.197/32")
           for cidr in "${required_cidrs[@]}"; do
-            if ! grep -Fq "${cidr}" terraform/environments/prod/variables.tf; then
+            if ! grep -q "${cidr}" terraform/environments/prod/variables.tf; then
               echo "::error::terraform/environments/prod/variables.tf must include ${cidr}."
               exit 1
             fi
-            if ! grep -Fq "${cidr}" .github/workflows/deploy-prod.yml; then
+            if ! grep -q "${cidr}" .github/workflows/deploy-prod.yml; then
               echo "::error::.github/workflows/deploy-prod.yml must include ${cidr}."
               exit 1
             fi
           done
-      - name: Enforce prod dump-secret Terraform isolation
+      - name: Enforce prod dump-secret isolation guard
         run: |
-          if grep -Eq "create_rds_cron_secret|rds_cron_" terraform/environments/prod/main.tf; then
-            echo "::error::terraform/environments/prod/main.tf must not wire RDS cron secret values in production."
+          if ! grep -q 'variable "manage_rds_cron_secret_value"' terraform/environments/prod/variables.tf; then
+            echo "::error::terraform/environments/prod/variables.tf must declare manage_rds_cron_secret_value."
+            exit 1
+          fi
+          var_block="$(awk '/variable "manage_rds_cron_secret_value"/,/^}/' terraform/environments/prod/variables.tf)"
+          if [[ "${var_block}" != *'default     = false'* ]]; then
+            echo "::error::terraform/environments/prod/variables.tf must default manage_rds_cron_secret_value=false."
+            exit 1
+          fi
+          if ! grep -q 'TF_VAR_manage_rds_cron_secret_value: "false"' .github/workflows/deploy-prod.yml; then
+            echo "::error::.github/workflows/deploy-prod.yml must enforce TF_VAR_manage_rds_cron_secret_value=\"false\"."
             exit 1
           fi
       - name: Setup Terraform

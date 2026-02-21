@@ -34,6 +34,6 @@ output "rds_cron_username" {
 
 output "rds_cron_password" {
   description = "RDS cron password (sensitive)"
-  value       = var.create_rds_cron_secret ? (var.rds_cron_password != "" ? var.rds_cron_password : random_password.rds_cron_password[0].result) : ""
+  value       = var.create_rds_cron_secret ? (trimspace(var.rds_cron_password) != "" ? var.rds_cron_password : random_password.aurora_password.result) : ""
   sensitive   = true
 }

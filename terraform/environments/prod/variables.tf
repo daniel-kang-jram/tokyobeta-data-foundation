@@ -12,6 +12,17 @@ variable "s3_source_prefix" {
   default     = "dumps/"
 }
 
+variable "artifact_release" {
+  description = "Immutable release identifier for Glue/dbt artifacts in S3"
+  type        = string
+  default     = "legacy"
+
+  validation {
+    condition     = length(trimspace(var.artifact_release)) > 0
+    error_message = "artifact_release must be non-empty."
+  }
+}
+
 variable "alert_email" {
   description = "Email address for monitoring alerts"
   type        = string
@@ -43,6 +54,54 @@ variable "allowed_cidr_blocks" {
     condition     = contains(var.allowed_cidr_blocks, "54.168.114.197/32")
     error_message = "allowed_cidr_blocks must include 54.168.114.197/32 (V3 upstream sync source IP)."
   }
+}
+
+variable "create_rds_cron_secret" {
+  description = "Whether to manage production dump-source cron secret in Terraform"
+  type        = bool
+  default     = true
+}
+
+variable "manage_rds_cron_secret_value" {
+  description = "Whether Terraform may rotate production dump-source secret value"
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = var.manage_rds_cron_secret_value == false
+    error_message = "Production must keep manage_rds_cron_secret_value=false to prevent dump source drift."
+  }
+}
+
+variable "rds_cron_host" {
+  description = "Dump source host for production cron secret"
+  type        = string
+  default     = ""
+}
+
+variable "rds_cron_username" {
+  description = "Dump source username for production cron secret"
+  type        = string
+  default     = ""
+}
+
+variable "rds_cron_password" {
+  description = "Optional explicit dump-source password. Leave blank to reuse Aurora admin password."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "rds_cron_database" {
+  description = "Dump source database/schema for production cron secret"
+  type        = string
+  default     = ""
+}
+
+variable "rds_cron_port" {
+  description = "Dump source port for production cron secret"
+  type        = number
+  default     = 3306
 }
 
 # Evidence hosting (CloudFront + S3 + Cognito)

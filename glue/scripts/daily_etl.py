@@ -1148,10 +1148,13 @@ def run_dbt_transformations():
     
     # Download dbt project from S3
     dbt_local_path = "/tmp/dbt-project"
+    dbt_project_s3_path = args.get("DBT_PROJECT_PATH") or f"s3://{args['S3_SOURCE_BUCKET']}/dbt-project/"
+    if not dbt_project_s3_path.startswith("s3://"):
+        raise ValueError(f"Invalid DBT_PROJECT_PATH: {dbt_project_s3_path}")
     sync_start = time.perf_counter()
     subprocess.run([
         "aws", "s3", "sync",
-        f"s3://{args['S3_SOURCE_BUCKET']}/dbt-project/",
+        dbt_project_s3_path,
         dbt_local_path
     ], check=True)
     print(f"[dbt_timing] s3_sync_seconds={time.perf_counter() - sync_start:.2f}")
@@ -2597,18 +2600,42 @@ def enrich_nationality_data():
         traceback.print_exc()
         return 0
 
-def archive_processed_dump(s3_key):
-    """Move processed dump to archive folder."""
+def archive_processed_dump(s3_key, fail_on_error=False):
+    """Move processed dump to archive folder.
+
+    Args:
+        s3_key: Source dump key under the configured source bucket.
+        fail_on_error: When True, re-raise archival errors.
+
+    Returns:
+        bool: True if archived successfully, False if skipped due to archive error.
+    """
     source_key = s3_key
     dest_key = get_processed_dump_key(source_key)
-    
-    s3.copy_object(
-        Bucket=args['S3_SOURCE_BUCKET'],
-        CopySource={'Bucket': args['S3_SOURCE_BUCKET'], 'Key': source_key},
-        Key=dest_key
-    )
-    
+
+    try:
+        s3.copy_object(
+            Bucket=args['S3_SOURCE_BUCKET'],
+            CopySource={'Bucket': args['S3_SOURCE_BUCKET'], 'Key': source_key},
+            Key=dest_key
+        )
+    except Exception as exc:
+        error_code = "Unknown"
+        error_message = str(exc)
+        if isinstance(exc, ClientError):
+            error = exc.response.get("Error", {})
+            error_code = error.get("Code", "Unknown")
+            error_message = error.get("Message", str(exc))
+        print(
+            "WARN: Failed to archive processed dump "
+            f"{source_key} -> {dest_key}: {error_code} ({error_message})"
+        )
+        if fail_on_error:
+            raise
+        return False
+
     print(f"Archived dump to {dest_key}")
+    return True
 
 def main():
     """Main ETL workflow."""
@@ -2624,6 +2651,7 @@ def main():
         run_backup_cleanup = env_bool("DAILY_RUN_BACKUP_CLEANUP", True)
         include_staging_backup_cleanup = env_bool("DAILY_CLEANUP_STAGING_BACKUPS", True)
         run_occupancy_gold_step = runtime_bool("DAILY_RUN_OCCUPANCY_GOLD_STEP", True)
+        fail_on_archive_error = runtime_bool("DAILY_FAIL_ON_ARCHIVE_ERROR", False)
         occupancy_lookback_days = env_int("DAILY_OCCUPANCY_LOOKBACK_DAYS", 3, minimum=0)
         occupancy_forward_days = env_int("DAILY_OCCUPANCY_FORWARD_DAYS", 90, minimum=0)
 
@@ -2642,6 +2670,7 @@ def main():
         freshness_snapshot: Dict[str, Any] = {}
         quality_calendar_rows = 0
         quality_calendar_gap_days = 0
+        dump_archive_success = False
 
         # Step 1: Always find and download latest dump
         latest_key = None
@@ -2793,7 +2822,10 @@ def main():
 
         # Step 10: Archive processed dump (archive only; not used for run decisions)
         with timed_step("10_archive_processed_dump", step_timings):
-            archive_processed_dump(latest_key)
+            dump_archive_success = archive_processed_dump(
+                latest_key,
+                fail_on_error=fail_on_archive_error,
+            )
         
         # Calculate duration
         duration = (datetime.now() - start_time).total_seconds()
@@ -2813,6 +2845,10 @@ def main():
         print(f"SQL statements executed: {stmt_count}")
         print(f"dbt transformations: {'Success' if dbt_success else 'Failed'}")
         print(f"Gold occupancy KPI dates processed: {occupancy_rows_processed}")
+        print(
+            "Processed dump archived: "
+            f"{'Success' if dump_archive_success else 'Skipped due to archive warning'}"
+        )
         print(f"Data quality calendar rows upserted: {quality_calendar_rows}")
         print(f"Data quality gap days in window: {quality_calendar_gap_days}")
         if freshness_snapshot:
