@@ -196,14 +196,17 @@ module "evidence_hosting" {
     aws.us_east_1 = aws.us_east_1
   }
 
-  environment           = local.environment
-  project_name          = local.project_name
-  custom_domain_name    = var.evidence_custom_domain
-  auth_base_url         = var.evidence_auth_base_url
-  enable_auth           = var.evidence_enable_auth
-  auth_users            = var.evidence_auth_users
-  enable_custom_domain  = var.evidence_enable_custom_domain
-  cognito_domain_prefix = var.evidence_cognito_domain_prefix
+  environment                  = local.environment
+  project_name                 = local.project_name
+  custom_domain_name           = var.evidence_custom_domain
+  auth_base_url                = var.evidence_auth_base_url
+  enable_auth                  = var.evidence_enable_auth
+  auth_users                   = var.evidence_auth_users
+  auth_ui_mode                 = "login_page"
+  auth_session_max_age_seconds = 28800
+  auth_login_copy_language     = "en"
+  enable_custom_domain         = var.evidence_enable_custom_domain
+  cognito_domain_prefix        = var.evidence_cognito_domain_prefix
 
   vpc_id                      = module.networking.vpc_id
   private_subnet_ids          = module.networking.private_subnet_ids
@@ -222,14 +225,17 @@ module "evidence_snapshot_hosting" {
     aws.us_east_1 = aws.us_east_1
   }
 
-  environment           = local.environment
-  project_name          = "${local.project_name}-snapshot"
-  custom_domain_name    = var.evidence_snapshot_custom_domain
-  auth_base_url         = var.evidence_snapshot_auth_base_url
-  enable_auth           = var.evidence_snapshot_enable_auth
-  auth_users            = length(var.evidence_snapshot_auth_users) > 0 ? var.evidence_snapshot_auth_users : var.evidence_auth_users
-  enable_custom_domain  = var.evidence_snapshot_enable_custom_domain
-  cognito_domain_prefix = var.evidence_snapshot_cognito_domain_prefix
+  environment                  = local.environment
+  project_name                 = "${local.project_name}-snapshot"
+  custom_domain_name           = var.evidence_snapshot_custom_domain
+  auth_base_url                = var.evidence_snapshot_auth_base_url
+  enable_auth                  = var.evidence_snapshot_enable_auth
+  auth_users                   = length(var.evidence_snapshot_auth_users) > 0 ? var.evidence_snapshot_auth_users : var.evidence_auth_users
+  auth_ui_mode                 = "login_page"
+  auth_session_max_age_seconds = 28800
+  auth_login_copy_language     = "en"
+  enable_custom_domain         = var.evidence_snapshot_enable_custom_domain
+  cognito_domain_prefix        = var.evidence_snapshot_cognito_domain_prefix
 
   vpc_id                      = module.networking.vpc_id
   private_subnet_ids          = module.networking.private_subnet_ids

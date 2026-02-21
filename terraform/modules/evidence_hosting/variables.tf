@@ -32,6 +32,39 @@ variable "auth_users" {
   sensitive   = true
 }
 
+variable "auth_ui_mode" {
+  description = "Authentication UI mode: browser popup basic auth or branded login page"
+  type        = string
+  default     = "browser_basic"
+
+  validation {
+    condition     = contains(["browser_basic", "login_page"], var.auth_ui_mode)
+    error_message = "auth_ui_mode must be one of: browser_basic, login_page."
+  }
+}
+
+variable "auth_session_max_age_seconds" {
+  description = "Session cookie TTL in seconds for login_page auth mode"
+  type        = number
+  default     = 28800
+
+  validation {
+    condition     = var.auth_session_max_age_seconds >= 300 && var.auth_session_max_age_seconds <= 86400
+    error_message = "auth_session_max_age_seconds must be between 300 and 86400."
+  }
+}
+
+variable "auth_login_copy_language" {
+  description = "Copy language for branded login page"
+  type        = string
+  default     = "en"
+
+  validation {
+    condition     = contains(["en", "ja", "bilingual"], var.auth_login_copy_language)
+    error_message = "auth_login_copy_language must be one of: en, ja, bilingual."
+  }
+}
+
 variable "enable_custom_domain" {
   description = "If true, attach custom domain + ACM cert to CloudFront. Keep false until DNS validation completes."
   type        = bool
@@ -86,4 +119,16 @@ variable "schedule_expression" {
   description = "EventBridge schedule expression for daily refresh"
   type        = string
   default     = "cron(30 23 * * ? *)" # 08:30 JST = 23:30 UTC
+}
+
+variable "buildspec_path" {
+  description = "Repository path to buildspec used by CodeBuild"
+  type        = string
+  default     = "evidence/buildspec.yml"
+}
+
+variable "enable_schedule" {
+  description = "Enable EventBridge schedule for automatic refresh"
+  type        = bool
+  default     = true
 }
