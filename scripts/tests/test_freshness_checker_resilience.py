@@ -1,6 +1,7 @@
 """Tests for monitoring freshness checker template resilience."""
 
 import builtins
+import io
 import json
 import types
 from datetime import datetime, timedelta, timezone
@@ -292,3 +293,56 @@ def test_lambda_handler_reports_upstream_sync_staleness(monkeypatch):
     assert body["stale_upstream_count"] == 1
     assert body["stale_upstream"][0]["table"] == "movings"
     assert upstream_alerts
+
+
+def test_load_latest_dump_manifest_paginates_before_selecting_latest(monkeypatch):
+    """Manifest scan must paginate S3 listings before picking latest key."""
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=True)
+
+    first_key = "dumps-manifest/gghouse_20260220.json"
+    second_key = "dumps-manifest/gghouse_20260221.json"
+
+    pages = {
+        None: {
+            "Contents": [
+                {
+                    "Key": first_key,
+                    "LastModified": datetime(2026, 2, 20, 0, 0, tzinfo=timezone.utc),
+                }
+            ],
+            "IsTruncated": True,
+            "NextContinuationToken": "next-page",
+        },
+        "next-page": {
+            "Contents": [
+                {
+                    "Key": second_key,
+                    "LastModified": datetime(2026, 2, 21, 0, 0, tzinfo=timezone.utc),
+                }
+            ],
+            "IsTruncated": False,
+        },
+    }
+    requested_tokens = []
+
+    def _list_objects_v2(Bucket, Prefix, ContinuationToken=None):
+        requested_tokens.append(ContinuationToken)
+        return pages[ContinuationToken]
+
+    manifests = {
+        first_key: {"marker": "old"},
+        second_key: {"marker": "new"},
+    }
+
+    def _get_object(Bucket, Key):
+        payload = json.dumps(manifests[Key]).encode("utf-8")
+        return {"Body": io.BytesIO(payload)}
+
+    monkeypatch.setattr(checker.s3, "list_objects_v2", _list_objects_v2)
+    monkeypatch.setattr(checker.s3, "get_object", _get_object)
+
+    manifest_key, manifest = checker.load_latest_dump_manifest()
+
+    assert manifest_key == second_key
+    assert manifest == {"marker": "new"}
+    assert requested_tokens == [None, "next-page"]

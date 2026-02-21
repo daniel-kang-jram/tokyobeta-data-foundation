@@ -272,12 +272,37 @@ def parse_manifest_datetime(raw_value):
 def load_latest_dump_manifest():
     """Load the most recent dump manifest from S3."""
     prefix = f'{S3_MANIFEST_PREFIX}/gghouse_'
-    response = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix)
-    contents = response.get('Contents', [])
-    if not contents:
+    latest = None
+    continuation_token = None
+
+    while True:
+        request = {'Bucket': S3_BUCKET, 'Prefix': prefix}
+        if continuation_token is not None:
+            request['ContinuationToken'] = continuation_token
+
+        response = s3.list_objects_v2(**request)
+        for item in response.get('Contents', []):
+            if latest is None:
+                latest = item
+                continue
+
+            latest_modified = latest.get('LastModified')
+            item_modified = item.get('LastModified')
+            if latest_modified is None and item_modified is not None:
+                latest = item
+                continue
+            if item_modified is not None and item_modified > latest_modified:
+                latest = item
+
+        if not response.get('IsTruncated'):
+            break
+        continuation_token = response.get('NextContinuationToken')
+        if continuation_token is None:
+            break
+
+    if latest is None:
         return None, None
 
-    latest = max(contents, key=lambda item: item.get('LastModified'))
     manifest_key = latest['Key']
     manifest_obj = s3.get_object(Bucket=S3_BUCKET, Key=manifest_key)
     manifest = json.loads(manifest_obj['Body'].read().decode('utf-8'))
