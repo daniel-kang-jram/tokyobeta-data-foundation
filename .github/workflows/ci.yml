@@ -85,6 +85,15 @@ jobs:
           done
       - name: Enforce prod dump-secret isolation guard
         run: |
+          if ! grep -q 'variable "create_rds_cron_secret"' terraform/environments/prod/variables.tf; then
+            echo "::error::terraform/environments/prod/variables.tf must declare create_rds_cron_secret."
+            exit 1
+          fi
+          create_var_block="$(awk '/variable "create_rds_cron_secret"/,/^}/' terraform/environments/prod/variables.tf)"
+          if [[ "${create_var_block}" != *'default     = false'* ]]; then
+            echo "::error::terraform/environments/prod/variables.tf must default create_rds_cron_secret=false."
+            exit 1
+          fi
           if ! grep -q 'variable "manage_rds_cron_secret_value"' terraform/environments/prod/variables.tf; then
             echo "::error::terraform/environments/prod/variables.tf must declare manage_rds_cron_secret_value."
             exit 1
@@ -96,6 +105,10 @@ jobs:
           fi
           if ! grep -q 'TF_VAR_manage_rds_cron_secret_value: "false"' .github/workflows/deploy-prod.yml; then
             echo "::error::.github/workflows/deploy-prod.yml must enforce TF_VAR_manage_rds_cron_secret_value=\"false\"."
+            exit 1
+          fi
+          if ! grep -q 'TF_VAR_create_rds_cron_secret: "false"' .github/workflows/deploy-prod.yml; then
+            echo "::error::.github/workflows/deploy-prod.yml must enforce TF_VAR_create_rds_cron_secret=\"false\"."
             exit 1
           fi
       - name: Setup Terraform

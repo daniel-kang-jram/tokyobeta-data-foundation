@@ -59,7 +59,12 @@ variable "allowed_cidr_blocks" {
 variable "create_rds_cron_secret" {
   description = "Whether to manage production dump-source cron secret in Terraform"
   type        = bool
-  default     = true
+  default     = false
+
+  validation {
+    condition     = var.create_rds_cron_secret == false
+    error_message = "Production must keep create_rds_cron_secret=false to avoid cron secret drift."
+  }
 }
 
 variable "manage_rds_cron_secret_value" {
