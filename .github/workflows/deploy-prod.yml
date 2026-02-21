@@ -166,7 +166,19 @@ jobs:
       - name: Apply Terraform
         working-directory: terraform/environments/prod
         run: |
+          set -euo pipefail
           terraform init
+
+          # Import existing prod cron secret into Terraform state when it exists in AWS but not in state.
+          CRON_SECRET_ID="tokyobeta/prod/rds/cron-credentials"
+          CRON_SECRET_ADDR="module.secrets.aws_secretsmanager_secret.rds_cron_credentials[0]"
+          if aws secretsmanager describe-secret --secret-id "${CRON_SECRET_ID}" >/dev/null 2>&1; then
+            if ! terraform state list | grep -qx "${CRON_SECRET_ADDR}"; then
+              echo "Importing existing cron secret into Terraform state: ${CRON_SECRET_ID}"
+              terraform import "${CRON_SECRET_ADDR}" "${CRON_SECRET_ID}"
+            fi
+          fi
+
           terraform plan -out=prod.tfplan
           terraform show -json prod.tfplan > prod.tfplan.json
 
