@@ -65,7 +65,7 @@ resource "aws_secretsmanager_secret_version" "rds_cron_credentials" {
 
     precondition {
       condition = (
-        !var.create_rds_cron_secret
+        !var.manage_rds_cron_secret_value
         || (
           trimspace(var.rds_cron_host) != ""
           && trimspace(var.rds_cron_username) != ""
@@ -77,7 +77,7 @@ resource "aws_secretsmanager_secret_version" "rds_cron_credentials" {
 
     precondition {
       condition = (
-        !var.create_rds_cron_secret
+        !var.manage_rds_cron_secret_value
         || trimspace(var.rds_cron_password) != ""
         || can(regex("tokyobeta-prod-aurora", var.rds_cron_host))
       )

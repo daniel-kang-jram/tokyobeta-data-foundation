@@ -34,7 +34,7 @@ jobs:
       TF_VAR_alert_emails: '["jram-ggh@outlook.com","daniel.kang@jram.jp"]'
       TF_VAR_allowed_cidr_blocks: '["85.115.98.80/32","13.112.83.65/32","54.168.114.197/32"]'
       TF_VAR_artifact_release: ${{ github.sha }}
-      TF_VAR_create_rds_cron_secret: "false"
+      TF_VAR_create_rds_cron_secret: "true"
       TF_VAR_manage_rds_cron_secret_value: "false"
       # Keep Evidence Basic Auth enabled in Terraform-managed CloudFront config.
       # Value should be a JSON map string, e.g. {"admin":"<password>"}.
@@ -78,8 +78,8 @@ jobs:
             echo "::error::TF_VAR_manage_rds_cron_secret_value must be false in production."
             exit 1
           fi
-          if [[ "${TF_VAR_create_rds_cron_secret}" != "false" ]]; then
-            echo "::error::TF_VAR_create_rds_cron_secret must be false in production."
+          if [[ "${TF_VAR_create_rds_cron_secret}" != "true" ]]; then
+            echo "::error::TF_VAR_create_rds_cron_secret must be true in production."
             exit 1
           fi
           if [[ -z "${TF_VAR_evidence_auth_users}" ]]; then
