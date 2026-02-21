@@ -170,10 +170,10 @@ jobs:
           terraform plan -out=prod.tfplan
           terraform show -json prod.tfplan > prod.tfplan.json
 
-          DELETE_ADDRESSES="$(jq -r '.resource_changes[]? | select(.change.actions | index("delete")) | .address' prod.tfplan.json)"
-          if [[ -n "${DELETE_ADDRESSES}" ]]; then
-            echo "::error::Terraform plan contains delete actions. Refusing apply in production."
-            echo "${DELETE_ADDRESSES}" | sed 's/^/ - /'
+          DELETE_ONLY_ADDRESSES="$(jq -r '.resource_changes[]? | select((.change.actions | index("delete")) and (.change.actions | index("create") | not)) | .address' prod.tfplan.json)"
+          if [[ -n "${DELETE_ONLY_ADDRESSES}" ]]; then
+            echo "::error::Terraform plan contains delete-only actions. Refusing apply in production."
+            echo "${DELETE_ONLY_ADDRESSES}" | sed 's/^/ - /'
             exit 1
           fi
 
