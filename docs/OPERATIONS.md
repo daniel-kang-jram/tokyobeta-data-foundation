@@ -332,6 +332,68 @@ aws sns list-subscriptions-by-topic \
 - Secondary: CloudWatch metric alarms remain enabled, with corrected dimensions (`JobName`, `JobRunId=ALL`, `Type=count`) and `treat_missing_data=notBreaching`.
 - SNS recipients are Terraform-managed from merged set of `alert_email` + `alert_emails`.
 
+### Controlled Failure Drill (Required after alert changes)
+- Goal: prove Glue `FAILED` state reaches SNS and both email endpoints.
+- Safety: do not touch external V3 sync; test only `tokyobeta-prod-daily-etl` runtime args.
+
+```bash
+# 1) Trigger intentional Glue failure (invalid secret ARN override)
+aws glue start-job-run \
+  --job-name tokyobeta-prod-daily-etl \
+  --arguments '{
+    "--DAILY_TARGET_DATE":"2026-02-22",
+    "--AURORA_SECRET_ARN":"arn:aws:secretsmanager:ap-northeast-1:343881458651:secret:tokyobeta/prod/aurora/credentials-INTENTIONAL-FAIL"
+  }' \
+  --profile gghouse
+
+# 2) Wait for terminal FAILED state
+aws glue get-job-run \
+  --job-name tokyobeta-prod-daily-etl \
+  --run-id <RUN_ID_FROM_STEP_1> \
+  --query 'JobRun.{State:JobRunState,Error:ErrorMessage,Started:StartedOn,Completed:CompletedOn}' \
+  --output json \
+  --profile gghouse
+
+# 3) Verify EventBridge invocation for failure rule
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/Events \
+  --metric-name Invocations \
+  --dimensions Name=RuleName,Value=tokyobeta-prod-glue-job-state-failures \
+  --statistics Sum \
+  --period 60 \
+  --start-time <UTC-START> \
+  --end-time <UTC-END> \
+  --profile gghouse
+
+# 4) Verify SNS publish + delivery (expect publish=1, delivered=2 for two recipients)
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/SNS \
+  --metric-name NumberOfMessagesPublished \
+  --dimensions Name=TopicName,Value=tokyobeta-prod-dashboard-etl-alerts \
+  --statistics Sum \
+  --period 60 \
+  --start-time <UTC-START> \
+  --end-time <UTC-END> \
+  --profile gghouse
+
+aws cloudwatch get-metric-statistics \
+  --namespace AWS/SNS \
+  --metric-name NumberOfNotificationsDelivered \
+  --dimensions Name=TopicName,Value=tokyobeta-prod-dashboard-etl-alerts \
+  --statistics Sum \
+  --period 60 \
+  --start-time <UTC-START> \
+  --end-time <UTC-END> \
+  --profile gghouse
+```
+
+- Acceptance criteria:
+  - Glue run reaches `FAILED`.
+  - EventBridge failure rule shows `Invocations >= 1` in the test window.
+  - SNS metrics show `NumberOfMessagesPublished >= 1`.
+  - SNS metrics show `NumberOfNotificationsDelivered >= 2`.
+  - Inbox confirmation from both recipients (`daniel.kang@jram.jp`, `jram-ggh@outlook.com`).
+
 ### Freshness Checker Runtime Contract
 - Lambda layer `pymysql_layer.zip` is mandatory and attached in Terraform.
 - Missing `pymysql` is a hard runtime failure (no degraded success path).
