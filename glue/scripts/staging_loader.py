@@ -41,6 +41,8 @@ job.init(args['JOB_NAME'], args)
 s3 = boto3.client('s3')
 secretsmanager = boto3.client('secretsmanager')
 
+STAGING_PERSISTENT_TABLES = {"property_geo_latlon_backup"}
+
 
 def normalize_statement(stmt: str) -> str:
     """
@@ -244,6 +246,37 @@ def parse_dump_file(dump_path):
     return statements
 
 
+def ensure_property_geo_latlon_backup_table(cursor, schema='staging'):
+    """
+    Ensure persistent property geolocation backup table exists.
+
+    Args:
+        cursor: DB cursor
+        schema: Target schema name
+    """
+    cursor.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS `{schema}`.`property_geo_latlon_backup` (
+            `apartment_id` BIGINT NOT NULL,
+            `asset_id_hj` VARCHAR(255) NULL,
+            `apartment_name` VARCHAR(255) NULL,
+            `full_address` VARCHAR(1024) NULL,
+            `prefecture` VARCHAR(128) NULL,
+            `municipality` VARCHAR(128) NULL,
+            `latitude` DECIMAL(11,8) NOT NULL,
+            `longitude` DECIMAL(11,8) NOT NULL,
+            `source_updated_at` DATETIME NULL,
+            `source_table` VARCHAR(64) NOT NULL DEFAULT 'staging.apartments',
+            `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+                ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`apartment_id`),
+            KEY `idx_property_geo_coords` (`latitude`, `longitude`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    )
+
+
 def load_to_aurora_staging(connection, statements, schema='staging'):
     """
     Load SQL statements into Aurora staging schema.
@@ -281,6 +314,9 @@ def load_to_aurora_staging(connection, statements, schema='staging'):
             print(f"Found {len(existing_tables)} existing {schema} tables - SQL dump will handle recreation")
         else:
             print(f"No existing {schema} tables - clean load")
+
+        ensure_property_geo_latlon_backup_table(cursor, schema=schema)
+        print(f"Verified persistent table: {schema}.property_geo_latlon_backup")
         
         connection.commit()
         
@@ -306,6 +342,10 @@ def load_to_aurora_staging(connection, statements, schema='staging'):
         
         connection.commit()
         print(f"Successfully executed {executed} statements")
+
+        # Re-create in case SQL dump dropped staging tables.
+        ensure_property_geo_latlon_backup_table(cursor, schema=schema)
+        connection.commit()
         
         # Count tables created
         cursor.execute(f"""
@@ -351,6 +391,20 @@ def cleanup_empty_staging_tables(connection, schema='staging'):
         """)
         
         empty_tables = [row[0] for row in cursor.fetchall()]
+        preserved_tables = [
+            table_name for table_name in empty_tables
+            if table_name in STAGING_PERSISTENT_TABLES
+        ]
+        empty_tables = [
+            table_name for table_name in empty_tables
+            if table_name not in STAGING_PERSISTENT_TABLES
+        ]
+
+        if preserved_tables:
+            print(
+                "Skipping persistent empty tables: "
+                + ", ".join(sorted(preserved_tables))
+            )
         
         if not empty_tables:
             print(f"No empty tables found - {schema} schema is clean")
