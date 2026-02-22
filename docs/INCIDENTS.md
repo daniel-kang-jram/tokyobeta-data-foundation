@@ -307,7 +307,7 @@ The legacy upstream source (`basis-instance-1`, DB `basis`) was no longer resolv
 **Date:** 2026-02-21
 **Detected:** 2026-02-21 09:19 JST
 **Severity:** High
-**Status:** ✅ Resolved in code/IaC (deployment verification required in prod run)
+**Status:** ✅ Resolved and production-verified
 
 ### Summary
 
@@ -365,6 +365,40 @@ In parallel, the primary Glue failure alarm path had remained ineffective (`INSU
    - `.github/workflows/deploy-prod.yml` now publishes immutable artifact paths by commit SHA.
    - Glue Terraform paths are release-driven (`terraform/modules/glue/main.tf` + env wiring).
    - Post-deploy conformance checks validate IAM tagging, Lambda layer, EventBridge rule target, and SNS endpoints.
+
+### Production Verification (2026-02-22 JST)
+
+1. **Deployment success**
+   - PR #39 merged at `2026-02-22 09:38 JST` (`3d2a851`).
+   - Deploy Prod workflow run `22267377227` completed `success`.
+
+2. **Daily ETL success with full runtime**
+   - Manual run `jr_d1b4db2f8283c9aff4b673042919a9f5d74c1d34c7715c411551eb9018821823`.
+   - Started `2026-02-22 08:27:10 JST`, completed `09:25:35 JST` (~58m).
+   - Output logs confirmed:
+     - `llm_cache_before=0`
+     - `llm_cache_after=300`
+     - `llm_cache_inserted_this_run=300`
+   - Post-run DB checks confirmed:
+     - `staging.llm_enrichment_cache` row_count = `300`
+     - Required staging tables present: `tenants`, `movings`, `apartments`, `rooms`, `llm_enrichment_cache`, `llm_property_municipality_cache`
+     - Source manifest for `gghouse_20260222.sql` marked `source_valid=true`, `valid_for_etl=true`
+
+3. **Controlled failure alert drill**
+   - Intentional fail run executed:
+     - Run ID: `jr_f57f55bdf6801c131c786acf616b17a83822a48f44dac8a9342b4690d4ba4b6e`
+     - Start: `2026-02-22 09:47:13 JST`
+     - End: `2026-02-22 09:48:53 JST`
+     - Final state: `FAILED`
+     - Failure type: intentional invalid secret ARN override.
+   - Alert-path evidence:
+     - EventBridge rule `tokyobeta-prod-glue-job-state-failures` invocation metric: `Invocations=1` at `2026-02-22 09:49 JST`.
+     - SNS topic `tokyobeta-prod-dashboard-etl-alerts` metrics:
+       - `NumberOfMessagesPublished=1` at `2026-02-22 09:50 JST`
+       - `NumberOfNotificationsDelivered=2` at `2026-02-22 09:50 JST`
+     - Two confirmed email subscriptions remained active:
+       - `daniel.kang@jram.jp`
+       - `jram-ggh@outlook.com`
 
 ### Prevention Measures
 
