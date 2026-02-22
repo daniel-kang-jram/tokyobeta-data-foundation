@@ -219,17 +219,22 @@ resource "aws_glue_job" "daily_etl" {
     "--additional-python-modules"        = "protobuf==4.25.3,dbt-core==1.7.0,dbt-mysql==1.7.0,pymysql,boto3>=1.34.51,botocore>=1.34.51"
 
     # Custom parameters
-    "--S3_SOURCE_BUCKET"             = var.s3_source_bucket
-    "--S3_SOURCE_PREFIX"             = var.s3_source_prefix
-    "--AURORA_ENDPOINT"              = var.aurora_endpoint
-    "--AURORA_DATABASE"              = var.aurora_database
-    "--AURORA_SECRET_ARN"            = var.aurora_secret_arn
-    "--ENVIRONMENT"                  = var.environment
-    "--DBT_PROJECT_PATH"             = "s3://${var.s3_source_bucket}/${local.dbt_project_path}/"
-    "--DAILY_MAX_DUMP_STALE_DAYS"    = "0"
-    "--DAILY_REQUIRE_DUMP_MANIFEST"  = "true"
-    "--DAILY_MAX_SOURCE_STALE_DAYS"  = "14"
-    "--DAILY_STRICT_DUMP_CONTINUITY" = tostring(var.daily_strict_dump_continuity)
+    "--S3_SOURCE_BUCKET"                 = var.s3_source_bucket
+    "--S3_SOURCE_PREFIX"                 = var.s3_source_prefix
+    "--AURORA_ENDPOINT"                  = var.aurora_endpoint
+    "--AURORA_DATABASE"                  = var.aurora_database
+    "--AURORA_SECRET_ARN"                = var.aurora_secret_arn
+    "--ENVIRONMENT"                      = var.environment
+    "--DBT_PROJECT_PATH"                 = "s3://${var.s3_source_bucket}/${local.dbt_project_path}/"
+    "--DAILY_MAX_DUMP_STALE_DAYS"        = "0"
+    "--DAILY_REQUIRE_DUMP_MANIFEST"      = "true"
+    "--DAILY_MAX_SOURCE_STALE_DAYS"      = "14"
+    "--DAILY_STRICT_DUMP_CONTINUITY"     = tostring(var.daily_strict_dump_continuity)
+    "--DAILY_SKIP_LLM_ENRICHMENT"        = tostring(var.daily_skip_llm_enrichment)
+    "--DAILY_LLM_NATIONALITY_MAX_BATCH"  = tostring(var.daily_llm_nationality_max_batch)
+    "--DAILY_LLM_MUNICIPALITY_MAX_BATCH" = tostring(var.daily_llm_municipality_max_batch)
+    "--DAILY_LLM_REQUESTS_PER_SECOND"    = tostring(var.daily_llm_requests_per_second)
+    "--DAILY_LLM_FAIL_ON_ERROR"          = tostring(var.daily_llm_fail_on_error)
   }
 
   glue_version      = "4.0"

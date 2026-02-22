@@ -54,6 +54,17 @@ rds = boto3.client('rds')
 TOTAL_PHYSICAL_ROOMS = 16108
 TOKYO_TIMEZONE = timezone(timedelta(hours=9))
 _AURORA_CREDENTIALS = None
+STAGING_PERSISTENT_TABLES = {
+    "llm_enrichment_cache",
+    "llm_property_municipality_cache",
+}
+REQUIRED_STAGING_TABLES = {
+    "tenants",
+    "movings",
+    "apartments",
+    "rooms",
+    "llm_enrichment_cache",
+}
 
 @contextmanager
 def timed_step(step_name: str, timings: Dict[str, Dict[str, Any]]):
@@ -169,6 +180,104 @@ def runtime_date(name: str, default: date) -> date:
         return default
 
 
+def get_artifact_release() -> str | None:
+    """
+    Resolve artifact release SHA/version from runtime args.
+    Priority:
+      1) --ARTIFACT_RELEASE
+      2) Parse from --DBT_PROJECT_PATH (.../releases/<sha>/)
+    """
+    explicit = optional_argv_value("ARTIFACT_RELEASE")
+    if explicit:
+        value = explicit.strip()
+        if value:
+            return value
+
+    dbt_project_path = str(args.get("DBT_PROJECT_PATH") or "").strip()
+    match = re.search(r"/releases/([^/]+)(?:/|$)", dbt_project_path)
+    if match:
+        return match.group(1)
+    return None
+
+
+def get_nationality_enricher_s3_keys() -> List[str]:
+    """Build ordered candidate S3 keys for nationality_enricher.py."""
+    keys: List[str] = []
+    artifact_release = get_artifact_release()
+    if artifact_release:
+        keys.append(f"glue-scripts/releases/{artifact_release}/nationality_enricher.py")
+
+    # Backward-compatible fallback for legacy unversioned deployments.
+    keys.append("glue-scripts/nationality_enricher.py")
+
+    # Deduplicate while preserving order.
+    return list(dict.fromkeys(keys))
+
+
+def download_nationality_enricher_script(local_path: str | None = None) -> Tuple[str, str]:
+    """
+    Download nationality_enricher.py from S3 using release-aware path first.
+
+    Returns:
+        Tuple of (downloaded_local_path, selected_s3_key)
+    """
+    import tempfile
+
+    target_path = local_path or os.path.join(tempfile.gettempdir(), "nationality_enricher.py")
+    bucket = args["S3_SOURCE_BUCKET"]
+    attempted: List[str] = []
+
+    for s3_key in get_nationality_enricher_s3_keys():
+        attempted.append(s3_key)
+        try:
+            s3.download_file(bucket, s3_key, target_path)
+            return target_path, s3_key
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in {"NoSuchKey", "404", "NotFound"}:
+                print(f"Nationality enricher not found at s3://{bucket}/{s3_key}; trying fallback")
+                continue
+            raise
+
+    attempted_str = ", ".join(attempted)
+    raise FileNotFoundError(
+        f"Could not download nationality_enricher.py from any candidate key in bucket={bucket}: "
+        f"{attempted_str}"
+    )
+
+
+def default_skip_llm_enrichment(environment: str | None) -> bool:
+    """Default enrichment policy: enabled in prod, disabled elsewhere."""
+    return str(environment or "").strip().lower() != "prod"
+
+
+def resolve_llm_runtime_settings() -> Dict[str, Any]:
+    """Resolve all LLM runtime settings from env/argv with safe defaults."""
+    skip_enrichment = runtime_bool(
+        "DAILY_SKIP_LLM_ENRICHMENT",
+        default_skip_llm_enrichment(args.get("ENVIRONMENT")),
+    )
+    return {
+        "skip_enrichment": skip_enrichment,
+        "nationality_max_batch": runtime_int(
+            "DAILY_LLM_NATIONALITY_MAX_BATCH",
+            300,
+            minimum=1,
+        ),
+        "municipality_max_batch": runtime_int(
+            "DAILY_LLM_MUNICIPALITY_MAX_BATCH",
+            150,
+            minimum=0,
+        ),
+        "requests_per_second": runtime_int(
+            "DAILY_LLM_REQUESTS_PER_SECOND",
+            3,
+            minimum=1,
+        ),
+        "fail_on_error": runtime_bool("DAILY_LLM_FAIL_ON_ERROR", False),
+    }
+
+
 def normalize_statement(stmt: str) -> str:
     """Normalize SQL statement and skip session-level commands."""
     stmt = stmt.strip()
@@ -233,20 +342,110 @@ def reset_staging_tables(cursor) -> int:
         WHERE table_schema = 'staging'
     """)
     existing_tables = [row[0] for row in cursor.fetchall()]
+    tables_to_keep = [
+        table_name for table_name in existing_tables
+        if table_name in STAGING_PERSISTENT_TABLES
+    ]
+    tables_to_drop = [
+        table_name for table_name in existing_tables
+        if table_name not in STAGING_PERSISTENT_TABLES
+    ]
 
-    if not existing_tables:
+    if not tables_to_drop:
         print("No existing staging tables - clean load")
         return 0
 
-    print(f"Dropping {len(existing_tables)} existing staging tables before load")
+    print(f"Dropping {len(tables_to_drop)} existing staging tables before load")
+    if tables_to_keep:
+        print(
+            "Preserving persistent staging tables: "
+            + ", ".join(sorted(tables_to_keep))
+        )
     cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
     try:
-        for table_name in existing_tables:
+        for table_name in tables_to_drop:
             cursor.execute(f"DROP TABLE IF EXISTS `staging`.`{table_name}`")
     finally:
         cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
 
-    return len(existing_tables)
+    return len(tables_to_drop)
+
+
+def _extract_first_value(row: Any) -> Any:
+    """Extract first scalar from tuple/dict row for cursor portability."""
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        values = list(row.values())
+        return values[0] if values else None
+    if isinstance(row, (list, tuple)):
+        return row[0] if row else None
+    return row
+
+
+def ensure_llm_enrichment_cache_table(cursor) -> None:
+    """Ensure persistent LLM cache table exists in staging schema."""
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS `staging`.`llm_enrichment_cache` (
+            `tenant_id` BIGINT NOT NULL,
+            `full_name` VARCHAR(255) NULL,
+            `full_name_hash` CHAR(64) NULL,
+            `llm_nationality` VARCHAR(255) NULL,
+            `llm_confidence` DECIMAL(6,5) NULL,
+            `enriched_at` DATETIME NULL,
+            `model_version` VARCHAR(128) NULL,
+            `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+                ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`tenant_id`),
+            KEY `idx_llm_enriched_at` (`enriched_at`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    )
+
+
+def assert_llm_enrichment_cache_table_exists(cursor) -> None:
+    """Fail fast if mandatory persistent LLM cache table is missing."""
+    assert_required_staging_tables_exist(cursor, {"llm_enrichment_cache"})
+
+
+def assert_required_staging_tables_exist(
+    cursor,
+    required_tables: set[str] | None = None,
+) -> None:
+    """Fail fast if required staging tables are missing after dump load."""
+    required = set(required_tables or REQUIRED_STAGING_TABLES)
+    required_sql = ", ".join(f"'{name}'" for name in sorted(required))
+    cursor.execute(
+        f"""
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'staging'
+          AND table_name IN ({required_sql})
+        """
+    )
+    rows = cursor.fetchall()
+    existing = {str(_extract_first_value(row)) for row in rows}
+    missing = sorted(required - existing)
+    if missing:
+        missing_labels = ", ".join(f"staging.{name}" for name in missing)
+        raise RuntimeError(
+            f"Mandatory staging table(s) missing after load: {missing_labels}"
+        )
+
+
+def get_staging_table_row_count(table_name: str) -> int:
+    """Return row count for a staging table."""
+    connection = create_aurora_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(f"SELECT COUNT(*) FROM `staging`.`{table_name}`")
+        row = cursor.fetchone()
+        value = _extract_first_value(row)
+        return int(value or 0)
+    finally:
+        connection.close()
 
 
 def get_dump_manifest_key(dump_date: date) -> str:
@@ -909,6 +1108,10 @@ def load_to_aurora_staging(dump_path):
         dropped_tables = reset_staging_tables(cursor)
         if dropped_tables > 0:
             print(f"Reset staging schema: dropped {dropped_tables} tables")
+
+        ensure_llm_enrichment_cache_table(cursor)
+        assert_llm_enrichment_cache_table_exists(cursor)
+        print("Verified persistent table: staging.llm_enrichment_cache")
         
         connection.commit()
         
@@ -945,6 +1148,16 @@ def load_to_aurora_staging(dump_path):
         
         connection.commit()
         print(f"Successfully executed {executed} statements")
+
+        # Re-create and verify mandatory persistent table in case dump statements dropped it.
+        ensure_llm_enrichment_cache_table(cursor)
+        assert_llm_enrichment_cache_table_exists(cursor)
+        assert_required_staging_tables_exist(cursor)
+        connection.commit()
+        print(
+            "Verified required staging tables after dump load: "
+            + ", ".join(f"staging.{name}" for name in sorted(REQUIRED_STAGING_TABLES))
+        )
         
         # Verify tables were created
         cursor.execute("""
@@ -1566,6 +1779,20 @@ def cleanup_empty_staging_tables():
         """)
         
         empty_tables = [row[0] for row in cursor.fetchall()]
+        preserved_tables = [
+            table_name for table_name in empty_tables
+            if table_name in STAGING_PERSISTENT_TABLES
+        ]
+        empty_tables = [
+            table_name for table_name in empty_tables
+            if table_name not in STAGING_PERSISTENT_TABLES
+        ]
+
+        if preserved_tables:
+            print(
+                "Skipping persistent empty tables: "
+                + ", ".join(sorted(preserved_tables))
+            )
         
         if not empty_tables:
             print("No empty tables found - staging schema is clean")
@@ -2223,15 +2450,6 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
 
         if missing_fact_snapshot:
             new_moveins = 0
-        elif is_future:
-            cursor.execute("""
-                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                  AND move_in_date = %s
-                  AND management_status_code IN (4, 5)
-            """, (snapshot_date_filter, target_date))
-            new_moveins = cursor.fetchone()["count"]
         else:
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
@@ -2244,20 +2462,13 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
 
         if missing_fact_snapshot:
             new_moveouts = 0
-        elif is_future:
-            cursor.execute("""
-                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                  AND moveout_date = %s
-            """, (snapshot_date_filter, target_date))
-            new_moveouts = cursor.fetchone()["count"]
         else:
             cursor.execute("""
                 SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
                 FROM silver.tenant_room_snapshot_daily
                 WHERE snapshot_date = %s
-                  AND moveout_plans_date = %s
+                  AND moveout_date = %s
+                  AND management_status_code IN (14, 15, 16, 17)
             """, (snapshot_date_filter, target_date))
             new_moveouts = cursor.fetchone()["count"]
 
@@ -2540,7 +2751,12 @@ def log_layer_freshness() -> Dict[str, Any]:
         connection.close()
 
 
-def enrich_nationality_data():
+def enrich_nationality_data(
+    nationality_max_batch: int = 300,
+    municipality_max_batch: int = 150,
+    requests_per_second: int = 3,
+    fail_on_error: bool = False,
+):
     """
     Enrich missing nationality data using AWS Bedrock LLM.
     Targets records with レソト placeholder, NULL, or empty nationality.
@@ -2550,22 +2766,15 @@ def enrich_nationality_data():
     print("="*60)
     
     try:
-        # Download nationality_enricher.py from S3 and add to path
-        import os
-        import tempfile
-        enricher_path = os.path.join(tempfile.gettempdir(), 'nationality_enricher.py')
-        s3.download_file(
-            args['S3_SOURCE_BUCKET'],
-            'glue-scripts/nationality_enricher.py',
-            enricher_path
-        )
+        # Download nationality_enricher.py from release path first, then legacy fallback.
+        enricher_path, enricher_s3_key = download_nationality_enricher_script()
         
         # Add to Python path
         enricher_dir = os.path.dirname(enricher_path)
         if enricher_dir not in sys.path:
             sys.path.insert(0, enricher_dir)
         
-        print(f"✓ Downloaded nationality_enricher.py from S3")
+        print(f"✓ Downloaded nationality_enricher.py from s3://{args['S3_SOURCE_BUCKET']}/{enricher_s3_key}")
         
         # Import enricher
         from nationality_enricher import NationalityEnricher
@@ -2576,29 +2785,66 @@ def enrich_nationality_data():
             aurora_database=args['AURORA_DATABASE'],
             secret_arn=args['AURORA_SECRET_ARN'],
             bedrock_region='us-east-1',
-            max_batch_size=1000,  # Process up to 1000 per day
-            requests_per_second=5,  # Rate limit for Bedrock API
+            max_batch_size=nationality_max_batch,
+            requests_per_second=requests_per_second,
             dry_run=False
         )
-        
-        # Run enrichment
-        summary = enricher.enrich_all_missing_nationalities()
-        
-        print(f"✓ Nationality enrichment completed:")
-        print(f"  - Tenants identified: {summary['tenants_identified']}")
-        print(f"  - Predictions made: {summary['predictions_made']}")
-        print(f"  - Successful updates: {summary['successful_updates']}")
-        print(f"  - Failed updates: {summary['failed_updates']}")
-        print(f"  - Execution time: {summary['execution_time_seconds']:.1f}s")
-        
-        return summary['successful_updates']
+
+        # Run nationality enrichment first (tenant cache)
+        nationality_summary = enricher.enrich_all_missing_nationalities()
+
+        municipality_summary = {
+            "properties_identified": 0,
+            "predictions_made": 0,
+            "successful_updates": 0,
+            "failed_updates": 0,
+            "execution_time_seconds": 0,
+        }
+        # Then run municipality enrichment with smaller cap (property cache), if available.
+        if hasattr(enricher, "enrich_missing_municipalities"):
+            municipality_summary = enricher.enrich_missing_municipalities(
+                max_batch_size=municipality_max_batch
+            )
+        else:
+            print(
+                "⚠ Downloaded nationality_enricher.py does not support municipality enrichment; "
+                "skipping municipality step."
+            )
+
+        print(f"✓ LLM enrichment completed:")
+        print(f"  - Nationality candidates: {nationality_summary['tenants_identified']}")
+        print(f"  - Nationality updated: {nationality_summary['successful_updates']}")
+        print(f"  - Municipality candidates: {municipality_summary['properties_identified']}")
+        print(f"  - Municipality updated: {municipality_summary['successful_updates']}")
+
+        return {
+            "nationality_summary": nationality_summary,
+            "municipality_summary": municipality_summary,
+        }
         
     except Exception as e:
         print(f"⚠ Warning: Nationality enrichment failed: {str(e)}")
-        print("  (Continuing with ETL - enrichment is non-critical)")
+        print("  (Continuing with ETL - enrichment is non-critical by default)")
         import traceback
         traceback.print_exc()
-        return 0
+        if fail_on_error:
+            raise
+        return {
+            "nationality_summary": {
+                "tenants_identified": 0,
+                "predictions_made": 0,
+                "successful_updates": 0,
+                "failed_updates": 0,
+                "execution_time_seconds": 0,
+            },
+            "municipality_summary": {
+                "properties_identified": 0,
+                "predictions_made": 0,
+                "successful_updates": 0,
+                "failed_updates": 0,
+                "execution_time_seconds": 0,
+            },
+        }
 
 def archive_processed_dump(s3_key, fail_on_error=False):
     """Move processed dump to archive folder.
@@ -2646,7 +2892,12 @@ def main():
         # NOTE: Aurora automated backups enabled with 7-day retention for PITR
         # No manual snapshots created to reduce costs (~$57/month savings)
         # Use scripts/rollback_etl.sh if recovery needed
-        skip_enrichment = env_bool("DAILY_SKIP_LLM_ENRICHMENT", True)
+        llm_settings = resolve_llm_runtime_settings()
+        skip_enrichment = llm_settings["skip_enrichment"]
+        llm_nationality_max_batch = llm_settings["nationality_max_batch"]
+        llm_municipality_max_batch = llm_settings["municipality_max_batch"]
+        llm_requests_per_second = llm_settings["requests_per_second"]
+        llm_fail_on_error = llm_settings["fail_on_error"]
         skip_table_backups = env_bool("DAILY_SKIP_TABLE_BACKUPS", True)
         run_backup_cleanup = env_bool("DAILY_RUN_BACKUP_CLEANUP", True)
         include_staging_backup_cleanup = env_bool("DAILY_CLEANUP_STAGING_BACKUPS", True)
@@ -2671,6 +2922,10 @@ def main():
         quality_calendar_rows = 0
         quality_calendar_gap_days = 0
         dump_archive_success = False
+        municipality_enriched_count = 0
+        llm_cache_before = 0
+        llm_cache_after = 0
+        llm_cache_inserted_this_run = 0
 
         # Step 1: Always find and download latest dump
         latest_key = None
@@ -2777,8 +3032,25 @@ def main():
         if skip_enrichment:
             print("\nSkipping LLM enrichment (DAILY_SKIP_LLM_ENRICHMENT=true)")
         else:
+            llm_cache_before = get_staging_table_row_count("llm_enrichment_cache")
+            print(f"llm_cache_before={llm_cache_before}")
             with timed_step("06_llm_nationality_enrichment", step_timings):
-                enriched_count = enrich_nationality_data()
+                enrichment_result = enrich_nationality_data(
+                    nationality_max_batch=llm_nationality_max_batch,
+                    municipality_max_batch=llm_municipality_max_batch,
+                    requests_per_second=llm_requests_per_second,
+                    fail_on_error=llm_fail_on_error,
+                )
+                nationality_summary = enrichment_result["nationality_summary"]
+                municipality_summary = enrichment_result["municipality_summary"]
+                enriched_count = int(nationality_summary.get("successful_updates", 0))
+                municipality_enriched_count = int(
+                    municipality_summary.get("successful_updates", 0)
+                )
+            llm_cache_after = get_staging_table_row_count("llm_enrichment_cache")
+            llm_cache_inserted_this_run = max(0, llm_cache_after - llm_cache_before)
+            print(f"llm_cache_after={llm_cache_after}")
+            print(f"llm_cache_inserted_this_run={llm_cache_inserted_this_run}")
 
         # Step 7: Create backups before dbt transformations
         if skip_table_backups:
@@ -2839,6 +3111,10 @@ def main():
         print(f"Snapshot exported: {snapshot_exported} tenants")
         print(f"Historical snapshots loaded: {snapshot_rows_loaded:,} rows")
         print(f"Nationalities enriched: {enriched_count}")
+        print(f"Municipalities enriched: {municipality_enriched_count}")
+        print(f"llm_cache_before={llm_cache_before}")
+        print(f"llm_cache_after={llm_cache_after}")
+        print(f"llm_cache_inserted_this_run={llm_cache_inserted_this_run}")
         print(f"Pre-ETL backups created: {backup_count}")
         print(f"Old backups removed: {removed_backups}")
         print(f"dbt temp tables dropped: {dropped_tmp_tables}")

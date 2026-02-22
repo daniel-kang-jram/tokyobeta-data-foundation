@@ -124,11 +124,16 @@ module "glue" {
   private_subnet_ids = module.networking.private_subnet_ids
   security_group_id  = module.networking.lambda_security_group_id
 
-  worker_type                  = "G.2X"
-  number_of_workers            = 2
-  job_timeout                  = 120
-  daily_strict_dump_continuity = true
-  artifact_release             = var.artifact_release
+  worker_type                      = "G.2X"
+  number_of_workers                = 2
+  job_timeout                      = 120
+  daily_strict_dump_continuity     = true
+  daily_skip_llm_enrichment        = var.daily_skip_llm_enrichment
+  daily_llm_nationality_max_batch  = var.daily_llm_nationality_max_batch
+  daily_llm_municipality_max_batch = var.daily_llm_municipality_max_batch
+  daily_llm_requests_per_second    = var.daily_llm_requests_per_second
+  daily_llm_fail_on_error          = var.daily_llm_fail_on_error
+  artifact_release                 = var.artifact_release
 }
 
 # Module: Step Functions (NEW - Orchestrates ETL layers)

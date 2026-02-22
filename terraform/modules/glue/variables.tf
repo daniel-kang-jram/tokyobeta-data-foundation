@@ -81,6 +81,51 @@ variable "daily_strict_dump_continuity" {
   default     = false
 }
 
+variable "daily_skip_llm_enrichment" {
+  description = "Whether daily_etl should skip LLM enrichment step"
+  type        = bool
+  default     = false
+}
+
+variable "daily_llm_nationality_max_batch" {
+  description = "Max tenant records to enrich for nationality per run"
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.daily_llm_nationality_max_batch >= 1
+    error_message = "daily_llm_nationality_max_batch must be >= 1."
+  }
+}
+
+variable "daily_llm_municipality_max_batch" {
+  description = "Max property records to enrich for municipality per run"
+  type        = number
+  default     = 150
+
+  validation {
+    condition     = var.daily_llm_municipality_max_batch >= 0
+    error_message = "daily_llm_municipality_max_batch must be >= 0."
+  }
+}
+
+variable "daily_llm_requests_per_second" {
+  description = "LLM request rate limit per second"
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.daily_llm_requests_per_second >= 1
+    error_message = "daily_llm_requests_per_second must be >= 1."
+  }
+}
+
+variable "daily_llm_fail_on_error" {
+  description = "Whether daily_etl should fail when LLM enrichment fails"
+  type        = bool
+  default     = false
+}
+
 variable "artifact_release" {
   description = "Immutable artifact release identifier used for Glue scripts and dbt project paths"
   type        = string
