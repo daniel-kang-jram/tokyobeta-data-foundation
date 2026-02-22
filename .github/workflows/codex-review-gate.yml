@@ -145,11 +145,37 @@ jobs:
               ] | length
             ')"
 
+            pr_review_count="$(echo "${reviews_json}" | jq --arg rx "${bot_regex}" '
+              [
+                .[]
+                | select(
+                    (.user.login | test($rx; "i"))
+                    and (.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED")
+                  )
+              ] | length
+            ')"
+
+            pr_review_comment_count="$(echo "${review_comments_json}" | jq --arg rx "${bot_regex}" '
+              [
+                .[]
+                | select(.user.login | test($rx; "i"))
+              ] | length
+            ')"
+
+            pr_issue_comment_count="$(echo "${issue_comments_json}" | jq --arg rx "${bot_regex}" '
+              [
+                .[]
+                | select(.user.login | test($rx; "i"))
+              ] | length
+            ')"
+
+            total_pr_signals=$((pr_review_count + pr_review_comment_count + pr_issue_comment_count))
             total_signals=$((review_count + review_comment_count + issue_comment_count))
 
             echo "review_count=${review_count}"
             echo "review_comment_count=${review_comment_count}"
             echo "issue_comment_count=${issue_comment_count}"
+            echo "total_pr_codex_signals=${total_pr_signals}"
             echo "total_codex_signals=${total_signals}"
             echo "head_sha=${HEAD_SHA}"
             echo "head_committed_at=${head_committed_at}"
@@ -157,6 +183,12 @@ jobs:
 
             if [[ "${total_signals}" -gt 0 ]]; then
               echo "Codex review gate satisfied for head ${HEAD_SHA}."
+              exit 0
+            fi
+
+            if [[ "${total_pr_signals}" -gt 0 ]]; then
+              echo "::warning::No head-specific Codex signal yet for ${HEAD_SHA}; using existing PR-level Codex signal fallback."
+              echo "Codex review gate satisfied for PR #${PR_NUMBER}."
               exit 0
             fi
 
