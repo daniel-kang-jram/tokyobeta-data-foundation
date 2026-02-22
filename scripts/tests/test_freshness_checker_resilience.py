@@ -241,6 +241,29 @@ def test_evaluate_upstream_sync_staleness_excludes_inquiries(monkeypatch):
     assert [entry["table"] for entry in stale] == ["movings"]
 
 
+def test_evaluate_upstream_sync_staleness_uses_manifest_generated_at(monkeypatch):
+    """Staleness must be evaluated against manifest generated_at, not invoke time."""
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=False)
+
+    invoke_time_jst = datetime(2026, 2, 22, 18, 24, tzinfo=timezone(timedelta(hours=9)))
+    manifest = {
+        "generated_at": "2026-02-22T05:30:01+09:00",
+        "max_updated_at_by_table": {
+            "rooms": "2026-02-21T18:20:31+09:00",
+            "apartments": "2026-02-21T18:20:31+09:00",
+        },
+    }
+
+    stale = checker.evaluate_upstream_sync_staleness(
+        manifest=manifest,
+        now_jst=invoke_time_jst,
+        stale_hours=24,
+        tables=["rooms", "apartments"],
+    )
+
+    assert stale == []
+
+
 def test_lambda_handler_reports_upstream_sync_staleness(monkeypatch):
     """Lambda should return non-200 and alert when upstream sync is stale."""
     checker = _load_checker_module(monkeypatch, fail_pymysql_import=False)
@@ -298,6 +321,78 @@ def test_lambda_handler_reports_upstream_sync_staleness(monkeypatch):
     assert body["stale_upstream_count"] == 1
     assert body["stale_upstream"][0]["table"] == "movings"
     assert upstream_alerts
+
+
+def test_lambda_handler_suppresses_notifications_when_requested(monkeypatch):
+    """Smoke/manual invokes can suppress SNS fan-out while still evaluating freshness."""
+    checker = _load_checker_module(monkeypatch, fail_pymysql_import=False)
+
+    class _DummyCursor:
+        def execute(self, _sql):
+            return None
+
+        def fetchone(self):
+            return (10, None, 0)
+
+    class _DummyConn:
+        def cursor(self):
+            return _DummyCursor()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(checker, "get_db_credentials", lambda: {"username": "u", "password": "p"})
+    monkeypatch.setattr(checker.pymysql, "connect", lambda **kwargs: _DummyConn())
+    monkeypatch.setattr(
+        checker,
+        "check_dump_file",
+        lambda prefix, date_str: {
+            "prefix": prefix,
+            "key": f"{prefix.rstrip('/')}/gghouse_{date_str}.sql",
+            "size_bytes": 0,
+            "ok": False,
+            "missing": True,
+            "error": "404",
+        },
+    )
+    monkeypatch.setattr(checker, "publish_dump_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(checker, "publish_metric", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        checker,
+        "check_upstream_sync_staleness",
+        lambda: {
+            "manifest_key": "dumps-manifest/gghouse_20260222.json",
+            "stale_entries": [
+                {
+                    "table": "rooms",
+                    "max_updated_at": "2026-02-21T18:20:31+09:00",
+                    "lag_hours": 24.06,
+                    "reason": "stale_upstream_sync",
+                }
+            ],
+        },
+    )
+
+    dump_alerts = []
+    upstream_alerts = []
+    table_alerts = []
+    monkeypatch.setattr(checker, "send_dump_alert", lambda stale_dumps: dump_alerts.append(stale_dumps))
+    monkeypatch.setattr(
+        checker,
+        "send_upstream_sync_alert",
+        lambda stale_entries, manifest_key: upstream_alerts.append((manifest_key, stale_entries)),
+    )
+    monkeypatch.setattr(checker, "send_alert", lambda stale_tables: table_alerts.append(stale_tables))
+
+    result = checker.lambda_handler({"suppress_notifications": True}, None)
+    body = json.loads(result["body"])
+
+    assert result["statusCode"] == 400
+    assert body["stale_dump_count"] == 1
+    assert body["stale_upstream_count"] == 1
+    assert dump_alerts == []
+    assert upstream_alerts == []
+    assert table_alerts == []
 
 
 def test_load_latest_dump_manifest_paginates_before_selecting_latest(monkeypatch):
