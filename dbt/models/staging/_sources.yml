@@ -241,3 +241,30 @@ sources:
             description: When prediction was made
           - name: model_version
             description: Bedrock model used (e.g., claude-3-haiku-20240307)
+
+      - name: property_geo_latlon_backup
+        description: >
+          Persistent backup of valid apartment latitude/longitude values.
+          Used as fallback when raw dump rows have missing or invalid geolocation.
+        columns:
+          - name: apartment_id
+            description: Apartment ID (primary key)
+            tests:
+              - unique
+              - not_null
+          - name: asset_id_hj
+            description: Asset ID from apartments.unique_number
+          - name: apartment_name
+            description: Apartment name
+          - name: full_address
+            description: Full address at backup capture time
+          - name: prefecture
+            description: Prefecture at backup capture time
+          - name: municipality
+            description: Municipality at backup capture time
+          - name: latitude
+            description: Valid latitude backup value
+          - name: longitude
+            description: Valid longitude backup value
+          - name: source_updated_at
+            description: Source apartments.updated_at captured with backup

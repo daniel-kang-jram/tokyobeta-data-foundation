@@ -54,9 +54,15 @@ rds = boto3.client('rds')
 TOTAL_PHYSICAL_ROOMS = 16108
 TOKYO_TIMEZONE = timezone(timedelta(hours=9))
 _AURORA_CREDENTIALS = None
+VALID_GEO_LAT_MIN = 35.0
+VALID_GEO_LAT_MAX = 36.0
+VALID_GEO_LON_MIN = 139.0
+VALID_GEO_LON_MAX = 140.5
+DEFAULT_PROPERTY_GEO_BACKUP_PREFIX = "reference/property_geo_latlon"
 STAGING_PERSISTENT_TABLES = {
     "llm_enrichment_cache",
     "llm_property_municipality_cache",
+    "property_geo_latlon_backup",
 }
 REQUIRED_STAGING_TABLES = {
     "tenants",
@@ -64,6 +70,7 @@ REQUIRED_STAGING_TABLES = {
     "apartments",
     "rooms",
     "llm_enrichment_cache",
+    "property_geo_latlon_backup",
 }
 
 @contextmanager
@@ -408,6 +415,210 @@ def ensure_llm_enrichment_cache_table(cursor) -> None:
 def assert_llm_enrichment_cache_table_exists(cursor) -> None:
     """Fail fast if mandatory persistent LLM cache table is missing."""
     assert_required_staging_tables_exist(cursor, {"llm_enrichment_cache"})
+
+
+def ensure_property_geo_latlon_backup_table(cursor) -> None:
+    """Ensure persistent property geolocation backup table exists in staging schema."""
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS `staging`.`property_geo_latlon_backup` (
+            `apartment_id` BIGINT NOT NULL,
+            `asset_id_hj` VARCHAR(255) NULL,
+            `apartment_name` VARCHAR(255) NULL,
+            `full_address` VARCHAR(1024) NULL,
+            `prefecture` VARCHAR(128) NULL,
+            `municipality` VARCHAR(128) NULL,
+            `latitude` DECIMAL(11,8) NOT NULL,
+            `longitude` DECIMAL(11,8) NOT NULL,
+            `source_updated_at` DATETIME NULL,
+            `source_table` VARCHAR(64) NOT NULL DEFAULT 'staging.apartments',
+            `created_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP
+                ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`apartment_id`),
+            KEY `idx_property_geo_coords` (`latitude`, `longitude`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+        """
+    )
+
+
+def upsert_property_geo_latlon_backup(cursor) -> int:
+    """Upsert valid geolocation rows from staging.apartments into persistent backup table."""
+    cursor.execute(
+        f"""
+        INSERT INTO `staging`.`property_geo_latlon_backup` (
+            `apartment_id`,
+            `asset_id_hj`,
+            `apartment_name`,
+            `full_address`,
+            `prefecture`,
+            `municipality`,
+            `latitude`,
+            `longitude`,
+            `source_updated_at`,
+            `source_table`
+        )
+        SELECT
+            a.`id`,
+            a.`unique_number`,
+            a.`apartment_name`,
+            a.`full_address`,
+            a.`prefecture`,
+            a.`municipality`,
+            a.`latitude`,
+            a.`longitude`,
+            a.`updated_at`,
+            'staging.apartments'
+        FROM `staging`.`apartments` a
+        WHERE a.`id` IS NOT NULL
+          AND a.`latitude` BETWEEN {VALID_GEO_LAT_MIN} AND {VALID_GEO_LAT_MAX}
+          AND a.`longitude` BETWEEN {VALID_GEO_LON_MIN} AND {VALID_GEO_LON_MAX}
+        ON DUPLICATE KEY UPDATE
+            `asset_id_hj` = VALUES(`asset_id_hj`),
+            `apartment_name` = VALUES(`apartment_name`),
+            `full_address` = VALUES(`full_address`),
+            `prefecture` = VALUES(`prefecture`),
+            `municipality` = VALUES(`municipality`),
+            `latitude` = VALUES(`latitude`),
+            `longitude` = VALUES(`longitude`),
+            `source_updated_at` = VALUES(`source_updated_at`),
+            `source_table` = VALUES(`source_table`)
+        """
+    )
+    return int(cursor.rowcount or 0)
+
+
+def query_property_geo_latlon_backup_rows(cursor) -> List[Tuple]:
+    """Fetch persisted property geolocation backup rows for S3 export."""
+    cursor.execute(
+        """
+        SELECT
+            `apartment_id`,
+            `asset_id_hj`,
+            `apartment_name`,
+            `full_address`,
+            `prefecture`,
+            `municipality`,
+            `latitude`,
+            `longitude`,
+            DATE_FORMAT(`source_updated_at`, '%Y-%m-%d %H:%i:%s') AS source_updated_at
+        FROM `staging`.`property_geo_latlon_backup`
+        ORDER BY `apartment_id`
+        """
+    )
+    return cursor.fetchall()
+
+
+def generate_property_geo_backup_csv(rows: List[Tuple]) -> str:
+    """Generate CSV payload for property lat/lon backup rows."""
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "apartment_id",
+        "asset_id_hj",
+        "apartment_name",
+        "full_address",
+        "prefecture",
+        "municipality",
+        "latitude",
+        "longitude",
+        "source_updated_at",
+    ])
+
+    for row in rows:
+        if isinstance(row, dict):
+            writer.writerow([
+                row.get("apartment_id"),
+                row.get("asset_id_hj"),
+                row.get("apartment_name"),
+                row.get("full_address"),
+                row.get("prefecture"),
+                row.get("municipality"),
+                row.get("latitude"),
+                row.get("longitude"),
+                row.get("source_updated_at"),
+            ])
+        else:
+            writer.writerow(row)
+    return output.getvalue()
+
+
+def get_property_geo_backup_prefix() -> str:
+    """Resolve S3 prefix for property geolocation backup artifacts."""
+    prefix = (
+        os.environ.get("DAILY_PROPERTY_GEO_BACKUP_PREFIX")
+        or optional_argv_value("DAILY_PROPERTY_GEO_BACKUP_PREFIX")
+        or DEFAULT_PROPERTY_GEO_BACKUP_PREFIX
+    )
+    return prefix.rstrip("/")
+
+
+def upload_property_geo_backup_csv(
+    s3_client,
+    bucket: str,
+    csv_content: str,
+    snapshot_date: date,
+) -> Dict[str, Any]:
+    """Upload property geolocation backup CSV to both dated and latest keys."""
+    date_str = snapshot_date.strftime("%Y%m%d")
+    prefix = get_property_geo_backup_prefix()
+    dated_key = f"{prefix}/dt={date_str}/property_geo_latlon_backup.csv"
+    latest_key = f"{prefix}/latest/property_geo_latlon_backup.csv"
+    body = csv_content.encode("utf-8")
+
+    for key in (dated_key, latest_key):
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=body,
+            ContentType="text/csv",
+        )
+
+    return {
+        "dated_key": dated_key,
+        "latest_key": latest_key,
+        "bytes_uploaded": len(body),
+    }
+
+
+def sync_property_geo_latlon_backup_to_s3(
+    connection,
+    s3_client,
+    bucket: str,
+    snapshot_date: date,
+) -> Dict[str, Any]:
+    """
+    Persist valid apartment geolocation rows and export complete backup CSV to S3.
+
+    Returns:
+        Dict with upsert count, total backup rows, and uploaded S3 keys.
+    """
+    cursor = connection.cursor()
+    try:
+        ensure_property_geo_latlon_backup_table(cursor)
+        upserted_rows = upsert_property_geo_latlon_backup(cursor)
+        connection.commit()
+
+        cursor.execute("SELECT COUNT(*) FROM `staging`.`property_geo_latlon_backup`")
+        total_rows = int(_extract_first_value(cursor.fetchone()) or 0)
+        rows = query_property_geo_latlon_backup_rows(cursor)
+        csv_content = generate_property_geo_backup_csv(rows)
+        upload_result = upload_property_geo_backup_csv(
+            s3_client=s3_client,
+            bucket=bucket,
+            csv_content=csv_content,
+            snapshot_date=snapshot_date,
+        )
+
+        return {
+            "upserted_rows": upserted_rows,
+            "total_rows": total_rows,
+            "dated_key": upload_result["dated_key"],
+            "latest_key": upload_result["latest_key"],
+            "bytes_uploaded": upload_result["bytes_uploaded"],
+        }
+    finally:
+        cursor.close()
 
 
 def assert_required_staging_tables_exist(
@@ -1110,8 +1321,15 @@ def load_to_aurora_staging(dump_path):
             print(f"Reset staging schema: dropped {dropped_tables} tables")
 
         ensure_llm_enrichment_cache_table(cursor)
-        assert_llm_enrichment_cache_table_exists(cursor)
-        print("Verified persistent table: staging.llm_enrichment_cache")
+        ensure_property_geo_latlon_backup_table(cursor)
+        assert_required_staging_tables_exist(
+            cursor,
+            {"llm_enrichment_cache", "property_geo_latlon_backup"},
+        )
+        print(
+            "Verified persistent tables: "
+            "staging.llm_enrichment_cache, staging.property_geo_latlon_backup"
+        )
         
         connection.commit()
         
@@ -1151,7 +1369,7 @@ def load_to_aurora_staging(dump_path):
 
         # Re-create and verify mandatory persistent table in case dump statements dropped it.
         ensure_llm_enrichment_cache_table(cursor)
-        assert_llm_enrichment_cache_table_exists(cursor)
+        ensure_property_geo_latlon_backup_table(cursor)
         assert_required_staging_tables_exist(cursor)
         connection.commit()
         print(
@@ -2926,6 +3144,9 @@ def main():
         llm_cache_before = 0
         llm_cache_after = 0
         llm_cache_inserted_this_run = 0
+        geo_backup_upserted = 0
+        geo_backup_total_rows = 0
+        geo_backup_latest_key = ""
 
         # Step 1: Always find and download latest dump
         latest_key = None
@@ -3028,6 +3249,27 @@ def main():
             finally:
                 connection.close()
 
+        # Step 5.5: Persist property geolocation backup and export to S3 (dated + latest).
+        with timed_step("05_5_sync_property_geo_backup_to_s3", step_timings):
+            connection = create_aurora_connection()
+            try:
+                geo_backup_result = sync_property_geo_latlon_backup_to_s3(
+                    connection=connection,
+                    s3_client=s3,
+                    bucket=args["S3_SOURCE_BUCKET"],
+                    snapshot_date=occupancy_target_date,
+                )
+                geo_backup_upserted = int(geo_backup_result.get("upserted_rows", 0))
+                geo_backup_total_rows = int(geo_backup_result.get("total_rows", 0))
+                geo_backup_latest_key = str(geo_backup_result.get("latest_key", ""))
+                print(
+                    "Property geo backup synced: "
+                    f"upserted={geo_backup_upserted}, total={geo_backup_total_rows}, "
+                    f"latest=s3://{args['S3_SOURCE_BUCKET']}/{geo_backup_latest_key}"
+                )
+            finally:
+                connection.close()
+
         # Step 6: Enrich nationality data using LLM (レソト and missing values)
         if skip_enrichment:
             print("\nSkipping LLM enrichment (DAILY_SKIP_LLM_ENRICHMENT=true)")
@@ -3110,6 +3352,9 @@ def main():
         print(f"Empty tables dropped: {dropped_count}")
         print(f"Snapshot exported: {snapshot_exported} tenants")
         print(f"Historical snapshots loaded: {snapshot_rows_loaded:,} rows")
+        print(f"Property geo backup rows upserted: {geo_backup_upserted}")
+        print(f"Property geo backup total rows: {geo_backup_total_rows}")
+        print(f"Property geo backup latest key: {geo_backup_latest_key}")
         print(f"Nationalities enriched: {enriched_count}")
         print(f"Municipalities enriched: {municipality_enriched_count}")
         print(f"llm_cache_before={llm_cache_before}")

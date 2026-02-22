@@ -24,15 +24,19 @@ SELECT
     a.full_address,
     a.zip_code,
     
-    -- Geolocation (validated)
+    -- Geolocation (validated, with persistent backup fallback)
     CASE 
         WHEN a.latitude BETWEEN 35.0 AND 36.0 AND a.longitude BETWEEN 139.0 AND 140.5
         THEN a.latitude
+        WHEN geo.latitude BETWEEN 35.0 AND 36.0 AND geo.longitude BETWEEN 139.0 AND 140.5
+        THEN geo.latitude
         ELSE NULL
     END as latitude,
     CASE 
         WHEN a.latitude BETWEEN 35.0 AND 36.0 AND a.longitude BETWEEN 139.0 AND 140.5
         THEN a.longitude
+        WHEN geo.latitude BETWEEN 35.0 AND 36.0 AND geo.longitude BETWEEN 139.0 AND 140.5
+        THEN geo.longitude
         ELSE NULL
     END as longitude,
     
@@ -48,4 +52,6 @@ SELECT
     a.updated_at
 
 FROM {{ source('staging', 'apartments') }} a
+LEFT JOIN {{ source('staging', 'property_geo_latlon_backup') }} geo
+    ON a.id = geo.apartment_id
 WHERE a.id IS NOT NULL
