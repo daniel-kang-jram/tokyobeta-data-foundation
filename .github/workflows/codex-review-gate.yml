@@ -1,0 +1,124 @@
+name: Codex Review Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  pull_request_review:
+    types:
+      - submitted
+      - edited
+      - dismissed
+  pull_request_review_comment:
+    types:
+      - created
+      - edited
+      - deleted
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: codex-review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  codex-review-gate:
+    name: Codex Review Gate
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Codex review signal on current PR head
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          api_base="https://api.github.com/repos/${REPOSITORY}"
+          bot_regex='codex-connector\[bot\]$'
+          workflow_path=".github/workflows/codex-review-gate.yml"
+
+          base_file_http_code="$(
+            curl -sS -o /tmp/base_gate_workflow.json -w "%{http_code}" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${api_base}/contents/${workflow_path}?ref=${BASE_REF}"
+          )"
+
+          if [[ "${base_file_http_code}" != "200" ]]; then
+            echo "::warning::Bootstrap mode: ${workflow_path} is not present on base branch ${BASE_REF}."
+            echo "::warning::Skipping strict Codex gate for rollout PR. Gate is enforced after merge to base."
+            exit 0
+          fi
+
+          fetch_paginated_array() {
+            local endpoint="$1"
+            local page=1
+            local all_items='[]'
+
+            while true; do
+              local url="${api_base}${endpoint}?per_page=100&page=${page}"
+              local resp
+              resp="$(curl -fsSL \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "${url}")"
+
+              local count
+              count="$(echo "${resp}" | jq 'length')"
+              all_items="$(jq -cn --argjson a "${all_items}" --argjson b "${resp}" '$a + $b')"
+
+              if [[ "${count}" -lt 100 ]]; then
+                break
+              fi
+              page=$((page + 1))
+            done
+
+            echo "${all_items}"
+          }
+
+          reviews_json="$(fetch_paginated_array "/pulls/${PR_NUMBER}/reviews")"
+          comments_json="$(fetch_paginated_array "/pulls/${PR_NUMBER}/comments")"
+
+          review_count="$(echo "${reviews_json}" | jq --arg sha "${HEAD_SHA}" --arg rx "${bot_regex}" '
+            [
+              .[]
+              | select(
+                  (.user.login | test($rx; "i"))
+                  and .commit_id == $sha
+                  and (.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED")
+                )
+            ] | length
+          ')"
+
+          comment_count="$(echo "${comments_json}" | jq --arg sha "${HEAD_SHA}" --arg rx "${bot_regex}" '
+            [
+              .[]
+              | select((.user.login | test($rx; "i")) and .commit_id == $sha)
+            ] | length
+          ')"
+
+          total_signals=$((review_count + comment_count))
+
+          echo "review_count=${review_count}"
+          echo "review_comment_count=${comment_count}"
+          echo "total_codex_signals=${total_signals}"
+          echo "head_sha=${HEAD_SHA}"
+
+          if [[ "${total_signals}" -eq 0 ]]; then
+            echo "::error::No Codex review signal found on PR #${PR_NUMBER} for head ${HEAD_SHA}."
+            echo "::error::Expected chatgpt-codex-connector[bot] review/review-comment on the current head commit."
+            exit 1
+          fi
+
+          echo "Codex review gate satisfied for head ${HEAD_SHA}."
