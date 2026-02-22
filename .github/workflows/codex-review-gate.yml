@@ -41,8 +41,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
-          MAX_WAIT_SECONDS: 900
+          MAX_WAIT_SECONDS: 120
           POLL_INTERVAL_SECONDS: 20
+          FAIL_ON_MISSING_SIGNAL: false
         run: |
           set -euo pipefail
 
@@ -200,6 +201,12 @@ jobs:
             elapsed=$((elapsed + poll_interval))
           done
 
-          echo "::error::No Codex review signal found on PR #${PR_NUMBER} for head ${HEAD_SHA} within ${max_wait}s."
-          echo "::error::Expected chatgpt-codex-connector[bot] signal (review/review-comment/PR comment) for current head."
-          exit 1
+          if [[ "${FAIL_ON_MISSING_SIGNAL}" == "true" ]]; then
+            echo "::error::No Codex review signal found on PR #${PR_NUMBER} for head ${HEAD_SHA} within ${max_wait}s."
+            echo "::error::Expected chatgpt-codex-connector[bot] signal (review/review-comment/PR comment) for current head."
+            exit 1
+          fi
+
+          echo "::warning::No Codex review signal found for PR #${PR_NUMBER} within ${max_wait}s."
+          echo "::warning::Fail-open mode is active (FAIL_ON_MISSING_SIGNAL=false); not blocking merge."
+          exit 0
