@@ -29,6 +29,21 @@
 - Verify that edits don't involuntarily affect existing modules
 - Before modifying, understand all dependencies and downstream impacts
 
+### 3. Completion & PR Discipline - STRICTLY ENFORCED
+- For every completed code/config task, create or update a PR before handoff.
+- Branch names must be sensible and scoped, using prefixes:
+  - `feat/<short-topic>` for feature work
+  - `fix/<short-topic>` for bugfixes
+  - `chore/<short-topic>` for maintenance
+- PR description must be structured and comprehensive, including at minimum:
+  1. Summary / context
+  2. Root cause (for bugfixes)
+  3. What changed (file-level scope)
+  4. Validation steps and results (tests/commands/run IDs)
+  5. Risk / rollback plan
+  6. Explicit checklist with completion marks
+- If a task is not PR-ready (blocked), state blocker and next action explicitly instead of silent handoff.
+
 ## Project Structure & Conventions
 
 ### Directory Organization

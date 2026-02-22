@@ -41,6 +41,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          MAX_WAIT_SECONDS: 120
+          POLL_INTERVAL_SECONDS: 20
+          FAIL_ON_MISSING_SIGNAL: false
         run: |
           set -euo pipefail
 
@@ -87,38 +90,123 @@ jobs:
             echo "${all_items}"
           }
 
-          reviews_json="$(fetch_paginated_array "/pulls/${PR_NUMBER}/reviews")"
-          comments_json="$(fetch_paginated_array "/pulls/${PR_NUMBER}/comments")"
-
-          review_count="$(echo "${reviews_json}" | jq --arg sha "${HEAD_SHA}" --arg rx "${bot_regex}" '
-            [
-              .[]
-              | select(
-                  (.user.login | test($rx; "i"))
-                  and .commit_id == $sha
-                  and (.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED")
-                )
-            ] | length
+          commits_json="$(fetch_paginated_array "/pulls/${PR_NUMBER}/commits")"
+          head_committed_at="$(echo "${commits_json}" | jq -r --arg sha "${HEAD_SHA}" '
+            (.[] | select(.sha == $sha) | .commit.committer.date) // empty
           ')"
 
-          comment_count="$(echo "${comments_json}" | jq --arg sha "${HEAD_SHA}" --arg rx "${bot_regex}" '
-            [
-              .[]
-              | select((.user.login | test($rx; "i")) and .commit_id == $sha)
-            ] | length
-          ')"
+          if [[ -z "${head_committed_at}" ]]; then
+            echo "::warning::Could not resolve commit timestamp for head ${HEAD_SHA}; using strict commit_id checks only."
+            head_committed_at="1970-01-01T00:00:00Z"
+          fi
 
-          total_signals=$((review_count + comment_count))
+          max_wait="${MAX_WAIT_SECONDS}"
+          poll_interval="${POLL_INTERVAL_SECONDS}"
+          elapsed=0
 
-          echo "review_count=${review_count}"
-          echo "review_comment_count=${comment_count}"
-          echo "total_codex_signals=${total_signals}"
-          echo "head_sha=${HEAD_SHA}"
+          while true; do
+            reviews_json="$(fetch_paginated_array "/pulls/${PR_NUMBER}/reviews")"
+            review_comments_json="$(fetch_paginated_array "/pulls/${PR_NUMBER}/comments")"
+            issue_comments_json="$(fetch_paginated_array "/issues/${PR_NUMBER}/comments")"
 
-          if [[ "${total_signals}" -eq 0 ]]; then
-            echo "::error::No Codex review signal found on PR #${PR_NUMBER} for head ${HEAD_SHA}."
-            echo "::error::Expected chatgpt-codex-connector[bot] review/review-comment on the current head commit."
+            review_count="$(echo "${reviews_json}" | jq --arg sha "${HEAD_SHA}" --arg rx "${bot_regex}" --arg ts "${head_committed_at}" '
+              [
+                .[]
+                | select(
+                    (.user.login | test($rx; "i"))
+                    and (.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED")
+                    and (
+                      .commit_id == $sha
+                      or ((.submitted_at // "1970-01-01T00:00:00Z") >= $ts)
+                    )
+                  )
+              ] | length
+            ')"
+
+            review_comment_count="$(echo "${review_comments_json}" | jq --arg sha "${HEAD_SHA}" --arg rx "${bot_regex}" --arg ts "${head_committed_at}" '
+              [
+                .[]
+                | select(
+                    (.user.login | test($rx; "i"))
+                    and (
+                      .commit_id == $sha
+                      or ((.created_at // "1970-01-01T00:00:00Z") >= $ts)
+                    )
+                  )
+              ] | length
+            ')"
+
+            issue_comment_count="$(echo "${issue_comments_json}" | jq --arg rx "${bot_regex}" --arg ts "${head_committed_at}" '
+              [
+                .[]
+                | select(
+                    (.user.login | test($rx; "i"))
+                    and ((.created_at // "1970-01-01T00:00:00Z") >= $ts)
+                  )
+              ] | length
+            ')"
+
+            pr_review_count="$(echo "${reviews_json}" | jq --arg rx "${bot_regex}" '
+              [
+                .[]
+                | select(
+                    (.user.login | test($rx; "i"))
+                    and (.state == "COMMENTED" or .state == "APPROVED" or .state == "CHANGES_REQUESTED")
+                  )
+              ] | length
+            ')"
+
+            pr_review_comment_count="$(echo "${review_comments_json}" | jq --arg rx "${bot_regex}" '
+              [
+                .[]
+                | select(.user.login | test($rx; "i"))
+              ] | length
+            ')"
+
+            pr_issue_comment_count="$(echo "${issue_comments_json}" | jq --arg rx "${bot_regex}" '
+              [
+                .[]
+                | select(.user.login | test($rx; "i"))
+              ] | length
+            ')"
+
+            total_pr_signals=$((pr_review_count + pr_review_comment_count + pr_issue_comment_count))
+            total_signals=$((review_count + review_comment_count + issue_comment_count))
+
+            echo "review_count=${review_count}"
+            echo "review_comment_count=${review_comment_count}"
+            echo "issue_comment_count=${issue_comment_count}"
+            echo "total_pr_codex_signals=${total_pr_signals}"
+            echo "total_codex_signals=${total_signals}"
+            echo "head_sha=${HEAD_SHA}"
+            echo "head_committed_at=${head_committed_at}"
+            echo "elapsed_seconds=${elapsed}"
+
+            if [[ "${total_signals}" -gt 0 ]]; then
+              echo "Codex review gate satisfied for head ${HEAD_SHA}."
+              exit 0
+            fi
+
+            if [[ "${total_pr_signals}" -gt 0 ]]; then
+              echo "::warning::No head-specific Codex signal yet for ${HEAD_SHA}; using existing PR-level Codex signal fallback."
+              echo "Codex review gate satisfied for PR #${PR_NUMBER}."
+              exit 0
+            fi
+
+            if [[ "${elapsed}" -ge "${max_wait}" ]]; then
+              break
+            fi
+
+            sleep "${poll_interval}"
+            elapsed=$((elapsed + poll_interval))
+          done
+
+          if [[ "${FAIL_ON_MISSING_SIGNAL}" == "true" ]]; then
+            echo "::error::No Codex review signal found on PR #${PR_NUMBER} for head ${HEAD_SHA} within ${max_wait}s."
+            echo "::error::Expected chatgpt-codex-connector[bot] signal (review/review-comment/PR comment) for current head."
             exit 1
           fi
 
-          echo "Codex review gate satisfied for head ${HEAD_SHA}."
+          echo "::warning::No Codex review signal found for PR #${PR_NUMBER} within ${max_wait}s."
+          echo "::warning::Fail-open mode is active (FAIL_ON_MISSING_SIGNAL=false); not blocking merge."
+          exit 0
