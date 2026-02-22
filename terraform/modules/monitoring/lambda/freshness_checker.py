@@ -91,6 +91,19 @@ def current_jst_date():
     return (datetime.now(timezone.utc) + timedelta(hours=9)).date()
 
 
+def parse_bool(value, default=False):
+    """Parse optional boolean-like value from event payloads/env inputs."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'y', 'on')
+    return default
+
+
 def check_dump_file(prefix, date_str):
     """Check existence and size for one dump file."""
     base_key = f"{prefix.rstrip('/')}/gghouse_{date_str}"
@@ -323,6 +336,10 @@ def evaluate_upstream_sync_staleness(
     if now_jst is None:
         now_jst = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=9)))
 
+    reference_jst = parse_manifest_datetime(manifest.get('generated_at'))
+    if reference_jst is None:
+        reference_jst = now_jst
+
     table_map = manifest.get('max_updated_at_by_table')
     if not isinstance(table_map, dict):
         table_map = manifest.get('source_table_max_updated_at')
@@ -344,13 +361,14 @@ def evaluate_upstream_sync_staleness(
             )
             continue
 
-        lag_hours = round((now_jst - parsed).total_seconds() / 3600, 2)
+        lag_hours = round((reference_jst - parsed).total_seconds() / 3600, 2)
         if lag_hours > stale_hours:
             stale_entries.append(
                 {
                     'table': table,
                     'max_updated_at': parsed.isoformat(),
                     'lag_hours': lag_hours,
+                    'reference_time': reference_jst.isoformat(),
                     'reason': 'stale_upstream_sync',
                 }
             )
@@ -399,6 +417,12 @@ def send_upstream_sync_alert(stale_entries, manifest_key):
 
 def lambda_handler(event, context):
     """Main Lambda handler."""
+    if not isinstance(event, dict):
+        event = {}
+
+    suppress_notifications = parse_bool(event.get('suppress_notifications'), False)
+    skip_upstream_sync_check = parse_bool(event.get('skip_upstream_sync_check'), False)
+
     print(f'Checking table freshness for: {TABLES_TO_CHECK}')
 
     connection = None
@@ -513,21 +537,27 @@ def lambda_handler(event, context):
                     safe_publish_dump_metric('global', 'DumpPrefixIssue', len(issues))
         if stale_dumps:
             safe_publish_dump_metric('global', 'StaleDumpEntries', len(stale_dumps))
-            send_dump_alert(stale_dumps)
+            if not suppress_notifications:
+                send_dump_alert(stale_dumps)
 
-        upstream_result = check_upstream_sync_staleness()
-        upstream_manifest_key = upstream_result.get('manifest_key')
-        stale_upstream = upstream_result.get('stale_entries', [])
-        if stale_upstream:
-            print(
-                f"⚠️ Upstream sync stale entries detected: {len(stale_upstream)} "
-                f"(manifest={upstream_manifest_key})"
-            )
-            send_upstream_sync_alert(stale_upstream, upstream_manifest_key)
+        if not skip_upstream_sync_check:
+            upstream_result = check_upstream_sync_staleness()
+            upstream_manifest_key = upstream_result.get('manifest_key')
+            stale_upstream = upstream_result.get('stale_entries', [])
+            if stale_upstream:
+                print(
+                    f"⚠️ Upstream sync stale entries detected: {len(stale_upstream)} "
+                    f"(manifest={upstream_manifest_key})"
+                )
+                if not suppress_notifications:
+                    send_upstream_sync_alert(stale_upstream, upstream_manifest_key)
+        else:
+            print('ℹ️ Skipping upstream sync staleness check due to event flag')
 
         if stale_tables:
-            send_alert(stale_tables)
-            print(f'Alert sent for {len(stale_tables)} stale tables')
+            if not suppress_notifications:
+                send_alert(stale_tables)
+                print(f'Alert sent for {len(stale_tables)} stale tables')
 
         return {
             'statusCode': 200 if (not stale_tables and not stale_dumps and not stale_upstream) else 400,
@@ -544,6 +574,8 @@ def lambda_handler(event, context):
                     'stale_dumps': stale_dumps,
                     'stale_upstream': stale_upstream,
                     'upstream_manifest_key': upstream_manifest_key,
+                    'notifications_suppressed': suppress_notifications,
+                    'upstream_sync_check_skipped': skip_upstream_sync_check,
                 }
             ),
         }
