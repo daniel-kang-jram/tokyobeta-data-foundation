@@ -47,7 +47,7 @@ data "archive_file" "freshness_checker_zip" {
 
   source {
     content = templatefile("${path.module}/lambda/freshness_checker.py", {
-      tables = ["movings", "tenants", "rooms", "inquiries", "apartments"]
+      tables = ["movings", "tenants", "rooms", "apartments"]
     })
     filename = "freshness_checker.py"
   }

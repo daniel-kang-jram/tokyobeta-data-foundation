@@ -3,6 +3,7 @@
 import builtins
 import io
 import json
+import re
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,6 +14,10 @@ import pytest
 TEMPLATE_PATH = (
     Path(__file__).resolve().parents[2]
     / "terraform/modules/monitoring/lambda/freshness_checker.py"
+)
+FRESHNESS_TF_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "terraform/modules/monitoring/data_freshness_alarms.tf"
 )
 
 
@@ -401,3 +406,17 @@ def test_lambda_handler_does_not_alert_for_warning_only_freshness(monkeypatch):
     assert result["statusCode"] == 200
     assert body["stale_count"] == 0
     assert table_alerts == []
+
+
+def test_freshness_checker_db_table_list_excludes_inquiries():
+    """DB freshness checks should exclude legacy inquiries table."""
+    tf_text = FRESHNESS_TF_PATH.read_text(encoding="utf-8")
+    anchor = tf_text.find('templatefile("${path.module}/lambda/freshness_checker.py"')
+    assert anchor != -1, "Could not find freshness_checker templatefile block"
+    template_window = tf_text[anchor : anchor + 500]
+    match = re.search(r'tables\s*=\s*\[(?P<body>[^\]]+)\]', template_window, re.DOTALL)
+    assert match is not None, "Could not find freshness_checker template tables list"
+
+    tables = re.findall(r'"([^"]+)"', match.group("body"))
+    assert "inquiries" not in tables
+    assert set(tables) == {"movings", "tenants", "rooms", "apartments"}
