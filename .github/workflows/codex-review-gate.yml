@@ -40,11 +40,26 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
 
           api_base="https://api.github.com/repos/${REPOSITORY}"
           bot_regex='codex-connector\[bot\]$'
+          workflow_path=".github/workflows/codex-review-gate.yml"
+
+          base_file_http_code="$(
+            curl -sS -o /tmp/base_gate_workflow.json -w "%{http_code}" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${api_base}/contents/${workflow_path}?ref=${BASE_REF}"
+          )"
+
+          if [[ "${base_file_http_code}" != "200" ]]; then
+            echo "::warning::Bootstrap mode: ${workflow_path} is not present on base branch ${BASE_REF}."
+            echo "::warning::Skipping strict Codex gate for rollout PR. Gate is enforced after merge to base."
+            exit 0
+          fi
 
           fetch_paginated_array() {
             local endpoint="$1"
