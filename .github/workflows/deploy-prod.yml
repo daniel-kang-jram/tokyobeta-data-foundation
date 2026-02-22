@@ -263,7 +263,7 @@ jobs:
           output_file="$(mktemp)"
           aws lambda invoke \
             --function-name tokyobeta-prod-table-freshness-checker \
-            --payload '{"suppress_notifications":true,"skip_upstream_sync_check":true}' \
+            --payload '{"suppress_notifications":true}' \
             "${output_file}" >/dev/null
 
           if jq -e '.errorMessage' "${output_file}" >/dev/null 2>&1; then
