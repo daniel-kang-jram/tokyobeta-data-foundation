@@ -288,6 +288,22 @@ class TestLoadToAuroraStaging:
         table_count, stmt_count = load_to_aurora_staging(mock_conn, statements)
         
         assert stmt_count == 3
+
+    def test_creates_property_geo_backup_table(self):
+        """Should create persistent property geo backup table for downstream dbt joins."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchall.return_value = []
+
+        statements = ["CREATE TABLE apartments (id INT);"]
+        load_to_aurora_staging(mock_conn, statements)
+
+        create_geo_calls = [
+            call for call in mock_cursor.execute.call_args_list
+            if 'CREATE TABLE IF NOT EXISTS `staging`.`property_geo_latlon_backup`' in str(call)
+        ]
+        assert len(create_geo_calls) >= 1
     
     def test_commits_every_100_statements(self):
         """Should commit in batches of 100."""
@@ -378,6 +394,26 @@ class TestCleanupEmptyStagingTables:
         dropped_count = cleanup_empty_staging_tables(mock_conn)
         
         assert dropped_count == 0
+
+    def test_preserves_property_geo_backup_when_empty(self):
+        """Should never drop persistent property geolocation backup table."""
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        mock_cursor.fetchall.return_value = [('property_geo_latlon_backup',), ('temp_empty',)]
+
+        def _fetchone_side_effect():
+            return (0,)
+
+        mock_cursor.fetchone.side_effect = _fetchone_side_effect
+
+        dropped_count = cleanup_empty_staging_tables(mock_conn)
+
+        assert dropped_count == 1
+        drop_sql = [str(c) for c in mock_cursor.execute.call_args_list if 'DROP TABLE' in str(c)]
+        assert any('`staging`.`temp_empty`' in sql for sql in drop_sql)
+        assert not any('`staging`.`property_geo_latlon_backup`' in sql for sql in drop_sql)
 
 
 class TestArchiveProcessedDump:

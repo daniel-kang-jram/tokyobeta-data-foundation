@@ -712,6 +712,71 @@ def test_reset_staging_tables_drops_existing(monkeypatch):
     assert "SET FOREIGN_KEY_CHECKS = 1" in executed_sql
 
 
+def test_reset_staging_tables_preserves_property_geo_backup(monkeypatch):
+    cursor = Mock()
+    cursor.fetchall.return_value = [
+        ("tenants",),
+        ("property_geo_latlon_backup",),
+        ("llm_enrichment_cache",),
+    ]
+
+    dropped = daily_etl.reset_staging_tables(cursor)
+
+    assert dropped == 1
+    executed_sql = [call.args[0] for call in cursor.execute.call_args_list]
+    assert "DROP TABLE IF EXISTS `staging`.`tenants`" in executed_sql
+    assert not any(
+        "DROP TABLE IF EXISTS `staging`.`property_geo_latlon_backup`" in sql
+        for sql in executed_sql
+    )
+
+
+def test_ensure_property_geo_latlon_backup_table_creates_table():
+    cursor = Mock()
+
+    daily_etl.ensure_property_geo_latlon_backup_table(cursor)
+
+    executed_sql = cursor.execute.call_args[0][0]
+    assert (
+        "CREATE TABLE IF NOT EXISTS `staging`.`property_geo_latlon_backup`"
+        in executed_sql
+    )
+
+
+def test_upsert_property_geo_latlon_backup_returns_rowcount():
+    cursor = Mock()
+    cursor.rowcount = 15
+
+    upserted = daily_etl.upsert_property_geo_latlon_backup(cursor)
+
+    assert upserted == 15
+    executed_sql = cursor.execute.call_args[0][0]
+    assert "INSERT INTO `staging`.`property_geo_latlon_backup`" in executed_sql
+    assert "FROM `staging`.`apartments` a" in executed_sql
+
+
+def test_upload_property_geo_backup_csv_uploads_latest_and_dated_keys():
+    mock_s3 = Mock()
+    csv_content = (
+        "apartment_id,asset_id_hj,apartment_name,full_address,prefecture,municipality,"
+        "latitude,longitude,source_updated_at\n"
+        "1,A001,TOKYO β SAMPLE,東京都新宿区西新宿1-1-1,東京都,新宿区,35.0,139.0,2026-02-22 00:00:00\n"
+    )
+
+    result = daily_etl.upload_property_geo_backup_csv(
+        s3_client=mock_s3,
+        bucket="test-bucket",
+        csv_content=csv_content,
+        snapshot_date=date(2026, 2, 22),
+    )
+
+    assert result["dated_key"] == (
+        "reference/property_geo_latlon/dt=20260222/property_geo_latlon_backup.csv"
+    )
+    assert result["latest_key"] == "reference/property_geo_latlon/latest/property_geo_latlon_backup.csv"
+    assert mock_s3.put_object.call_count == 2
+
+
 def test_compute_occupancy_kpis_for_dates_future_projection_continues_from_previous_day(monkeypatch):
     """Future KPI rows should chain from prior day period_end_rooms (not reset to 0 after as-of+1)."""
 
@@ -1229,6 +1294,7 @@ def test_assert_required_staging_tables_exist_passes_when_all_present():
                 ("apartments",),
                 ("llm_enrichment_cache",),
                 ("movings",),
+                ("property_geo_latlon_backup",),
                 ("rooms",),
                 ("tenants",),
             ]
@@ -1246,6 +1312,7 @@ def test_assert_required_staging_tables_exist_raises_when_missing():
                 ("apartments",),
                 ("llm_enrichment_cache",),
                 ("movings",),
+                ("property_geo_latlon_backup",),
                 ("rooms",),
             ]
 
