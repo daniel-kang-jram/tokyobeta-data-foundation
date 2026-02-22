@@ -629,3 +629,95 @@ class TestLoggingAndMetrics:
         
         for field in required_fields:
             assert field in summary, f"Missing summary field: {field}"
+
+
+class TestProductionCacheContracts:
+    """Test explicit cache behavior for production reliability contracts."""
+
+    def test_save_predictions_returns_explicit_update_counts(self, mock_aurora_connection):
+        from glue.scripts.nationality_enricher import NationalityEnricher
+
+        conn, _cursor = mock_aurora_connection
+        predictions = [
+            {
+                'tenant_id': 87306,
+                'predicted_nationality': 'ミャンマー',
+                'confidence': 0.95,
+                'original_name': 'SAW THANDAR',
+            },
+            {
+                'tenant_id': 87307,
+                'predicted_nationality': None,
+                'confidence': 0.10,
+                'original_name': 'UNKNOWN',
+            },
+        ]
+
+        enricher = NationalityEnricher(
+            aurora_endpoint='test.com',
+            aurora_database='tokyobeta',
+            secret_arn='arn:test',
+            bedrock_region='us-east-1'
+        )
+
+        with patch.object(enricher, 'get_connection', return_value=conn):
+            summary = enricher.save_predictions(predictions)
+
+        assert summary['successful_updates'] == 1
+        assert summary['failed_updates'] == 0
+
+    def test_ensure_property_municipality_cache_table_exists(self, mock_aurora_connection):
+        from glue.scripts.nationality_enricher import NationalityEnricher
+
+        conn, cursor = mock_aurora_connection
+        enricher = NationalityEnricher(
+            aurora_endpoint='test.com',
+            aurora_database='tokyobeta',
+            secret_arn='arn:test',
+            bedrock_region='us-east-1'
+        )
+
+        with patch.object(enricher, 'get_connection', return_value=conn):
+            enricher.ensure_property_municipality_cache_table_exists()
+
+        create_calls = [str(call[0][0]) for call in cursor.execute.call_args_list]
+        assert any('llm_property_municipality_cache' in sql for sql in create_calls)
+
+    def test_infer_municipality_from_address_prefers_deterministic_parse(self):
+        from glue.scripts.nationality_enricher import NationalityEnricher
+
+        enricher = NationalityEnricher(
+            aurora_endpoint='test.com',
+            aurora_database='tokyobeta',
+            secret_arn='arn:test',
+            bedrock_region='us-east-1'
+        )
+
+        assert enricher.infer_municipality_from_address("東京都新宿区西新宿1-2-3") == "新宿区"
+        assert enricher.infer_municipality_from_address("神奈川県横浜市港北区新横浜2-1-1") == "横浜市"
+        assert enricher.infer_municipality_from_address("NoAddress") is None
+
+    def test_identify_apartments_needing_municipality_enrichment_applies_limit(
+        self,
+        mock_aurora_connection,
+    ):
+        from glue.scripts.nationality_enricher import NationalityEnricher
+
+        conn, cursor = mock_aurora_connection
+        cursor.fetchall.return_value = [
+            {'id': 1, 'apartment_name': 'A', 'prefecture': '東京都', 'municipality': None, 'address': '新宿区1-1'},
+        ]
+
+        enricher = NationalityEnricher(
+            aurora_endpoint='test.com',
+            aurora_database='tokyobeta',
+            secret_arn='arn:test',
+            bedrock_region='us-east-1'
+        )
+
+        with patch.object(enricher, 'get_connection', return_value=conn):
+            rows = enricher.identify_apartments_needing_municipality_enrichment(max_batch_size=150)
+
+        assert len(rows) == 1
+        sql = cursor.execute.call_args[0][0]
+        assert "LIMIT 150" in sql

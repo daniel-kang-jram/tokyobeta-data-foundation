@@ -764,7 +764,7 @@ def test_compute_occupancy_kpis_for_dates_future_projection_continues_from_previ
                 self._next_fetchone = {"count": self.moveins.get(target_date, 0)}
                 return
 
-            if "AND moveout_plans_date = %s" in sql_compact:
+            if "AND moveout_date = %s" in sql_compact:
                 target_date = params[1]
                 self._next_fetchone = {"count": self.moveouts.get(target_date, 0)}
                 return
@@ -886,7 +886,7 @@ def test_compute_occupancy_kpis_fact_day_uses_same_day_end_rooms_even_if_previou
                 self._next_fetchone = {"count": self.moveins.get(target_date, 0)}
                 return
 
-            if "AND moveout_plans_date = %s" in sql_compact:
+            if "AND moveout_date = %s" in sql_compact:
                 target_date = params[1]
                 self._next_fetchone = {"count": self.moveouts.get(target_date, 0)}
                 return
@@ -1118,3 +1118,74 @@ def test_update_gold_occupancy_kpis_repairs_stale_fact_dates_outside_primary_loo
 
     assert processed == len(captured_dates["dates"])
     assert date(2026, 2, 12) in captured_dates["dates"]
+
+
+def test_default_skip_llm_enrichment_prod_false():
+    assert daily_etl.default_skip_llm_enrichment("prod") is False
+    assert daily_etl.default_skip_llm_enrichment("PROD") is False
+
+
+def test_default_skip_llm_enrichment_non_prod_true():
+    assert daily_etl.default_skip_llm_enrichment("dev") is True
+    assert daily_etl.default_skip_llm_enrichment("test") is True
+
+
+def test_resolve_llm_runtime_settings_defaults_for_prod(monkeypatch):
+    monkeypatch.setitem(daily_etl.args, "ENVIRONMENT", "prod")
+    monkeypatch.delenv("DAILY_SKIP_LLM_ENRICHMENT", raising=False)
+    monkeypatch.delenv("DAILY_LLM_NATIONALITY_MAX_BATCH", raising=False)
+    monkeypatch.delenv("DAILY_LLM_MUNICIPALITY_MAX_BATCH", raising=False)
+    monkeypatch.delenv("DAILY_LLM_REQUESTS_PER_SECOND", raising=False)
+    monkeypatch.delenv("DAILY_LLM_FAIL_ON_ERROR", raising=False)
+    monkeypatch.setattr(daily_etl, "optional_argv_value", lambda _name: None)
+
+    settings = daily_etl.resolve_llm_runtime_settings()
+
+    assert settings["skip_enrichment"] is False
+    assert settings["nationality_max_batch"] == 300
+    assert settings["municipality_max_batch"] == 150
+    assert settings["requests_per_second"] == 3
+    assert settings["fail_on_error"] is False
+
+
+def test_resolve_llm_runtime_settings_env_override(monkeypatch):
+    monkeypatch.setitem(daily_etl.args, "ENVIRONMENT", "prod")
+    monkeypatch.setenv("DAILY_SKIP_LLM_ENRICHMENT", "true")
+
+    settings = daily_etl.resolve_llm_runtime_settings()
+
+    assert settings["skip_enrichment"] is True
+
+
+def test_assert_required_staging_tables_exist_passes_when_all_present():
+    class FakeCursor:
+        def execute(self, _sql, _params=None):
+            return None
+
+        def fetchall(self):
+            return [
+                ("apartments",),
+                ("llm_enrichment_cache",),
+                ("movings",),
+                ("rooms",),
+                ("tenants",),
+            ]
+
+    daily_etl.assert_required_staging_tables_exist(FakeCursor())
+
+
+def test_assert_required_staging_tables_exist_raises_when_missing():
+    class FakeCursor:
+        def execute(self, _sql, _params=None):
+            return None
+
+        def fetchall(self):
+            return [
+                ("apartments",),
+                ("llm_enrichment_cache",),
+                ("movings",),
+                ("rooms",),
+            ]
+
+    with pytest.raises(RuntimeError, match="staging.tenants"):
+        daily_etl.assert_required_staging_tables_exist(FakeCursor())

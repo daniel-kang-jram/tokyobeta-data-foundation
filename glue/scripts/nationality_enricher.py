@@ -15,6 +15,7 @@ import json
 import pymysql
 import time
 import logging
+import re
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 
@@ -46,6 +47,16 @@ Instructions:
 - If truly ambiguous, respond with: その他
 
 Respond with ONLY the nationality, nothing else."""
+
+    MUNICIPALITY_PREDICTION_PROMPT = """Infer the most likely Japanese municipality from this address.
+
+Address: {address}
+
+Instructions:
+- Respond with ONLY one municipality in Japanese (e.g., 新宿区, 横浜市, 川崎市)
+- Do not include prefecture, postal code, or explanation
+- If uncertain, respond with: 不明
+"""
     
     def __init__(
         self,
@@ -184,6 +195,37 @@ Respond with ONLY the nationality, nothing else."""
         finally:
             cursor.close()
             conn.close()
+
+    def ensure_property_municipality_cache_table_exists(self):
+        """Ensure staging.llm_property_municipality_cache table exists."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            logger.info("Ensuring staging.llm_property_municipality_cache table exists...")
+            create_sql = """
+                CREATE TABLE IF NOT EXISTS staging.llm_property_municipality_cache (
+                    apartment_id BIGINT NOT NULL,
+                    apartment_name VARCHAR(255),
+                    full_address VARCHAR(512),
+                    address_hash CHAR(64),
+                    llm_municipality VARCHAR(128),
+                    llm_confidence FLOAT,
+                    enriched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    model_version VARCHAR(64),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (apartment_id),
+                    INDEX idx_llm_property_muni_enriched_at (enriched_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                COMMENT='Persistent cache for LLM municipality inference'
+            """
+            cursor.execute(create_sql)
+            conn.commit()
+            logger.info("✓ staging.llm_property_municipality_cache table verified/created")
+        finally:
+            cursor.close()
+            conn.close()
     
     def identify_tenants_needing_enrichment(self) -> List[Dict]:
         """
@@ -253,6 +295,72 @@ Respond with ONLY the nationality, nothing else."""
         finally:
             cursor.close()
             conn.close()
+
+    def identify_apartments_needing_municipality_enrichment(
+        self,
+        max_batch_size: int = 150,
+    ) -> List[Dict]:
+        """Identify properties missing municipality where cache is stale/missing."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            logger.info("Identifying properties needing municipality enrichment...")
+            query = f"""
+                SELECT
+                    a.id,
+                    a.apartment_name,
+                    a.prefecture,
+                    a.municipality,
+                    a.address,
+                    CONCAT_WS('', COALESCE(a.prefecture, ''), COALESCE(a.address, '')) AS full_address
+                FROM staging.apartments a
+                LEFT JOIN staging.llm_property_municipality_cache c
+                    ON a.id = c.apartment_id
+                WHERE (
+                    a.municipality IS NULL
+                    OR a.municipality = ''
+                    OR a.municipality = 'Unknown'
+                )
+                  AND a.address IS NOT NULL
+                  AND a.address <> ''
+                  AND (
+                    c.apartment_id IS NULL
+                    OR c.address_hash <> SHA2(
+                        CONCAT_WS('', COALESCE(a.prefecture, ''), COALESCE(a.address, '')),
+                        256
+                    )
+                  )
+                ORDER BY a.updated_at DESC
+                LIMIT {int(max_batch_size)}
+            """
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            logger.info(f"Found {len(rows)} properties needing municipality enrichment")
+            return rows
+        finally:
+            cursor.close()
+            conn.close()
+
+    def infer_municipality_from_address(self, full_address: str) -> Optional[str]:
+        """Extract municipality deterministically from Japanese address text."""
+        if not full_address:
+            return None
+        normalized = re.sub(r"\s+", "", str(full_address))
+        if normalized == "":
+            return None
+
+        match = re.search(
+            r"^(東京都|北海道|(?:京都|大阪)府|.{2,3}県)?(?P<municipality>[^0-9\-丁目番地号]+?[市区町村])",
+            normalized,
+        )
+        if not match:
+            return None
+
+        municipality = match.group("municipality")
+        if municipality in {"不明", "Unknown"}:
+            return None
+        return municipality
     
     def predict_nationality(self, full_name: str) -> Optional[str]:
         """
@@ -301,6 +409,41 @@ Respond with ONLY the nationality, nothing else."""
         
         except Exception as e:
             logger.error(f"Bedrock API error for name '{full_name}': {str(e)}")
+            return None
+
+    def predict_municipality(self, full_address: str) -> Optional[str]:
+        """Predict municipality from address using deterministic parse, then LLM fallback."""
+        deterministic = self.infer_municipality_from_address(full_address)
+        if deterministic:
+            return deterministic
+
+        if not full_address or full_address.strip() == '':
+            return None
+
+        try:
+            prompt = self.MUNICIPALITY_PREDICTION_PROMPT.format(address=full_address)
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 50,
+                "temperature": 0.1,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ]
+            }
+            response = self.bedrock_client.invoke_model(
+                modelId=self.BEDROCK_MODEL_ID,
+                body=json.dumps(request_body)
+            )
+            response_body = json.loads(response['body'].read())
+            municipality = response_body['content'][0]['text'].strip()
+            if municipality in {'', '不明', 'Unknown'}:
+                return None
+            return municipality
+        except Exception as e:
+            logger.error(f"Bedrock API error for address '{full_address}': {str(e)}")
             return None
     
     def batch_predict_nationalities(self, tenants: List[Dict]) -> List[Dict]:
@@ -358,7 +501,7 @@ Respond with ONLY the nationality, nothing else."""
             logger.info("DRY RUN: Would save predictions, but dry_run=True")
             for pred in predictions[:5]:  # Show first 5
                 logger.info(f"  Would update tenant {pred['tenant_id']}: {pred['predicted_nationality']}")
-            return
+            return {'successful_updates': 0, 'failed_updates': 0}
         
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -411,6 +554,7 @@ Respond with ONLY the nationality, nothing else."""
             
             if failed_updates > 0:
                 logger.warning(f"⚠ {failed_updates} updates failed")
+            return {'successful_updates': successful_updates, 'failed_updates': failed_updates}
         
         except Exception as e:
             logger.error(f"Database transaction error: {str(e)}")
@@ -420,6 +564,132 @@ Respond with ONLY the nationality, nothing else."""
         finally:
             cursor.close()
             conn.close()
+
+    def save_municipality_predictions(self, predictions: List[Dict]) -> Dict[str, int]:
+        """Persist municipality predictions to cache and apartments table."""
+        if self.dry_run:
+            logger.info("DRY RUN: Would save municipality predictions, but dry_run=True")
+            return {'successful_updates': 0, 'failed_updates': 0}
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        successful_updates = 0
+        failed_updates = 0
+
+        try:
+            for pred in predictions:
+                try:
+                    municipality = pred.get('predicted_municipality')
+                    if not municipality:
+                        continue
+
+                    cursor.execute("""
+                        INSERT INTO staging.llm_property_municipality_cache
+                            (apartment_id, apartment_name, full_address, address_hash,
+                             llm_municipality, llm_confidence, enriched_at, model_version)
+                        VALUES (%s, %s, %s, SHA2(%s, 256), %s, %s, NOW(), %s)
+                        ON DUPLICATE KEY UPDATE
+                            apartment_name = VALUES(apartment_name),
+                            full_address = VALUES(full_address),
+                            address_hash = VALUES(address_hash),
+                            llm_municipality = VALUES(llm_municipality),
+                            llm_confidence = VALUES(llm_confidence),
+                            enriched_at = VALUES(enriched_at),
+                            model_version = VALUES(model_version)
+                    """, (
+                        pred['apartment_id'],
+                        pred.get('apartment_name'),
+                        pred.get('full_address'),
+                        pred.get('full_address') or '',
+                        municipality,
+                        pred.get('confidence', 0.8),
+                        pred.get('model_used', self.BEDROCK_MODEL_ID),
+                    ))
+
+                    cursor.execute("""
+                        UPDATE staging.apartments
+                        SET municipality = %s
+                        WHERE id = %s
+                          AND (municipality IS NULL OR municipality = '' OR municipality = 'Unknown')
+                    """, (municipality, pred['apartment_id']))
+
+                    successful_updates += 1
+                except Exception as e:
+                    logger.error(
+                        "Failed municipality update for apartment %s: %s",
+                        pred.get('apartment_id'),
+                        str(e),
+                    )
+                    failed_updates += 1
+
+            conn.commit()
+            logger.info(
+                "✓ Saved municipality predictions: success=%s failed=%s",
+                successful_updates,
+                failed_updates,
+            )
+            return {'successful_updates': successful_updates, 'failed_updates': failed_updates}
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
+
+    def enrich_missing_municipalities(self, max_batch_size: int = 150) -> Dict:
+        """Enrich missing apartment municipality values using cache-first logic."""
+        start_time = time.time()
+        summary = {
+            'properties_identified': 0,
+            'predictions_made': 0,
+            'successful_updates': 0,
+            'failed_updates': 0,
+            'execution_time_seconds': 0,
+        }
+
+        self.ensure_property_municipality_cache_table_exists()
+        properties = self.identify_apartments_needing_municipality_enrichment(
+            max_batch_size=max_batch_size
+        )
+        summary['properties_identified'] = len(properties)
+
+        if not properties:
+            summary['execution_time_seconds'] = time.time() - start_time
+            return summary
+
+        predictions = []
+        for idx, prop in enumerate(properties, start=1):
+            if idx > 1 and self.request_delay > 0:
+                time.sleep(self.request_delay)
+
+            full_address = prop.get('full_address') or ''
+            deterministic = self.infer_municipality_from_address(full_address)
+            if deterministic:
+                predicted = deterministic
+                model_used = 'deterministic_regex'
+                confidence = 1.0
+            else:
+                predicted = self.predict_municipality(full_address)
+                model_used = self.BEDROCK_MODEL_ID
+                confidence = 0.8 if predicted else 0.0
+
+            predictions.append({
+                'apartment_id': prop['id'],
+                'apartment_name': prop.get('apartment_name'),
+                'full_address': full_address,
+                'predicted_municipality': predicted,
+                'model_used': model_used,
+                'confidence': confidence,
+            })
+
+        summary['predictions_made'] = sum(
+            1 for pred in predictions if pred.get('predicted_municipality') is not None
+        )
+        save_summary = self.save_municipality_predictions(predictions)
+        summary['successful_updates'] = save_summary['successful_updates']
+        summary['failed_updates'] = save_summary['failed_updates']
+        summary['execution_time_seconds'] = time.time() - start_time
+        return summary
     
     def enrich_all_missing_nationalities(self) -> Dict:
         """
@@ -461,9 +731,9 @@ Respond with ONLY the nationality, nothing else."""
             summary['predictions_made'] = len([p for p in predictions if p['predicted_nationality'] is not None])
             
             # Step 4: Save predictions to database
-            self.save_predictions(predictions)
-            summary['successful_updates'] = sum(1 for p in predictions if p['predicted_nationality'] is not None)
-            summary['failed_updates'] = sum(1 for p in predictions if p['predicted_nationality'] is None)
+            save_summary = self.save_predictions(predictions)
+            summary['successful_updates'] = save_summary['successful_updates']
+            summary['failed_updates'] = save_summary['failed_updates']
             
             # Calculate execution time
             summary['execution_time_seconds'] = time.time() - start_time

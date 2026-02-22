@@ -32,7 +32,6 @@ jobs:
       TERRAFORM_STATE_KEY: prod/terraform.tfstate
       TF_VAR_alert_email: ${{ secrets.TF_VAR_ALERT_EMAIL }}
       TF_VAR_alert_emails: '["jram-ggh@outlook.com","daniel.kang@jram.jp"]'
-      TF_VAR_allowed_cidr_blocks: '["85.115.98.80/32","13.112.83.65/32","54.168.114.197/32"]'
       TF_VAR_artifact_release: ${{ github.sha }}
       TF_VAR_create_rds_cron_secret: "true"
       TF_VAR_manage_rds_cron_secret_value: "false"
@@ -58,21 +57,20 @@ jobs:
             echo "::error::TF_VAR_alert_emails must include daniel.kang@jram.jp."
             exit 1
           fi
-          if [[ -z "${TF_VAR_allowed_cidr_blocks}" ]]; then
-            echo "::error::Missing TF_VAR_allowed_cidr_blocks."
-            exit 1
-          fi
           if [[ -z "${TF_VAR_artifact_release}" ]]; then
             echo "::error::Missing TF_VAR_artifact_release."
             exit 1
           fi
-          if [[ "${TF_VAR_allowed_cidr_blocks}" != *"13.112.83.65/32"* ]]; then
-            echo "::error::TF_VAR_allowed_cidr_blocks must include EC2 dump EIP 13.112.83.65/32."
-            exit 1
-          fi
-          if [[ "${TF_VAR_allowed_cidr_blocks}" != *"54.168.114.197/32"* ]]; then
-            echo "::error::TF_VAR_allowed_cidr_blocks must include V3 upstream IP 54.168.114.197/32."
-            exit 1
+          # If caller explicitly overrides allowed CIDRs, enforce critical IPs.
+          if [[ -n "${TF_VAR_allowed_cidr_blocks:-}" ]]; then
+            if [[ "${TF_VAR_allowed_cidr_blocks}" != *"13.112.83.65/32"* ]]; then
+              echo "::error::TF_VAR_allowed_cidr_blocks must include EC2 dump EIP 13.112.83.65/32."
+              exit 1
+            fi
+            if [[ "${TF_VAR_allowed_cidr_blocks}" != *"54.168.114.197/32"* ]]; then
+              echo "::error::TF_VAR_allowed_cidr_blocks must include V3 upstream IP 54.168.114.197/32."
+              exit 1
+            fi
           fi
           if [[ "${TF_VAR_manage_rds_cron_secret_value}" != "false" ]]; then
             echo "::error::TF_VAR_manage_rds_cron_secret_value must be false in production."

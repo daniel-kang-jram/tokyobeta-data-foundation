@@ -60,9 +60,6 @@ resource "aws_secretsmanager_secret_version" "rds_cron_credentials" {
   })
 
   lifecycle {
-    # Keep cron secret value external to Terraform to prevent accidental source rewrites.
-    ignore_changes = [secret_string]
-
     precondition {
       condition = (
         !var.manage_rds_cron_secret_value

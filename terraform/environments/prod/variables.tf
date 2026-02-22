@@ -104,6 +104,36 @@ variable "rds_cron_port" {
   default     = 3306
 }
 
+variable "daily_skip_llm_enrichment" {
+  description = "Whether production daily_etl should skip LLM enrichment"
+  type        = bool
+  default     = false
+}
+
+variable "daily_llm_nationality_max_batch" {
+  description = "Max nationality enrichment records per daily_etl run"
+  type        = number
+  default     = 300
+}
+
+variable "daily_llm_municipality_max_batch" {
+  description = "Max municipality enrichment records per daily_etl run"
+  type        = number
+  default     = 150
+}
+
+variable "daily_llm_requests_per_second" {
+  description = "Rate limit for LLM calls in daily_etl"
+  type        = number
+  default     = 3
+}
+
+variable "daily_llm_fail_on_error" {
+  description = "Whether daily_etl should fail on LLM enrichment errors"
+  type        = bool
+  default     = false
+}
+
 # Evidence hosting (CloudFront + S3 + Cognito)
 variable "evidence_custom_domain" {
   description = "Custom domain for hosted Evidence app"
