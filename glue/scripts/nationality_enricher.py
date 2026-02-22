@@ -583,6 +583,14 @@ Instructions:
                     if not municipality:
                         continue
 
+                    # Update canonical apartments value first; cache write follows only on success.
+                    cursor.execute("""
+                        UPDATE staging.apartments
+                        SET municipality = %s
+                        WHERE id = %s
+                          AND (municipality IS NULL OR municipality = '' OR municipality = 'Unknown')
+                    """, (municipality, pred['apartment_id']))
+
                     cursor.execute("""
                         INSERT INTO staging.llm_property_municipality_cache
                             (apartment_id, apartment_name, full_address, address_hash,
@@ -605,13 +613,6 @@ Instructions:
                         pred.get('confidence', 0.8),
                         pred.get('model_used', self.BEDROCK_MODEL_ID),
                     ))
-
-                    cursor.execute("""
-                        UPDATE staging.apartments
-                        SET municipality = %s
-                        WHERE id = %s
-                          AND (municipality IS NULL OR municipality = '' OR municipality = 'Unknown')
-                    """, (municipality, pred['apartment_id']))
 
                     successful_updates += 1
                 except Exception as e:

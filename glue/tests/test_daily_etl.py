@@ -1157,6 +1157,68 @@ def test_resolve_llm_runtime_settings_env_override(monkeypatch):
     assert settings["skip_enrichment"] is True
 
 
+def test_get_artifact_release_prefers_argv_then_dbt_project_path(monkeypatch):
+    monkeypatch.setitem(
+        daily_etl.args,
+        "DBT_PROJECT_PATH",
+        "s3://test-bucket/dbt-project/releases/sha_from_dbt/",
+    )
+    monkeypatch.setattr(
+        daily_etl,
+        "optional_argv_value",
+        lambda name: "sha_from_argv" if name == "ARTIFACT_RELEASE" else None,
+    )
+
+    assert daily_etl.get_artifact_release() == "sha_from_argv"
+
+
+def test_get_artifact_release_parses_release_from_dbt_path(monkeypatch):
+    monkeypatch.setitem(
+        daily_etl.args,
+        "DBT_PROJECT_PATH",
+        "s3://test-bucket/dbt-project/releases/abcdef12345/",
+    )
+    monkeypatch.setattr(daily_etl, "optional_argv_value", lambda _name: None)
+
+    assert daily_etl.get_artifact_release() == "abcdef12345"
+
+
+def test_download_nationality_enricher_script_falls_back_to_legacy_key(monkeypatch, tmp_path):
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "test-bucket")
+    monkeypatch.setitem(
+        daily_etl.args,
+        "DBT_PROJECT_PATH",
+        "s3://test-bucket/dbt-project/releases/release123/",
+    )
+    monkeypatch.setattr(daily_etl, "optional_argv_value", lambda _name: None)
+
+    downloaded_keys = []
+    local_script = tmp_path / "nationality_enricher.py"
+
+    def fake_download_file(bucket, key, path):
+        assert bucket == "test-bucket"
+        downloaded_keys.append(key)
+        if key == "glue-scripts/releases/release123/nationality_enricher.py":
+            raise daily_etl.ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": "missing"}},
+                "GetObject",
+            )
+        pathlib.Path(path).write_text("class NationalityEnricher:\n    pass\n", encoding="utf-8")
+
+    monkeypatch.setattr(daily_etl.s3, "download_file", fake_download_file)
+
+    downloaded_path, selected_key = daily_etl.download_nationality_enricher_script(
+        local_path=str(local_script)
+    )
+
+    assert downloaded_path == str(local_script)
+    assert selected_key == "glue-scripts/nationality_enricher.py"
+    assert downloaded_keys == [
+        "glue-scripts/releases/release123/nationality_enricher.py",
+        "glue-scripts/nationality_enricher.py",
+    ]
+
+
 def test_assert_required_staging_tables_exist_passes_when_all_present():
     class FakeCursor:
         def execute(self, _sql, _params=None):

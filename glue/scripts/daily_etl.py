@@ -180,6 +180,72 @@ def runtime_date(name: str, default: date) -> date:
         return default
 
 
+def get_artifact_release() -> str | None:
+    """
+    Resolve artifact release SHA/version from runtime args.
+    Priority:
+      1) --ARTIFACT_RELEASE
+      2) Parse from --DBT_PROJECT_PATH (.../releases/<sha>/)
+    """
+    explicit = optional_argv_value("ARTIFACT_RELEASE")
+    if explicit:
+        value = explicit.strip()
+        if value:
+            return value
+
+    dbt_project_path = str(args.get("DBT_PROJECT_PATH") or "").strip()
+    match = re.search(r"/releases/([^/]+)(?:/|$)", dbt_project_path)
+    if match:
+        return match.group(1)
+    return None
+
+
+def get_nationality_enricher_s3_keys() -> List[str]:
+    """Build ordered candidate S3 keys for nationality_enricher.py."""
+    keys: List[str] = []
+    artifact_release = get_artifact_release()
+    if artifact_release:
+        keys.append(f"glue-scripts/releases/{artifact_release}/nationality_enricher.py")
+
+    # Backward-compatible fallback for legacy unversioned deployments.
+    keys.append("glue-scripts/nationality_enricher.py")
+
+    # Deduplicate while preserving order.
+    return list(dict.fromkeys(keys))
+
+
+def download_nationality_enricher_script(local_path: str | None = None) -> Tuple[str, str]:
+    """
+    Download nationality_enricher.py from S3 using release-aware path first.
+
+    Returns:
+        Tuple of (downloaded_local_path, selected_s3_key)
+    """
+    import tempfile
+
+    target_path = local_path or os.path.join(tempfile.gettempdir(), "nationality_enricher.py")
+    bucket = args["S3_SOURCE_BUCKET"]
+    attempted: List[str] = []
+
+    for s3_key in get_nationality_enricher_s3_keys():
+        attempted.append(s3_key)
+        try:
+            s3.download_file(bucket, s3_key, target_path)
+            return target_path, s3_key
+        except ClientError as exc:
+            code = str(exc.response.get("Error", {}).get("Code", ""))
+            if code in {"NoSuchKey", "404", "NotFound"}:
+                print(f"Nationality enricher not found at s3://{bucket}/{s3_key}; trying fallback")
+                continue
+            raise
+
+    attempted_str = ", ".join(attempted)
+    raise FileNotFoundError(
+        f"Could not download nationality_enricher.py from any candidate key in bucket={bucket}: "
+        f"{attempted_str}"
+    )
+
+
 def default_skip_llm_enrichment(environment: str | None) -> bool:
     """Default enrichment policy: enabled in prod, disabled elsewhere."""
     return str(environment or "").strip().lower() != "prod"
@@ -2700,22 +2766,15 @@ def enrich_nationality_data(
     print("="*60)
     
     try:
-        # Download nationality_enricher.py from S3 and add to path
-        import os
-        import tempfile
-        enricher_path = os.path.join(tempfile.gettempdir(), 'nationality_enricher.py')
-        s3.download_file(
-            args['S3_SOURCE_BUCKET'],
-            'glue-scripts/nationality_enricher.py',
-            enricher_path
-        )
+        # Download nationality_enricher.py from release path first, then legacy fallback.
+        enricher_path, enricher_s3_key = download_nationality_enricher_script()
         
         # Add to Python path
         enricher_dir = os.path.dirname(enricher_path)
         if enricher_dir not in sys.path:
             sys.path.insert(0, enricher_dir)
         
-        print(f"✓ Downloaded nationality_enricher.py from S3")
+        print(f"✓ Downloaded nationality_enricher.py from s3://{args['S3_SOURCE_BUCKET']}/{enricher_s3_key}")
         
         # Import enricher
         from nationality_enricher import NationalityEnricher
@@ -2734,10 +2793,23 @@ def enrich_nationality_data(
         # Run nationality enrichment first (tenant cache)
         nationality_summary = enricher.enrich_all_missing_nationalities()
 
-        # Then run municipality enrichment with smaller cap (property cache)
-        municipality_summary = enricher.enrich_missing_municipalities(
-            max_batch_size=municipality_max_batch
-        )
+        municipality_summary = {
+            "properties_identified": 0,
+            "predictions_made": 0,
+            "successful_updates": 0,
+            "failed_updates": 0,
+            "execution_time_seconds": 0,
+        }
+        # Then run municipality enrichment with smaller cap (property cache), if available.
+        if hasattr(enricher, "enrich_missing_municipalities"):
+            municipality_summary = enricher.enrich_missing_municipalities(
+                max_batch_size=municipality_max_batch
+            )
+        else:
+            print(
+                "⚠ Downloaded nationality_enricher.py does not support municipality enrichment; "
+                "skipping municipality step."
+            )
 
         print(f"✓ LLM enrichment completed:")
         print(f"  - Nationality candidates: {nationality_summary['tenants_identified']}")

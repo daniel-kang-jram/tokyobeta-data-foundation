@@ -721,3 +721,78 @@ class TestProductionCacheContracts:
         assert len(rows) == 1
         sql = cursor.execute.call_args[0][0]
         assert "LIMIT 150" in sql
+
+    def test_save_municipality_predictions_updates_apartment_before_cache(
+        self,
+        mock_aurora_connection,
+    ):
+        from glue.scripts.nationality_enricher import NationalityEnricher
+
+        conn, cursor = mock_aurora_connection
+        enricher = NationalityEnricher(
+            aurora_endpoint='test.com',
+            aurora_database='tokyobeta',
+            secret_arn='arn:test',
+            bedrock_region='us-east-1'
+        )
+        predictions = [
+            {
+                'apartment_id': 101,
+                'apartment_name': 'Property A',
+                'full_address': '東京都新宿区西新宿1-2-3',
+                'predicted_municipality': '新宿区',
+                'confidence': 0.9,
+                'model_used': 'deterministic_regex',
+            }
+        ]
+
+        with patch.object(enricher, 'get_connection', return_value=conn):
+            summary = enricher.save_municipality_predictions(predictions)
+
+        assert summary['successful_updates'] == 1
+        executed_sql = [str(call[0][0]) for call in cursor.execute.call_args_list]
+        update_index = next(i for i, sql in enumerate(executed_sql) if "UPDATE staging.apartments" in sql)
+        cache_index = next(
+            i for i, sql in enumerate(executed_sql)
+            if "INSERT INTO staging.llm_property_municipality_cache" in sql
+        )
+        assert update_index < cache_index
+
+    def test_save_municipality_predictions_skips_cache_when_apartment_update_fails(
+        self,
+        mock_aurora_connection,
+    ):
+        from glue.scripts.nationality_enricher import NationalityEnricher
+
+        conn, cursor = mock_aurora_connection
+        enricher = NationalityEnricher(
+            aurora_endpoint='test.com',
+            aurora_database='tokyobeta',
+            secret_arn='arn:test',
+            bedrock_region='us-east-1'
+        )
+        predictions = [
+            {
+                'apartment_id': 102,
+                'apartment_name': 'Property B',
+                'full_address': '東京都渋谷区恵比寿1-1-1',
+                'predicted_municipality': '渋谷区',
+                'confidence': 0.9,
+                'model_used': 'deterministic_regex',
+            }
+        ]
+
+        def execute_side_effect(sql, *_args, **_kwargs):
+            if "UPDATE staging.apartments" in str(sql):
+                raise RuntimeError("update failed")
+            return None
+
+        cursor.execute.side_effect = execute_side_effect
+
+        with patch.object(enricher, 'get_connection', return_value=conn):
+            summary = enricher.save_municipality_predictions(predictions)
+
+        assert summary['successful_updates'] == 0
+        assert summary['failed_updates'] == 1
+        executed_sql = [str(call[0][0]) for call in cursor.execute.call_args_list]
+        assert not any("INSERT INTO staging.llm_property_municipality_cache" in sql for sql in executed_sql)
