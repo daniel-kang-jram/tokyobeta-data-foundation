@@ -1,7 +1,9 @@
 # Geography & Property Breakdown
 
 ```sql occupancy_map
-select *
+select
+  *,
+  0.000000001 as point_size
 from aurora_gold.occupancy_property_map_latest
 ```
 
@@ -11,8 +13,15 @@ from aurora_gold.occupancy_property_map_latest
   data={occupancy_map}
   lat="latitude"
   long="longitude"
-  size="total_rooms_num0"
+  size="point_size"
+  sizeCol="point_size"
+  maxSize={0.00025}
+  pointStyle="points"
   value="occupancy_rate_pct"
+  opacity={0.24}
+  ignoreZoom={false}
+  stroke={false}
+  weight={0}
   pointName="apartment_name"
   legendType="scalar"
   height={460}
