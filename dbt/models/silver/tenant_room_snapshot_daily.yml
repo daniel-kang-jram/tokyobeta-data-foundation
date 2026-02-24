@@ -74,11 +74,15 @@ models:
       
       - name: is_room_primary
         description: |
-          TRUE for exactly one row per (snapshot_date, apartment_id, room_id).
-          Marks the authoritative tenant for physical-room occupancy counting.
-          Priority: current occupants (入居中, 契約更新, 退去届受領) over scheduled
-          arrivals (初回家賃入金, 仮予約). Use WHERE is_room_primary = TRUE to count
-          occupied rooms as 1 per room regardless of turnover overlap.
+          TRUE for at most one row per (snapshot_date, apartment_id, room_id),
+          and only when the top-priority tenant is physically present (status IN
+          7, 9, 10, 11, 12, 13, 14, 15).
+
+          Rooms with only pre-move-in tenants (仮予約=4, 初回家賃入金=5, 入居説明=6)
+          get FALSE on all rows — the room is reserved but not yet occupied.
+
+          Use WHERE is_room_primary = TRUE to count physically occupied rooms
+          per the business rule "その日に入居していれば1、入居していなければ0".
       
       - name: moving_id
         description: Moving record ID

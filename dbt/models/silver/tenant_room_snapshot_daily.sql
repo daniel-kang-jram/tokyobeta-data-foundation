@@ -226,10 +226,21 @@ final AS (
         moveout_plans_date,
         
         -- Physical room occupancy flag (business owner definition: 1 room = 1)
-        -- TRUE for exactly one row per (apartment_id, room_id) per snapshot_date.
-        -- Use WHERE is_room_primary = TRUE for physical room count.
-        -- Rooms in turnover retain both records; only the current occupant is primary.
-        (room_priority_rn = 1) AS is_room_primary,
+        -- TRUE for exactly one row per (apartment_id, room_id) per snapshot_date,
+        -- but ONLY when the top-priority tenant is physically present.
+        --
+        -- Gated by physically-present statuses (7, 9–15):
+        --   7=入居, 9=入居中, 10=契約更新, 11=移動届受領, 12=移動手続き,
+        --   13=移動, 14=退去届受領, 15=退去予定
+        -- Excluded pre-move-in statuses (4=仮予約, 5=初回家賃入金, 6=入居説明):
+        --   These tenants have not physically arrived; rooms reserved-only are NOT occupied.
+        --
+        -- Rooms with only pre-move-in tenants get is_room_primary = FALSE on all rows,
+        -- correctly counting as 0 (vacant) per "入居していなければ0" rule.
+        (
+            room_priority_rn = 1
+            AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
+        ) AS is_room_primary,
         
         -- Metadata
         moving_id,
