@@ -11,6 +11,14 @@ models:
       
       Volume: ~12,000 rows/day (~4.4M rows/year).
       
+      Deduplication layers:
+        1. rn=1 per (tenant_id, apartment_id, room_id): removes ~3,500 duplicate
+           corporate contract records left open in staging.movings.
+        2. is_room_primary=TRUE per (apartment_id, room_id): marks one authoritative
+           tenant per physical room. Rooms in turnover (outgoing + incoming tenant
+           simultaneously registered) retain both rows; only the current occupant
+           is flagged TRUE. Use this for physical-room occupancy counting.
+      
       Used by:
       - gold.occupancy_daily_metrics (KPI computation)
       - Analysis queries requiring tenant-level daily history
@@ -63,6 +71,14 @@ models:
       
       - name: moveout_plans_date
         description: Actual moveout date (past only)
+      
+      - name: is_room_primary
+        description: |
+          TRUE for exactly one row per (snapshot_date, apartment_id, room_id).
+          Marks the authoritative tenant for physical-room occupancy counting.
+          Priority: current occupants (入居中, 契約更新, 退去届受領) over scheduled
+          arrivals (初回家賃入金, 仮予約). Use WHERE is_room_primary = TRUE to count
+          occupied rooms as 1 per room regardless of turnover overlap.
       
       - name: moving_id
         description: Moving record ID
