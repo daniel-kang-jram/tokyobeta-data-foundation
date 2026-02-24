@@ -20,7 +20,18 @@ Data Sources:
 - staging.apartments: Property names
 - staging.rooms: Room numbers
 
-Grain: One row per (snapshot_date, tenant_id, property, room) combination
+Grain: One row per (snapshot_date, tenant_id, apartment_id, room_id) combination.
+
+Two levels of deduplication:
+  1. Per (tenant_id, apartment_id, room_id): rn = 1 keeps the most recent moving record,
+     eliminating ~3,500 duplicate historical corporate contract entries.
+  2. Per (apartment_id, room_id): is_room_primary = TRUE marks the single authoritative
+     tenant for each physical room. Used for physical-room occupancy counting (1 room = 1).
+     Rooms in turnover have both outgoing and incoming tenants; only one row is primary.
+
+Physical occupancy counting (business owner definition: 1 if occupied, 0 if not):
+  SELECT COUNT(*) FROM ... WHERE is_room_primary = TRUE
+  -- gives unique room count, matching "その日に入居していれば1、入居していなければ0"
 
 Incremental Strategy:
 - Daily: append only today's snapshot_date rows
@@ -122,6 +133,46 @@ with_property_room AS (
         ON tra.room_id = r.id
 ),
 
+with_room_priority AS (
+    -- Assign priority rank within each physical room (apartment_id, room_id).
+    -- When a room has multiple tenant records (outgoing + incoming during turnover),
+    -- this identifies the single authoritative tenant for physical-room occupancy counting.
+    --
+    -- Priority logic: tenants physically present today outrank scheduled arrivals.
+    --   1. 入居中 (9)       — confirmed resident
+    --   2. 契約更新 (10)    — renewing, still resident
+    --   3. 移動届受領 (11)  — room transfer, still resident
+    --   4. 移動手続き (12)  — transfer in progress
+    --   5. 移動 (13)        — transferring
+    --   6. 退去届受領 (14)  — notice submitted, still resident
+    --   7. 退去予定 (15)    — scheduled departure, still resident
+    --   8. 入居 (7)         — move-in day
+    --   9. 入居説明 (6)     — briefing done
+    --  10. 初回家賃入金 (5) — first rent paid, not yet arrived
+    --  11. 仮予約 (4)       — tentative reservation
+    SELECT
+        *,
+        ROW_NUMBER() OVER (
+            PARTITION BY apartment_id, room_id
+            ORDER BY
+                CASE management_status_code
+                    WHEN 9  THEN 1
+                    WHEN 10 THEN 2
+                    WHEN 11 THEN 3
+                    WHEN 12 THEN 4
+                    WHEN 13 THEN 5
+                    WHEN 14 THEN 6
+                    WHEN 15 THEN 7
+                    WHEN 7  THEN 8
+                    WHEN 6  THEN 9
+                    WHEN 5  THEN 10
+                    WHEN 4  THEN 11
+                    ELSE        12
+                END
+        ) AS room_priority_rn
+    FROM with_property_room
+),
+
 final AS (
     SELECT
         -- Snapshot date (anchored to dump date via dbt vars; fallback to server date)
@@ -174,11 +225,28 @@ final AS (
         moveout_date,
         moveout_plans_date,
         
+        -- Physical room occupancy flag (business owner definition: 1 room = 1)
+        -- TRUE for exactly one row per (apartment_id, room_id) per snapshot_date,
+        -- but ONLY when the top-priority tenant is physically present.
+        --
+        -- Gated by physically-present statuses (7, 9–15):
+        --   7=入居, 9=入居中, 10=契約更新, 11=移動届受領, 12=移動手続き,
+        --   13=移動, 14=退去届受領, 15=退去予定
+        -- Excluded pre-move-in statuses (4=仮予約, 5=初回家賃入金, 6=入居説明):
+        --   These tenants have not physically arrived; rooms reserved-only are NOT occupied.
+        --
+        -- Rooms with only pre-move-in tenants get is_room_primary = FALSE on all rows,
+        -- correctly counting as 0 (vacant) per "入居していなければ0" rule.
+        (
+            room_priority_rn = 1
+            AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
+        ) AS is_room_primary,
+        
         -- Metadata
         moving_id,
         CURRENT_TIMESTAMP as dbt_updated_at
         
-    FROM with_property_room
+    FROM with_room_priority
 )
 
 SELECT * FROM final
