@@ -3,7 +3,7 @@
 ```sql occupancy_map
 select
   *,
-  0.000000001 as point_size
+  least(greatest(total_rooms_num0, 1), 20) as point_size
 from aurora_gold.occupancy_property_map_latest
 ```
 
@@ -15,11 +15,11 @@ from aurora_gold.occupancy_property_map_latest
   long="longitude"
   size="point_size"
   sizeCol="point_size"
-  maxSize={0.00025}
+  maxSize={5}
   pointStyle="points"
   value="occupancy_rate_pct"
-  opacity={0.24}
-  ignoreZoom={false}
+  opacity={0.95}
+  ignoreZoom={true}
   stroke={false}
   weight={0}
   pointName="apartment_name"
