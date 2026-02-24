@@ -81,3 +81,6 @@ evidence/screenshots/
 
 # Terraform evidence_hosting build artifacts
 terraform/modules/evidence_hosting/.build/
+
+# Terraform monitoring local layer artifact
+terraform/modules/monitoring/pymysql_layer.zip
