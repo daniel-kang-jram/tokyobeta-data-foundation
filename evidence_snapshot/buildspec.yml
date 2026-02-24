@@ -1,0 +1,26 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - aws --version
+  build:
+    commands:
+      - echo "Publishing snapshot Evidence build artifacts"
+      - test -f evidence_snapshot/build/index.html
+      - test -f evidence_snapshot/build/segments/index.html
+      - test -f evidence_snapshot/build/storyline/index.html
+      - |
+        if ! grep -qi "Snapshot Operations Dashboard" evidence_snapshot/build/index.html; then
+          echo "Snapshot marker check failed. Refusing to publish non-snapshot build."
+          exit 1
+        fi
+      - aws s3 sync evidence_snapshot/build/ "s3://$EVIDENCE_S3_BUCKET/" --delete
+      - |
+        if [ -d evidence_snapshot/static/__auth/assets ]; then
+          aws s3 sync \
+            evidence_snapshot/static/__auth/assets/ \
+            "s3://$EVIDENCE_S3_BUCKET/__auth/assets/" \
+            --delete
+        fi
+      - aws cloudfront create-invalidation --distribution-id "$EVIDENCE_CF_DISTRIBUTION_ID" --paths "/*"
