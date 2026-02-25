@@ -17,8 +17,16 @@ phases:
           NODE_OPTIONS="--max-old-space-size=4096" npm run sources -- --sources snapshot_csv
           NODE_OPTIONS="--max-old-space-size=4096" npm run build
           cd - >/dev/null
+        elif [ -f evidence_snapshot/build/index.html ]; then
+          echo "Using prebuilt snapshot assets from repository workspace"
         else
-          echo "No evidence_snapshot/package.json found; expecting prebuilt assets under evidence_snapshot/build"
+          echo "No source app found. Fetching current snapshot build from S3 for deploy baseline."
+          mkdir -p evidence_snapshot/build
+          aws s3 sync \
+            "s3://$EVIDENCE_S3_BUCKET/" \
+            evidence_snapshot/build/ \
+            --exclude "__auth/*" \
+            --exclude "__auth/**"
         fi
       - test -f evidence_snapshot/build/index.html
       - test -f evidence_snapshot/build/segments/index.html
@@ -28,7 +36,11 @@ phases:
           echo "Snapshot marker check failed. Refusing to publish non-snapshot build."
           exit 1
         fi
-      - aws s3 sync evidence_snapshot/build/ "s3://$EVIDENCE_S3_BUCKET/" --delete
+      - |
+        aws s3 sync evidence_snapshot/build/ "s3://$EVIDENCE_S3_BUCKET/" \
+          --delete \
+          --exclude "__auth/*" \
+          --exclude "__auth/**"
       - |
         if [ -d evidence_snapshot/static/__auth/assets ]; then
           aws s3 sync \
