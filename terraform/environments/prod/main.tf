@@ -249,6 +249,7 @@ module "evidence_snapshot_hosting" {
   evidence_repo_connection_arn = var.evidence_snapshot_codestar_connection_arn
   evidence_repo_full_name      = var.evidence_snapshot_repo_full_name
   evidence_repo_branch         = var.evidence_snapshot_repo_branch
+  buildspec_path               = "evidence_snapshot/buildspec.yml"
 }
 
 # --- GitHub OIDC + Deploy Role for CI/CD ---
