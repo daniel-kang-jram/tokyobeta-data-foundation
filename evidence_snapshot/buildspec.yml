@@ -1,0 +1,39 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - node --version
+      - npm --version
+      - aws --version
+  build:
+    commands:
+      - echo "Publishing snapshot Evidence build artifacts"
+      - |
+        if [ -f evidence_snapshot/package.json ]; then
+          echo "Building snapshot Evidence app from source"
+          cd evidence_snapshot
+          npm ci
+          NODE_OPTIONS="--max-old-space-size=4096" npm run sources -- --sources snapshot_csv
+          NODE_OPTIONS="--max-old-space-size=4096" npm run build
+          cd - >/dev/null
+        else
+          echo "No evidence_snapshot/package.json found; expecting prebuilt assets under evidence_snapshot/build"
+        fi
+      - test -f evidence_snapshot/build/index.html
+      - test -f evidence_snapshot/build/segments/index.html
+      - test -f evidence_snapshot/build/storyline/index.html
+      - |
+        if ! grep -qi "Snapshot Operations Dashboard" evidence_snapshot/build/index.html; then
+          echo "Snapshot marker check failed. Refusing to publish non-snapshot build."
+          exit 1
+        fi
+      - aws s3 sync evidence_snapshot/build/ "s3://$EVIDENCE_S3_BUCKET/" --delete
+      - |
+        if [ -d evidence_snapshot/static/__auth/assets ]; then
+          aws s3 sync \
+            evidence_snapshot/static/__auth/assets/ \
+            "s3://$EVIDENCE_S3_BUCKET/__auth/assets/" \
+            --delete
+        fi
+      - aws cloudfront create-invalidation --distribution-id "$EVIDENCE_CF_DISTRIBUTION_ID" --paths "/*"
