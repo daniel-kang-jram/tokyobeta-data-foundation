@@ -336,6 +336,37 @@ def test_get_gap_dates_for_window_reads_window_gaps(monkeypatch):
     ) == [date(2026, 2, 12), date(2026, 2, 18)]
 
 
+def test_purge_gold_occupancy_gap_rows_executes_delete(monkeypatch):
+    cursor = Mock()
+    cursor.rowcount = 3
+
+    deleted = daily_etl.purge_gold_occupancy_gap_rows(
+        cursor,
+        date(2026, 2, 11),
+        date(2026, 2, 18),
+    )
+
+    assert deleted == 3
+    cursor.execute.assert_called_once()
+    sql, params = cursor.execute.call_args.args
+    assert "DELETE g" in sql
+    assert "FROM gold.occupancy_daily_metrics g" in sql
+    assert "gold.data_quality_calendar c" in sql
+    assert params == (date(2026, 2, 11), date(2026, 2, 18))
+
+
+def test_purge_gold_occupancy_gap_rows_skip_invalid_date_range():
+    cursor = Mock()
+
+    assert daily_etl.purge_gold_occupancy_gap_rows(
+        cursor,
+        date(2026, 2, 20),
+        date(2026, 2, 19),
+    ) == 0
+
+    cursor.execute.assert_not_called()
+
+
 def test_get_aurora_credentials_reads_legacy_and_standard_secret_keys(monkeypatch):
     daily_etl._AURORA_CREDENTIALS = None
     mock_sm = Mock()
@@ -1372,6 +1403,7 @@ def test_load_tenant_snapshots_from_s3_skips_gap_and_invalid_manifest(monkeypatc
         def __init__(self):
             self._next_fetchone = None
             self._next_fetchall = []
+            self.rowcount = 0
             self.insert_calls = []
             self.created = False
             self.truncated = False
@@ -1490,9 +1522,14 @@ def test_update_gold_occupancy_kpis_repairs_stale_fact_dates_outside_primary_loo
         def __init__(self):
             self._next_fetchone = None
             self._next_fetchall = []
+            self.rowcount = 0
 
         def execute(self, sql, params=None):
             sql_compact = " ".join(sql.split())
+
+            if "DELETE g FROM gold.occupancy_daily_metrics" in sql_compact:
+                self._next_fetchone = None
+                return
 
             if "SELECT MAX(snapshot_date) AS max_snapshot_date FROM silver.tenant_room_snapshot_daily" in sql_compact:
                 self._next_fetchone = {"max_snapshot_date": date(2026, 2, 16)}
@@ -1569,6 +1606,97 @@ def test_update_gold_occupancy_kpis_repairs_stale_fact_dates_outside_primary_loo
 
     assert processed == len(captured_dates["dates"])
     assert date(2026, 2, 12) in captured_dates["dates"]
+
+
+def test_update_gold_occupancy_kpis_purges_gap_rows_before_recompute(monkeypatch):
+    class FakeCursor:
+        def __init__(self):
+            self._next_fetchone = None
+
+        def execute(self, sql, params=None):
+            sql_compact = " ".join(sql.split())
+
+            if "DELETE g FROM gold.occupancy_daily_metrics" in sql_compact:
+                self._next_fetchone = None
+                return
+
+            if "SELECT MAX(snapshot_date) AS max_snapshot_date FROM silver.tenant_room_snapshot_daily" in sql_compact:
+                self._next_fetchone = {"max_snapshot_date": date(2026, 2, 16)}
+                return
+
+            raise AssertionError(f"Unexpected SQL: {sql_compact}")
+
+        def fetchone(self):
+            result = self._next_fetchone
+            self._next_fetchone = None
+            return result
+
+        def fetchall(self):
+            return []
+
+        def close(self):
+            return None
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_obj = FakeCursor()
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    captured_purge = {}
+    fake_connection = FakeConnection()
+
+    monkeypatch.setattr(daily_etl, "get_aurora_credentials", lambda: ("user", "pass"))
+    monkeypatch.setattr(daily_etl.pymysql, "connect", lambda **kwargs: fake_connection)
+    monkeypatch.setattr(daily_etl, "ensure_occupancy_kpi_table_exists", lambda cursor: None)
+    monkeypatch.setattr(
+        daily_etl,
+        "get_missing_silver_snapshot_dates",
+        lambda cursor, start_date, end_date: [date(2026, 2, 12)],
+    )
+    monkeypatch.setattr(daily_etl, "get_stale_gold_occupancy_dates", lambda cursor, start_date, end_date: [])
+    monkeypatch.setattr(
+        daily_etl,
+        "get_gap_dates_for_window",
+        lambda cursor, start_date, end_date: [date(2026, 2, 15)],
+    )
+
+    def fake_compute(cursor, target_dates):
+        captured_purge["target_dates"] = sorted(target_dates)
+        return len(target_dates)
+
+    monkeypatch.setattr(daily_etl, "compute_occupancy_kpis_for_dates", fake_compute)
+
+    def fake_purge(cursor, start_date, end_date):
+        captured_purge["purge_start"] = start_date
+        captured_purge["purge_end"] = end_date
+        return 12
+
+    monkeypatch.setattr(daily_etl, "purge_gold_occupancy_gap_rows", fake_purge)
+
+    processed = daily_etl.update_gold_occupancy_kpis(
+        target_date=date(2026, 2, 16),
+        lookback_days=3,
+        forward_days=1,
+    )
+
+    assert processed == 5
+    assert captured_purge["purge_start"] == date(2026, 1, 17)
+    assert captured_purge["purge_end"] == date(2026, 2, 16)
+    assert captured_purge["target_dates"] == [
+        date(2026, 2, 12),
+        date(2026, 2, 13),
+        date(2026, 2, 14),
+        date(2026, 2, 16),
+        date(2026, 2, 17),
+    ]
 
 
 def test_default_skip_llm_enrichment_prod_false():
