@@ -2701,21 +2701,84 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
 
     period_end_by_date: Dict[date, int] = {}
     processed_count = 0
+    use_room_primary_filter = True
 
-    def snapshot_exists(snapshot_date: date) -> bool:
-        if snapshot_date in gap_dates:
-            return False
-        cursor.execute(
-            """
+    def _is_missing_room_primary_error(exc: Exception) -> bool:
+        text = str(exc)
+        return "Unknown column 'is_room_primary'" in text
+
+    def _snapshot_exists_query(snapshot_date: date, use_primary: bool) -> str:
+        if use_primary:
+            return """
+                SELECT 1
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND is_room_primary = TRUE
+                LIMIT 1
+                """
+        return """
             SELECT 1
             FROM silver.tenant_room_snapshot_daily
             WHERE snapshot_date = %s
-              AND is_room_primary = TRUE
+              AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
             LIMIT 1
-            """,
-            (snapshot_date,),
-        )
-        return cursor.fetchone() is not None
+            """
+
+    def _occupied_rooms_query(use_primary: bool) -> str:
+        if use_primary:
+            return """
+                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND is_room_primary = TRUE
+                  AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
+                """
+        return """
+            SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
+            FROM silver.tenant_room_snapshot_daily
+            WHERE snapshot_date = %s
+              AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
+            """
+
+    def _new_moveouts_query(use_primary: bool) -> str:
+        if use_primary:
+            return """
+                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND is_room_primary = TRUE
+                  AND moveout_date = %s
+                  AND management_status_code IN (14, 15, 16, 17)
+                """
+        return """
+            SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
+            FROM silver.tenant_room_snapshot_daily
+            WHERE snapshot_date = %s
+              AND moveout_date = %s
+              AND management_status_code IN (14, 15, 16, 17)
+            """
+
+    def snapshot_exists(snapshot_date: date) -> bool:
+        nonlocal use_room_primary_filter
+        if snapshot_date in gap_dates:
+            return False
+
+        query = _snapshot_exists_query(snapshot_date, use_room_primary_filter)
+        try:
+            cursor.execute(query, (snapshot_date,))
+            return cursor.fetchone() is not None
+        except Exception as exc:
+            if _is_missing_room_primary_error(exc):
+                if use_room_primary_filter:
+                    print(
+                        "WARN: is_room_primary not available; falling back to status-based "
+                        "occupancy presence for snapshot existence checks"
+                    )
+                    use_room_primary_filter = False
+                query = _snapshot_exists_query(snapshot_date, use_room_primary_filter)
+                cursor.execute(query, (snapshot_date,))
+                return cursor.fetchone() is not None
+            raise
 
     def next_available_snapshot_date(from_date: date) -> date | None:
         cursor.execute(
@@ -2736,16 +2799,23 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         return row.get("next_snapshot_date")
 
     def count_occupied_rooms(snapshot_date: date) -> int:
-        cursor.execute(
-            """
-            SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
-            FROM silver.tenant_room_snapshot_daily
-            WHERE snapshot_date = %s
-              AND is_room_primary = TRUE
-              AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
-            """,
-            (snapshot_date,),
-        )
+        nonlocal use_room_primary_filter
+        query = _occupied_rooms_query(use_room_primary_filter)
+        try:
+            cursor.execute(query, (snapshot_date,))
+        except Exception as exc:
+            if not use_room_primary_filter:
+                raise
+            if _is_missing_room_primary_error(exc):
+                print(
+                    "WARN: is_room_primary not available; falling back to status-based "
+                    "occupied room filter for count_occupied_rooms"
+                )
+                use_room_primary_filter = False
+                query = _occupied_rooms_query(use_room_primary_filter)
+                cursor.execute(query, (snapshot_date,))
+            else:
+                raise
         return int(cursor.fetchone()["count"])
 
     def get_prior_valid_period_end(target_date: date) -> int:
@@ -2835,14 +2905,22 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         if missing_fact_snapshot:
             new_moveouts = 0
         else:
-            cursor.execute("""
-                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                  AND is_room_primary = TRUE
-                  AND moveout_date = %s
-                  AND management_status_code IN (14, 15, 16, 17)
-            """, (snapshot_date_filter, target_date))
+            query = _new_moveouts_query(use_room_primary_filter)
+            try:
+                cursor.execute(query, (snapshot_date_filter, target_date))
+            except Exception as exc:
+                if not use_room_primary_filter:
+                    raise
+                if _is_missing_room_primary_error(exc):
+                    print(
+                        "WARN: is_room_primary not available; falling back to status-based "
+                        "moveout filter"
+                    )
+                    use_room_primary_filter = False
+                    query = _new_moveouts_query(use_room_primary_filter)
+                    cursor.execute(query, (snapshot_date_filter, target_date))
+                else:
+                    raise
             new_moveouts = cursor.fetchone()["count"]
 
         occupancy_delta = int(new_moveins) - int(new_moveouts)
