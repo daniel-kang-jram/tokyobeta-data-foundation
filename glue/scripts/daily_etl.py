@@ -925,6 +925,48 @@ def get_gap_dates_for_window(cursor, start_date: date, end_date: date) -> List[d
         return []
 
 
+def purge_gold_occupancy_gap_rows(
+    cursor,
+    start_date: date,
+    end_date: date,
+) -> int:
+    """Delete existing occupancy rows for gap dates in the requested window.
+
+    Keeping these rows from previous successful runs would reintroduce corrupted
+    intervals even when the occupancy calculation skips gap days.
+    """
+    if start_date > end_date:
+        return 0
+
+    try:
+        cursor.execute(
+            """
+            DELETE g
+            FROM gold.occupancy_daily_metrics g
+            INNER JOIN gold.data_quality_calendar c
+              ON c.check_date = g.snapshot_date
+             AND c.is_gap = 1
+            WHERE c.check_date BETWEEN %s AND %s
+            """,
+            (start_date, end_date),
+        )
+    except Exception as exc:
+        # If the data-quality calendar has not been provisioned yet, do not
+        # block the run. The caller may still proceed and re-emit fresh rows.
+        if "doesn't exist" in str(exc).lower() or "not found" in str(exc).lower():
+            print(f"WARN: skipping gap-row purge because data quality calendar unavailable: {exc}")
+            return 0
+        raise
+
+    deleted_rows = cursor.rowcount or 0
+    if deleted_rows:
+        print(
+            f"Removed {deleted_rows} pre-existing gold occupancy rows "
+            f"for data-quality gaps in {start_date}..{end_date}"
+        )
+    return int(deleted_rows)
+
+
 def get_latest_dump_key_with_manifest(
     dump_candidates: list[dict] | None = None,
     require_manifest: bool = False,
@@ -3151,6 +3193,13 @@ def update_gold_occupancy_kpis(target_date: date, lookback_days: int, forward_da
             set(missing_fact_dates + stale_fact_dates)
             - set(extra_gap_dates)
         )
+        purged_rows = purge_gold_occupancy_gap_rows(
+            cursor,
+            repair_start_date,
+            repair_end_date,
+        )
+        if purged_rows:
+            print(f"Purged {purged_rows} gap rows before occupancy KPI recomputation")
         if extra_repair_dates:
             print(
                 "Including occupancy repair dates outside primary window: "
