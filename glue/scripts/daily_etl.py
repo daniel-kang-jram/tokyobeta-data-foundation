@@ -3170,7 +3170,9 @@ def update_gold_occupancy_kpis(target_date: date, lookback_days: int, forward_da
             base_dates[0],
             as_of_snapshot_date - timedelta(days=repair_lookback_days),
         )
-        repair_end_date = as_of_snapshot_date
+        # Also repair forward-projected dates in the same run window, not only
+        # up to the latest available snapshot date.
+        repair_end_date = max(base_dates[-1], as_of_snapshot_date)
 
         missing_fact_dates = get_missing_silver_snapshot_dates(
             cursor,

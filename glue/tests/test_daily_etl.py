@@ -1689,7 +1689,7 @@ def test_update_gold_occupancy_kpis_purges_gap_rows_before_recompute(monkeypatch
 
     assert processed == 5
     assert captured_purge["purge_start"] == date(2026, 1, 17)
-    assert captured_purge["purge_end"] == date(2026, 2, 16)
+    assert captured_purge["purge_end"] == date(2026, 2, 17)
     assert captured_purge["target_dates"] == [
         date(2026, 2, 12),
         date(2026, 2, 13),
