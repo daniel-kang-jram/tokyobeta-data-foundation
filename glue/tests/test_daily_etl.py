@@ -321,6 +321,21 @@ def test_build_data_quality_calendar_entries_marks_invalid_and_missing(monkeypat
     assert by_date[date(2026, 2, 16)]["is_gap"] == 1
 
 
+def test_get_gap_dates_for_window_reads_window_gaps(monkeypatch):
+    class FakeCursor:
+        def execute(self, sql, params=None):
+            assert params == (date(2026, 2, 10), date(2026, 2, 18))
+
+        def fetchall(self):
+            return [{"check_date": date(2026, 2, 12)}, {"check_date": date(2026, 2, 18)}]
+
+    assert daily_etl.get_gap_dates_for_window(
+        FakeCursor(),
+        date(2026, 2, 10),
+        date(2026, 2, 18),
+    ) == [date(2026, 2, 12), date(2026, 2, 18)]
+
+
 def test_get_aurora_credentials_reads_legacy_and_standard_secret_keys(monkeypatch):
     daily_etl._AURORA_CREDENTIALS = None
     mock_sm = Mock()
@@ -784,6 +799,7 @@ def test_compute_occupancy_kpis_for_dates_future_projection_continues_from_previ
         def __init__(self):
             self.as_of_snapshot_date = date(2026, 2, 13)
             self.snapshot_exists = {date(2026, 2, 13)}
+            self.gap_dates = []
             self.occupied_counts = {
                 date(2026, 2, 12): 10_000,
                 date(2026, 2, 13): 10_005,
@@ -804,6 +820,7 @@ def test_compute_occupancy_kpis_for_dates_future_projection_continues_from_previ
 
             self.inserted_rows = {}
             self._gold_period_end_rooms = {}
+            self._next_fetchall = []
             self._next_fetchone = None
 
         def execute(self, sql, params=None):
@@ -812,6 +829,13 @@ def test_compute_occupancy_kpis_for_dates_future_projection_continues_from_previ
 
             if "SELECT MAX(snapshot_date) AS max_snapshot_date" in sql_compact:
                 self._next_fetchone = {"max_snapshot_date": self.as_of_snapshot_date}
+                return
+
+            if "SELECT check_date FROM gold.data_quality_calendar" in sql_compact:
+                self._next_fetchall = [
+                    {"check_date": check_date}
+                    for check_date in self.gap_dates
+                ]
                 return
 
             if "SELECT 1 FROM silver.tenant_room_snapshot_daily" in sql_compact and "LIMIT 1" in sql_compact:
@@ -890,6 +914,11 @@ def test_compute_occupancy_kpis_for_dates_future_projection_continues_from_previ
             self._next_fetchone = None
             return result
 
+        def fetchall(self):
+            result = self._next_fetchall
+            self._next_fetchall = []
+            return result
+
     class FixedDate(date):
         @classmethod
         def today(cls):
@@ -921,11 +950,13 @@ def test_compute_occupancy_kpis_fact_day_uses_same_day_end_rooms_even_if_previou
         def __init__(self):
             self.as_of_snapshot_date = date(2026, 2, 16)
             self.snapshot_exists = {date(2026, 2, 16)}
+            self.gap_dates = []
             self.occupied_on_date = {date(2026, 2, 16): 10_005}
             self.applications = {date(2026, 2, 16): 2}
             self.moveins = {date(2026, 2, 16): 10}
             self.moveouts = {date(2026, 2, 16): 5}
             self.inserted_rows = {}
+            self._next_fetchall = []
             self._next_fetchone = None
 
         def execute(self, sql, params=None):
@@ -934,6 +965,13 @@ def test_compute_occupancy_kpis_fact_day_uses_same_day_end_rooms_even_if_previou
 
             if "SELECT MAX(snapshot_date) AS max_snapshot_date" in sql_compact:
                 self._next_fetchone = {"max_snapshot_date": self.as_of_snapshot_date}
+                return
+
+            if "SELECT check_date FROM gold.data_quality_calendar" in sql_compact:
+                self._next_fetchall = [
+                    {"check_date": check_date}
+                    for check_date in self.gap_dates
+                ]
                 return
 
             if "SELECT 1 FROM silver.tenant_room_snapshot_daily" in sql_compact and "LIMIT 1" in sql_compact:
@@ -996,6 +1034,11 @@ def test_compute_occupancy_kpis_fact_day_uses_same_day_end_rooms_even_if_previou
             self._next_fetchone = None
             return result
 
+        def fetchall(self):
+            result = self._next_fetchall
+            self._next_fetchall = []
+            return result
+
     cursor = FakeCursor()
     processed = daily_etl.compute_occupancy_kpis_for_dates(cursor, [date(2026, 2, 16)])
 
@@ -1009,12 +1052,19 @@ def test_compute_occupancy_kpis_fact_day_uses_same_day_end_rooms_even_if_previou
 def test_compute_occupancy_kpis_forward_fills_missing_fact_day_from_next_snapshot(capsys, monkeypatch):
     """Missing fact-day snapshots should be forward-filled from the next available snapshot to avoid 0% spikes."""
 
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 2, 16)
+
     class FakeCursor:
         def __init__(self):
             self.as_of_snapshot_date = date(2026, 2, 16)
             self.snapshot_exists = {date(2026, 2, 16)}
             self.occupied_on_date = {date(2026, 2, 16): 10_005}
             self.inserted_rows = {}
+            self.gap_dates = []
+            self._next_fetchall = []
             self._next_fetchone = None
 
         def execute(self, sql, params=None):
@@ -1023,6 +1073,13 @@ def test_compute_occupancy_kpis_forward_fills_missing_fact_day_from_next_snapsho
 
             if "SELECT MAX(snapshot_date) AS max_snapshot_date" in sql_compact:
                 self._next_fetchone = {"max_snapshot_date": self.as_of_snapshot_date}
+                return
+
+            if "SELECT check_date FROM gold.data_quality_calendar" in sql_compact:
+                self._next_fetchall = [
+                    {"check_date": check_date}
+                    for check_date in self.gap_dates
+                ]
                 return
 
             if "SELECT 1 FROM silver.tenant_room_snapshot_daily" in sql_compact and "LIMIT 1" in sql_compact:
@@ -1079,10 +1136,10 @@ def test_compute_occupancy_kpis_forward_fills_missing_fact_day_from_next_snapsho
             self._next_fetchone = None
             return result
 
-    class FixedDate(date):
-        @classmethod
-        def today(cls):
-            return date(2026, 2, 16)
+        def fetchall(self):
+            result = self._next_fetchall
+            self._next_fetchall = []
+            return result
 
     monkeypatch.setattr(daily_etl, "date", FixedDate)
 
@@ -1099,6 +1156,235 @@ def test_compute_occupancy_kpis_forward_fills_missing_fact_day_from_next_snapsho
     out = capsys.readouterr().out
     assert "WARN" in out
     assert "2026-02-15" in out
+
+
+def test_compute_occupancy_kpis_for_dates_skips_gap_dates(monkeypatch):
+    """Gap dates must be skipped and excluded from KPI inserts and processing count."""
+
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 2, 16)
+
+    class FakeCursor:
+        def __init__(self):
+            self.as_of_snapshot_date = FixedDate(2026, 2, 16)
+            self.gap_dates = [FixedDate(2026, 2, 15)]
+            self.snapshot_exists = {FixedDate(2026, 2, 14), FixedDate(2026, 2, 16)}
+            self._next_fetchall = []
+            self._next_fetchone = None
+            self.inserted_rows = {}
+
+        def execute(self, sql, params=None):
+            sql_compact = " ".join(sql.split())
+            params = params or ()
+
+            if "SELECT MAX(snapshot_date) AS max_snapshot_date" in sql_compact:
+                self._next_fetchone = {"max_snapshot_date": self.as_of_snapshot_date}
+                return
+
+            if "SELECT check_date FROM gold.data_quality_calendar" in sql_compact:
+                self._next_fetchall = [
+                    {"check_date": check_date}
+                    for check_date in self.gap_dates
+                ]
+                return
+
+            if "SELECT 1 FROM silver.tenant_room_snapshot_daily" in sql_compact and "LIMIT 1" in sql_compact:
+                snapshot_date = params[0]
+                self._next_fetchone = ({"1": 1} if snapshot_date in self.snapshot_exists else None)
+                return
+
+            if "first_apps" in sql_compact:
+                self._next_fetchone = {"count": 0}
+                return
+
+            if "AND move_in_date = %s" in sql_compact:
+                self._next_fetchone = {"count": 0}
+                return
+
+            if "AND moveout_date = %s" in sql_compact:
+                self._next_fetchone = {"count": 0}
+                return
+
+            if (
+                "FROM silver.tenant_room_snapshot_daily" in sql_compact
+                and "management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)" in sql_compact
+                and "snapshot_date = %s" in sql_compact
+            ):
+                snapshot_date = params[0]
+                self._next_fetchone = {"count": 10000 if snapshot_date in {FixedDate(2026, 2, 14), FixedDate(2026, 2, 16)} else 0}
+                return
+
+            if (
+                "FROM gold.occupancy_daily_metrics" in sql_compact
+                and "SELECT period_end_rooms" in sql_compact
+            ):
+                self._next_fetchone = None
+                return
+
+            if (
+                "SELECT MIN(snapshot_date) AS next_snapshot_date" in sql_compact
+                and "silver.tenant_room_snapshot_daily s" in sql_compact
+            ):
+                target_date = params[0]
+                self._next_fetchone = (
+                    {"next_snapshot_date": self.as_of_snapshot_date}
+                    if target_date <= self.as_of_snapshot_date
+                    else None
+                )
+                return
+
+            if sql_compact.startswith("INSERT INTO gold.occupancy_daily_metrics"):
+                snapshot_date = params[0]
+                self.inserted_rows[snapshot_date] = params
+                self._next_fetchone = None
+                return
+
+            raise AssertionError(f"Unexpected SQL executed: {sql_compact!r} params={params!r}")
+
+        def fetchone(self):
+            result = self._next_fetchone
+            self._next_fetchone = None
+            return result
+
+        def fetchall(self):
+            result = self._next_fetchall
+            self._next_fetchall = []
+            return result
+
+    monkeypatch.setattr(daily_etl, "date", FixedDate)
+
+    cursor = FakeCursor()
+    processed = daily_etl.compute_occupancy_kpis_for_dates(
+        cursor,
+        [
+            FixedDate(2026, 2, 14),
+            FixedDate(2026, 2, 15),
+            FixedDate(2026, 2, 16),
+        ],
+    )
+
+    assert processed == 2
+    assert FixedDate(2026, 2, 14) in cursor.inserted_rows
+    assert FixedDate(2026, 2, 16) in cursor.inserted_rows
+    assert FixedDate(2026, 2, 15) not in cursor.inserted_rows
+
+
+def test_load_tenant_snapshots_from_s3_skips_gap_and_invalid_manifest(monkeypatch):
+    class FakeCursor:
+        def __init__(self):
+            self._next_fetchone = None
+            self._next_fetchall = []
+            self.insert_calls = []
+            self.created = False
+            self.truncated = False
+
+        def execute(self, sql, params=None):
+            sql_compact = " ".join(sql.split())
+            if "TRUNCATE TABLE staging.tenant_daily_snapshots" in sql_compact:
+                self.truncated = True
+                return
+            if "SELECT DISTINCT snapshot_date FROM staging.tenant_daily_snapshots" in sql_compact:
+                self._next_fetchall = []
+                return
+            if sql_compact.startswith("INSERT INTO staging.tenant_daily_snapshots"):
+                self.insert_calls.append(params)
+                return
+            if (
+                sql_compact
+                == "SELECT COUNT(*) FROM staging.tenant_daily_snapshots"
+            ):
+                self._next_fetchone = (123,)
+                return
+            raise AssertionError(f"Unexpected SQL during snapshot load: {sql_compact!r}")
+
+        def fetchall(self):
+            result = self._next_fetchall
+            self._next_fetchall = []
+            return result
+
+        def fetchone(self):
+            result = self._next_fetchone
+            self._next_fetchone = None
+            return result
+
+        def close(self):
+            return None
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_obj = FakeCursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.committed = True
+
+        def close(self):
+            return None
+
+    fake_connection = FakeConnection()
+    inserted_rows: list[tuple] = []
+
+    def list_snapshots(_s3, _bucket, prefix="snapshots/tenant_status/"):
+        return [
+            "snapshots/tenant_status/20260217.csv",
+            "snapshots/tenant_status/20260218.csv",
+        ]
+
+    def fake_download_and_parse_csv(_s3, _bucket, key):
+        if key.endswith("20260217.csv"):
+            return [
+                (1, 1, 1, "A", date(2026, 2, 17)),
+            ]
+        raise AssertionError(f"Unexpected csv requested: {key}")
+
+    def fake_bulk_insert(connection, cursor, rows):
+        inserted_rows.extend(rows)
+        return len(rows)
+
+    def fake_get_gap_dates(_cursor, start_date, end_date):
+        return [date(2026, 2, 18)]
+
+    def fake_load_manifest(dump_date):
+        if dump_date == date(2026, 2, 17):
+            return {
+                "valid_for_etl": True,
+                "source_host": "source.example",
+                "source_database": "basis",
+                "source_table_max_updated_at": {
+                    "tenants": "2026-02-17T00:00:00+09:00",
+                },
+            }
+        if dump_date == date(2026, 2, 18):
+            return {
+                "valid_for_etl": False,
+                "reason": "source_mismatch",
+            }
+        return None
+
+    monkeypatch.setattr(daily_etl, "create_tenant_daily_snapshots_table", lambda _cursor: None)
+    monkeypatch.setattr(daily_etl, "list_snapshot_csvs", list_snapshots)
+    monkeypatch.setattr(daily_etl, "download_and_parse_csv", fake_download_and_parse_csv)
+    monkeypatch.setattr(daily_etl, "bulk_insert_snapshots", fake_bulk_insert)
+    monkeypatch.setattr(daily_etl, "get_gap_dates_for_window", fake_get_gap_dates)
+    monkeypatch.setattr(daily_etl, "load_dump_manifest", fake_load_manifest)
+
+    result = daily_etl.load_tenant_snapshots_from_s3(
+        fake_connection,
+        s3_client=Mock(),
+        bucket="test-bucket",
+    )
+
+    assert result["status"] == "success"
+    assert result["csv_files_loaded"] == 1
+    assert result["csv_files_skipped_gap"] == 1
+    assert result["csv_files_skipped_manifest"] == 0
+    assert result["total_rows_loaded"] == 1
+    assert inserted_rows == [(1, 1, 1, "A", date(2026, 2, 17))]
 
 
 def test_update_gold_occupancy_kpis_repairs_stale_fact_dates_outside_primary_lookback(monkeypatch):
@@ -1126,6 +1412,10 @@ def test_update_gold_occupancy_kpis_repairs_stale_fact_dates_outside_primary_loo
                     {"snapshot_date": date(2026, 2, 14)},
                     {"snapshot_date": date(2026, 2, 16)},
                 ]
+                return
+
+            if "SELECT check_date FROM gold.data_quality_calendar" in sql_compact:
+                self._next_fetchall = []
                 return
 
             if "SELECT snapshot_date FROM gold.occupancy_daily_metrics" in sql_compact:

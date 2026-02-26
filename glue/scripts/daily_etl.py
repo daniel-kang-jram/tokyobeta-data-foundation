@@ -894,6 +894,37 @@ def upsert_data_quality_calendar_entries(
     return len(payload)
 
 
+def get_gap_dates_for_window(cursor, start_date: date, end_date: date) -> List[date]:
+    """Return gap dates from data quality calendar within inclusive bounds."""
+    if start_date > end_date:
+        return []
+
+    cursor.execute(
+        """
+        SELECT check_date
+        FROM gold.data_quality_calendar
+        WHERE is_gap = 1
+          AND check_date BETWEEN %s AND %s
+        ORDER BY check_date
+        """,
+        (start_date, end_date),
+    )
+    try:
+        rows = cursor.fetchall()
+    except TypeError:
+        return []
+    if rows is None:
+        return []
+
+    try:
+        return [
+            dt for dt in (_row_date_value(row, "check_date") for row in rows)
+            if dt is not None
+        ]
+    except TypeError:
+        return []
+
+
 def get_latest_dump_key_with_manifest(
     dump_candidates: list[dict] | None = None,
     require_manifest: bool = False,
@@ -2390,7 +2421,11 @@ def load_tenant_snapshots_from_s3(connection, s3_client, bucket: str) -> Dict[st
         cursor.execute('SELECT DISTINCT snapshot_date FROM staging.tenant_daily_snapshots')
         try:
             fetched_dates = cursor.fetchall()
-            existing_dates = {row[0].strftime('%Y%m%d') for row in fetched_dates}
+            existing_dates = {
+                _row_date_value({"snapshot_date": row[0]}, "snapshot_date")
+                for row in fetched_dates
+            }
+            existing_dates = {snapshot for snapshot in existing_dates if snapshot is not None}
         except TypeError:
             existing_dates = set()
         print(f"Found {len(existing_dates)} existing snapshot dates in table")
@@ -2406,14 +2441,72 @@ def load_tenant_snapshots_from_s3(connection, s3_client, bucket: str) -> Dict[st
                 'total_rows_loaded': 0
             }
         
+        # Determine snapshot dates and known gap window.
+        # Snapshot history load should intentionally skip invalid/gap days to preserve
+        # fact continuity policy for downstream occupancy KPIs.
+        snapshot_dates: list[date] = []
+        for key in csv_keys:
+            filename = key.split('/')[-1]
+            try:
+                snapshot_dates.append(_extract_snapshot_date_from_key(filename))
+            except ValueError:
+                pass
+
+        gap_dates: list[date] = []
+        if snapshot_dates:
+            gap_dates = get_gap_dates_for_window(
+                cursor,
+                min(snapshot_dates),
+                max(snapshot_dates),
+            )
+        gap_dates_set = set(gap_dates)
+
         # Filter to only NEW snapshots (not already loaded)
         new_csv_keys = []
+        skipped_by_gap = 0
+        skipped_by_manifest = 0
         for key in csv_keys:
             # Extract date from filename: snapshots/tenant_status/YYYYMMDD.csv
             filename = key.split('/')[-1]
-            snapshot_date = filename.replace('.csv', '')
-            if snapshot_date not in existing_dates:
-                new_csv_keys.append(key)
+            try:
+                snapshot_date = _extract_snapshot_date_from_key(filename)
+            except ValueError:
+                continue
+
+            snapshot_date_str = snapshot_date.strftime('%Y%m%d')
+            if snapshot_date in existing_dates:
+                continue
+            if snapshot_date in gap_dates_set:
+                print(
+                    "Skipping snapshot due to data-quality gap: "
+                    f"{snapshot_date_str} (gold.data_quality_calendar is_gap=1)"
+                )
+                skipped_by_gap += 1
+                continue
+
+            try:
+                manifest = load_dump_manifest(snapshot_date)
+            except Exception as err:
+                print(
+                    f"WARN: Could not load manifest for snapshot {snapshot_date_str} "
+                    f"(treating as unavailable): {err}"
+                )
+                manifest = None
+
+            if manifest is not None and not manifest_is_valid_for_etl(manifest):
+                reason = (
+                    str(manifest.get("reason", "manifest_missing"))
+                    if isinstance(manifest, dict)
+                    else "manifest_missing"
+                )
+                print(
+                    "Skipping snapshot due to invalid source manifest: "
+                    f"{snapshot_date_str} (reason={reason})"
+                )
+                skipped_by_manifest += 1
+                continue
+
+            new_csv_keys.append(key)
         
         if not new_csv_keys:
             print("✓ All snapshots already loaded - nothing new to import")
@@ -2421,6 +2514,8 @@ def load_tenant_snapshots_from_s3(connection, s3_client, bucket: str) -> Dict[st
                 'status': 'success',
                 'csv_files_loaded': 0,
                 'csv_files_skipped': len(csv_keys),
+                'csv_files_skipped_gap': skipped_by_gap,
+                'csv_files_skipped_manifest': skipped_by_manifest,
                 'total_rows_loaded': 0
             }
         
@@ -2458,6 +2553,10 @@ def load_tenant_snapshots_from_s3(connection, s3_client, bucket: str) -> Dict[st
         print(f"\n✓ Snapshot load complete:")
         print(f"  - NEW CSV files loaded: {loaded_files}")
         print(f"  - CSV files skipped (already loaded): {len(csv_keys) - len(new_csv_keys)}")
+        if skipped_by_gap:
+            print(f"  - CSV files skipped (gap dates): {skipped_by_gap}")
+        if skipped_by_manifest:
+            print(f"  - CSV files skipped (invalid manifest): {skipped_by_manifest}")
         print(f"  - CSV files failed: {failed_files}")
         print(f"  - NEW rows loaded: {total_rows:,}")
         print(f"  - Final table count: {final_count:,}")
@@ -2466,6 +2565,8 @@ def load_tenant_snapshots_from_s3(connection, s3_client, bucket: str) -> Dict[st
             'status': 'success',
             'csv_files_loaded': loaded_files,
             'csv_files_skipped': len(csv_keys) - len(new_csv_keys),
+            'csv_files_skipped_gap': skipped_by_gap,
+            'csv_files_skipped_manifest': skipped_by_manifest,
             'csv_files_failed': failed_files,
             'total_rows_loaded': total_rows
         }
@@ -2583,16 +2684,33 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         f"(calendar_today={calendar_today}, as_of_snapshot={as_of_snapshot_date}, lag={lag_days}d)"
     )
 
-    # Ensure deterministic ordering so future projections can chain correctly.
-    target_dates = sorted(target_dates)
+    target_dates = sorted(set(target_dates))
+    gap_dates = set(
+        get_gap_dates_for_window(
+            cursor,
+            target_dates[0],
+            target_dates[-1],
+        )
+    )
+    if gap_dates:
+        print(
+            "Skipping data-quality gap dates in occupancy KPI calculation: "
+            f"{len(gap_dates)} dates, first={sorted(gap_dates)[0]}, "
+            f"last={sorted(gap_dates)[-1]}"
+        )
+
     period_end_by_date: Dict[date, int] = {}
+    processed_count = 0
 
     def snapshot_exists(snapshot_date: date) -> bool:
+        if snapshot_date in gap_dates:
+            return False
         cursor.execute(
             """
             SELECT 1
             FROM silver.tenant_room_snapshot_daily
             WHERE snapshot_date = %s
+              AND is_room_primary = TRUE
             LIMIT 1
             """,
             (snapshot_date,),
@@ -2603,8 +2721,12 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         cursor.execute(
             """
             SELECT MIN(snapshot_date) AS next_snapshot_date
-            FROM silver.tenant_room_snapshot_daily
-            WHERE snapshot_date >= %s
+            FROM silver.tenant_room_snapshot_daily s
+            LEFT JOIN gold.data_quality_calendar g
+              ON g.check_date = s.snapshot_date
+             AND g.is_gap = 1
+            WHERE s.snapshot_date >= %s
+              AND g.check_date IS NULL
             """,
             (from_date,),
         )
@@ -2616,16 +2738,49 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
     def count_occupied_rooms(snapshot_date: date) -> int:
         cursor.execute(
             """
-            SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+            SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
             FROM silver.tenant_room_snapshot_daily
             WHERE snapshot_date = %s
+              AND is_room_primary = TRUE
               AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
             """,
             (snapshot_date,),
         )
         return int(cursor.fetchone()["count"])
 
+    def get_prior_valid_period_end(target_date: date) -> int:
+        if target_date in period_end_by_date:
+            del period_end_by_date[target_date]
+
+        in_memory_dates = sorted(period_end_by_date.keys(), reverse=True)
+        for prior_date in in_memory_dates:
+            if prior_date < target_date and prior_date not in gap_dates:
+                return period_end_by_date[prior_date]
+
+        cursor.execute(
+            """
+            SELECT g.period_end_rooms
+            FROM gold.occupancy_daily_metrics g
+            LEFT JOIN gold.data_quality_calendar c
+              ON c.check_date = g.snapshot_date
+             AND c.is_gap = 1
+            WHERE g.snapshot_date < %s
+              AND c.check_date IS NULL
+            ORDER BY g.snapshot_date DESC
+            LIMIT 1
+            """,
+            (target_date,),
+        )
+        result = cursor.fetchone()
+        if result and result.get("period_end_rooms") is not None:
+            return int(result["period_end_rooms"])
+        return 0
+
     for target_date in target_dates:
+        if target_date in gap_dates:
+            print(f"SKIP: occupancy KPI for gap date {target_date} (data quality gap)")
+            continue
+
         is_future = target_date > as_of_snapshot_date
         # For missing fact-day snapshots, forward-fill occupancy from the next available snapshot
         # to avoid 0% spikes. Movements/applications cannot be reliably recovered, so set them to 0.
@@ -2651,16 +2806,16 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
             applications = 0
         else:
             cursor.execute("""
-                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
                 FROM (
                     SELECT
-                        tenant_id,
                         apartment_id,
                         room_id,
                         MIN(snapshot_date) AS first_appearance
                     FROM silver.tenant_room_snapshot_daily
                     WHERE management_status_code IN (4, 5)
-                    GROUP BY tenant_id, apartment_id, room_id
+                      AND is_room_primary = TRUE
+                    GROUP BY apartment_id, room_id
                 ) first_apps
                 WHERE first_appearance = %s
             """, (target_date,))
@@ -2670,9 +2825,10 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
             new_moveins = 0
         else:
             cursor.execute("""
-                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
                 FROM silver.tenant_room_snapshot_daily
                 WHERE snapshot_date = %s
+                  AND is_room_primary = TRUE
                   AND move_in_date = %s
                   AND management_status_code IN (4, 5, 6, 7, 9)
             """, (snapshot_date_filter, target_date))
@@ -2682,9 +2838,10 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
             new_moveouts = 0
         else:
             cursor.execute("""
-                SELECT COUNT(DISTINCT CONCAT(tenant_id, '-', apartment_id, '-', room_id)) AS count
+                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
                 FROM silver.tenant_room_snapshot_daily
                 WHERE snapshot_date = %s
+                  AND is_room_primary = TRUE
                   AND moveout_date = %s
                   AND management_status_code IN (14, 15, 16, 17)
             """, (snapshot_date_filter, target_date))
@@ -2696,16 +2853,7 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         if is_future:
             # Future projections must chain from the previous day's KPI end-room count.
             # Silver snapshots do not exist for future dates, so counting from silver would reset to 0.
-            prior_end = period_end_by_date.get(previous_date)
-            if prior_end is None:
-                cursor.execute("""
-                    SELECT period_end_rooms
-                    FROM gold.occupancy_daily_metrics
-                    WHERE snapshot_date = %s
-                """, (previous_date,))
-                result = cursor.fetchone()
-                prior_end = result["period_end_rooms"] if result else 0
-            period_start_rooms = int(prior_end)
+            period_start_rooms = get_prior_valid_period_end(target_date)
         else:
             # Fact days: compute end rooms from same-day snapshot if present (or forward-filled snapshot if missing),
             # then derive start rooms from delta. This avoids collapsing to 0 when previous day snapshot is missing.
@@ -2755,7 +2903,9 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
             f"start={period_start_rooms}, end={period_end_rooms}, rate={occupancy_rate:.2%}"
         )
 
-    return len(target_dates)
+        processed_count += 1
+
+    return processed_count
 
 
 def _row_date_value(row: Any, key: str = "snapshot_date") -> date | None:
@@ -2781,6 +2931,12 @@ def _row_date_value(row: Any, key: str = "snapshot_date") -> date | None:
         return value.date()
     if isinstance(value, date):
         return value
+    if isinstance(value, str):
+        for fmt in ("%Y-%m-%d", "%Y%m%d"):
+            try:
+                return datetime.strptime(value, fmt).date()
+            except ValueError:
+                continue
     return None
 
 
@@ -2909,7 +3065,16 @@ def update_gold_occupancy_kpis(target_date: date, lookback_days: int, forward_da
             repair_end_date,
         )
 
-        extra_repair_dates = sorted(set(missing_fact_dates + stale_fact_dates))
+        extra_gap_dates = get_gap_dates_for_window(
+            cursor,
+            repair_start_date,
+            repair_end_date,
+        )
+
+        extra_repair_dates = sorted(
+            set(missing_fact_dates + stale_fact_dates)
+            - set(extra_gap_dates)
+        )
         if extra_repair_dates:
             print(
                 "Including occupancy repair dates outside primary window: "
@@ -2917,7 +3082,14 @@ def update_gold_occupancy_kpis(target_date: date, lookback_days: int, forward_da
                 f"first={extra_repair_dates[0]}, last={extra_repair_dates[-1]}"
             )
 
-        dates_to_process = sorted(set(base_dates + extra_repair_dates))
+        dates_to_process = sorted(
+            set(base_dates + extra_repair_dates)
+            - set(extra_gap_dates)
+        )
+        if not dates_to_process:
+            print("No non-gap occupancy dates to process after data-quality filtering")
+            return 0
+
         processed_dates = compute_occupancy_kpis_for_dates(cursor, dates_to_process)
         connection.commit()
         print(f"Updated occupancy KPI rows for {processed_dates} date(s)")
