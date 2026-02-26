@@ -35,6 +35,7 @@
   - `feat/<short-topic>` for feature work
   - `fix/<short-topic>` for bugfixes
   - `chore/<short-topic>` for maintenance
+- Do not hand off completed work without an open PR (draft is acceptable while validation is pending).
 - PR description must be structured and comprehensive, including at minimum:
   1. Summary / context
   2. Root cause (for bugfixes)
@@ -42,7 +43,20 @@
   4. Validation steps and results (tests/commands/run IDs)
   5. Risk / rollback plan
   6. Explicit checklist with completion marks
+- PR title/description must reference the owning branch intent and the date-independent scope.
+- PR checklist must be filled as completed or explicitly blocked on every item before claiming task closure.
 - If a task is not PR-ready (blocked), state blocker and next action explicitly instead of silent handoff.
+
+### 3.1 PR Checklist Template
+- [ ] Tests written before implementation (TDD)
+- [ ] Targeted unit/integration tests added for new behavior
+- [ ] Existing suite impact validated (`pytest` or equivalent)
+- [ ] Files scoped only to intended change
+- [ ] Docs updated when behavior changes
+- [ ] No secrets or credentials added
+- [ ] Rollback path documented in PR description
+- [ ] Operational impact considered (scheduling, monitoring, downstream jobs)
+- [ ] PR description references branch and key acceptance criteria
 
 ## Project Structure & Conventions
 
