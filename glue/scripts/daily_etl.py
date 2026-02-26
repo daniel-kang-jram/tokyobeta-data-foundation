@@ -2814,7 +2814,6 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
                         MIN(snapshot_date) AS first_appearance
                     FROM silver.tenant_room_snapshot_daily
                     WHERE management_status_code IN (4, 5)
-                      AND is_room_primary = TRUE
                     GROUP BY apartment_id, room_id
                 ) first_apps
                 WHERE first_appearance = %s
@@ -2828,7 +2827,6 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
                 SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
                 FROM silver.tenant_room_snapshot_daily
                 WHERE snapshot_date = %s
-                  AND is_room_primary = TRUE
                   AND move_in_date = %s
                   AND management_status_code IN (4, 5, 6, 7, 9)
             """, (snapshot_date_filter, target_date))
