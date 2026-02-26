@@ -28,5 +28,16 @@ phases:
         PY
       - NODE_OPTIONS="--max-old-space-size=4096" npm run sources -- --sources aurora_gold
       - NODE_OPTIONS="--max-old-space-size=4096" npm run build
-      - aws s3 sync build/ "s3://$EVIDENCE_S3_BUCKET/" --delete
+      - |
+        aws s3 sync build/ "s3://$EVIDENCE_S3_BUCKET/" \
+          --delete \
+          --exclude "__auth/*" \
+          --exclude "__auth/**"
+      - |
+        if [ -d ../evidence_snapshot/static/__auth/assets ]; then
+          aws s3 sync \
+            ../evidence_snapshot/static/__auth/assets/ \
+            "s3://$EVIDENCE_S3_BUCKET/__auth/assets/" \
+            --delete
+        fi
       - aws cloudfront create-invalidation --distribution-id "$EVIDENCE_CF_DISTRIBUTION_ID" --paths "/*"
