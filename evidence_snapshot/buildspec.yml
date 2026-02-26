@@ -36,16 +36,14 @@ phases:
           echo "Snapshot marker check failed. Refusing to publish non-snapshot build."
           exit 1
         fi
+      - test -f evidence_snapshot/static/__auth/assets/bg.mp4
       - |
         aws s3 sync evidence_snapshot/build/ "s3://$EVIDENCE_S3_BUCKET/" \
           --delete \
           --exclude "__auth/*" \
           --exclude "__auth/**"
       - |
-        if [ -d evidence_snapshot/static/__auth/assets ]; then
-          aws s3 sync \
-            evidence_snapshot/static/__auth/assets/ \
-            "s3://$EVIDENCE_S3_BUCKET/__auth/assets/" \
-            --delete
-        fi
+        aws s3 cp evidence_snapshot/static/__auth/assets/bg.mp4 "s3://$EVIDENCE_S3_BUCKET/__auth/assets/bg.mp4"
+      - |
+        aws s3api head-object --bucket "$EVIDENCE_S3_BUCKET" --key "__auth/assets/bg.mp4"
       - aws cloudfront create-invalidation --distribution-id "$EVIDENCE_CF_DISTRIBUTION_ID" --paths "/*"
