@@ -677,6 +677,26 @@ def get_staging_table_row_count(table_name: str) -> int:
         connection.close()
 
 
+def relation_exists(schema_name: str, table_name: str) -> bool:
+    """Return True when schema.table exists in Aurora information_schema."""
+    connection = create_aurora_connection()
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = %s
+              AND table_name = %s
+            LIMIT 1
+            """,
+            (schema_name, table_name),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        connection.close()
+
+
 def get_dump_manifest_key(dump_date: date) -> str:
     """Build manifest key for a dump date."""
     prefix = (
@@ -1743,6 +1763,24 @@ def run_dbt_transformations():
     # snapshots when the job runs at 07:00 JST (22:00 UTC previous day).
     snapshot_date = runtime_date("DAILY_TARGET_DATE", datetime.now().date())
     force_rebuild_snapshot_date = runtime_optional_date("DAILY_FORCE_REBUILD_SNAPSHOT_DATE")
+    if force_rebuild_snapshot_date is not None:
+        try:
+            has_snapshot_relation = relation_exists("silver", "tenant_room_snapshot_daily")
+        except Exception as relation_error:
+            print(
+                "WARNING: Failed to verify silver.tenant_room_snapshot_daily existence; "
+                "disabling forced snapshot rebuild to avoid pre-hook failures. "
+                f"error={type(relation_error).__name__}: {relation_error}"
+            )
+            has_snapshot_relation = False
+        if not has_snapshot_relation:
+            print(
+                "WARNING: DAILY_FORCE_REBUILD_SNAPSHOT_DATE was set but "
+                "silver.tenant_room_snapshot_daily does not exist. "
+                "Ignoring force rebuild for this run."
+            )
+            force_rebuild_snapshot_date = None
+
     effective_snapshot_date = snapshot_date
     if force_rebuild_snapshot_date is not None:
         # Keep delete/reinsert on the same partition when force rebuild is used.

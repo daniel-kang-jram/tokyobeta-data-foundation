@@ -1,9 +1,17 @@
 {% set daily_snapshot_date = var('daily_snapshot_date', none) %}
 {% set force_rebuild_snapshot_date = var('force_rebuild_snapshot_date', none) %}
+{% set snapshot_model_schema = 'silver' %}
+{% set snapshot_model_identifier = 'tenant_room_snapshot_daily' %}
 {% set pre_hooks = ["SET SESSION innodb_lock_wait_timeout = 120"] %}
 {% if force_rebuild_snapshot_date is not none %}
     {% do pre_hooks.append(
-        "DELETE FROM " ~ this ~ " WHERE snapshot_date = CAST('" ~ force_rebuild_snapshot_date ~ "' AS DATE)"
+        "DELETE FROM `"
+        ~ snapshot_model_schema
+        ~ "`.`"
+        ~ snapshot_model_identifier
+        ~ "` WHERE snapshot_date = CAST('"
+        ~ force_rebuild_snapshot_date
+        ~ "' AS DATE)"
     ) %}
 {% endif %}
 
@@ -13,7 +21,7 @@
         incremental_strategy='append',
         pre_hook=pre_hooks,
         on_schema_change='append_new_columns',
-        schema='silver'
+        schema=snapshot_model_schema
     )
 }}
 
