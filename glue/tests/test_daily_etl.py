@@ -725,7 +725,7 @@ def test_run_dbt_transformations_includes_force_rebuild_snapshot_var(monkeypatch
     monkeypatch.setenv("DBT_EXCLUDE_MODELS", "")
     monkeypatch.setenv("DBT_PRE_RUN_MODELS", "silver.tenant_room_snapshot_daily")
     monkeypatch.delenv("DBT_POST_RUN_MODELS", raising=False)
-    monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-19")
+    monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-27")
     monkeypatch.setenv("DAILY_FORCE_REBUILD_SNAPSHOT_DATE", "2026-02-19")
     monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
 
@@ -742,9 +742,9 @@ def test_run_dbt_transformations_includes_force_rebuild_snapshot_var(monkeypatch
     run_commands = [cmd for cmd in calls if len(cmd) > 1 and cmd[0].endswith("/dbt") and cmd[1] == "run"]
     assert run_commands
     vars_payload = " ".join(run_commands[0])
-    assert "daily_snapshot_date" in vars_payload
-    assert "force_rebuild_snapshot_date" in vars_payload
-    assert "2026-02-19" in vars_payload
+    assert '"daily_snapshot_date": "2026-02-19"' in vars_payload
+    assert '"force_rebuild_snapshot_date": "2026-02-19"' in vars_payload
+    assert '"daily_snapshot_date": "2026-02-27"' not in vars_payload
 
 
 def test_run_dbt_transformations_retries_lock_wait(monkeypatch):
