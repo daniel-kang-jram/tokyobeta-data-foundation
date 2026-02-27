@@ -1742,12 +1742,24 @@ def run_dbt_transformations():
     # not the Aurora server clock (typically UTC). This avoids off-by-one day
     # snapshots when the job runs at 07:00 JST (22:00 UTC previous day).
     snapshot_date = runtime_date("DAILY_TARGET_DATE", datetime.now().date())
-    dbt_vars: Dict[str, str] = {"daily_snapshot_date": snapshot_date.isoformat()}
     force_rebuild_snapshot_date = runtime_optional_date("DAILY_FORCE_REBUILD_SNAPSHOT_DATE")
+    effective_snapshot_date = snapshot_date
+    if force_rebuild_snapshot_date is not None:
+        # Keep delete/reinsert on the same partition when force rebuild is used.
+        # This prevents deleting one snapshot_date while inserting another.
+        effective_snapshot_date = force_rebuild_snapshot_date
+        if force_rebuild_snapshot_date != snapshot_date:
+            print(
+                "INFO: DAILY_FORCE_REBUILD_SNAPSHOT_DATE differs from DAILY_TARGET_DATE; "
+                "overriding dbt daily_snapshot_date to force rebuild date for safe partition alignment "
+                f"(target={snapshot_date.isoformat()}, force={force_rebuild_snapshot_date.isoformat()})"
+            )
+
+    dbt_vars: Dict[str, str] = {"daily_snapshot_date": effective_snapshot_date.isoformat()}
     if force_rebuild_snapshot_date is not None:
         dbt_vars["force_rebuild_snapshot_date"] = force_rebuild_snapshot_date.isoformat()
     dbt_vars_payload = json.dumps(dbt_vars)
-    print(f"[dbt_vars] daily_snapshot_date={snapshot_date.isoformat()}")
+    print(f"[dbt_vars] daily_snapshot_date={effective_snapshot_date.isoformat()}")
     if force_rebuild_snapshot_date is not None:
         print(
             "[dbt_vars] force_rebuild_snapshot_date="
