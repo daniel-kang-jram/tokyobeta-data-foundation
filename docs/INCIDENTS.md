@@ -410,6 +410,84 @@ In parallel, the primary Glue failure alarm path had remained ineffective (`INSU
 
 ---
 
+## Incident #8: Feb 18 Invalid Baseline + Gold Occupancy Drift (Recovered with Forced Snapshot Rebuild)
+
+**Date:** 2026-02-18 to 2026-02-27  
+**Detected:** 2026-02-27 (JST)  
+**Severity:** High  
+**Status:** ✅ Code fix complete; one-time recovery run required
+
+### Summary
+
+`gghouse_20260218.sql` was stale-content (Feb 10 freshness) but was initially treated as valid.  
+`silver.tenant_room_snapshot_daily` also retained stale `2026-02-19` rows due incremental append semantics (same-date rows were not replaced), and gold occupancy carried incorrect post-gap values.
+
+### Impact
+
+- `2026-02-18` baseline was invalid for downstream occupancy continuity.
+- Gold occupancy coverage for `2026-02-04`..`2026-02-10` was unintentionally dropped in prior gap cleanup.
+- Gold occupancy for `2026-02-19`..`2026-02-22` diverged from physical-room reality.
+
+### Root Cause
+
+1. `dumps-manifest/gghouse_20260218.json` was marked `valid_for_etl=true` despite stale source timestamps.
+2. `silver.tenant_room_snapshot_daily` incremental model only appended `snapshot_date > MAX(snapshot_date)`, so same-date correction (`2026-02-19`) could not overwrite stale rows.
+3. Occupancy recomputation logic depended on prior day continuity assumptions and did not apply explicit bridge-day null-start semantics after gap windows.
+
+### Resolution
+
+1. **Quarantined invalid baseline artifacts**
+   - Copied `dumps/gghouse_20260218.sql` and `dumps-manifest/gghouse_20260218.json` to:
+     - `s3://jram-gghouse/quarantine/manual-corrupt-window-2026-02-11-to-2026-02-18/`
+   - Updated live manifest:
+     - `valid_for_etl=false`
+     - `source_valid=false`
+     - `reason="corrupted_snapshot_window"`
+
+2. **Added forced snapshot rebuild controls**
+   - New runtime arg in Glue/dbt path:
+     - `DAILY_FORCE_REBUILD_SNAPSHOT_DATE`
+   - `dbt/models/silver/tenant_room_snapshot_daily.sql` now supports one-date delete+reinsert on incremental runs using dbt var `force_rebuild_snapshot_date`.
+
+3. **Corrected occupancy computation contract**
+   - Fact-day `period_end_rooms` now uses physical room distinct count:
+     - statuses `(7, 9, 10, 11, 12, 13, 14, 15)`
+     - `COUNT(DISTINCT apartment_id-room_id)`
+   - Bridge-day rule added:
+     - first non-gap day after gap writes `period_start_rooms = NULL`.
+   - Added deterministic rebuild start control:
+     - `DAILY_OCCUPANCY_REBUILD_START_DATE`.
+
+4. **Locked quality-calendar window policy**
+   - Forced valid dates: `2026-02-04`..`2026-02-10`.
+   - Forced gap dates: `2026-02-11`..`2026-02-18`.
+   - Overrides are upserted each daily ETL run.
+
+### Verification
+
+- Unit test suite `glue/tests/test_daily_etl.py`: **72 passed**.
+- New tests cover:
+  - `runtime_optional_date`,
+  - dbt force-rebuild var propagation,
+  - bridge-day `period_start_rooms IS NULL`,
+  - rebuild-start override date expansion,
+  - manual calendar override contract,
+  - dbt model support for forced snapshot rebuild.
+- S3 quarantine copy and manifest invalidation for `2026-02-18` completed.
+
+### Remaining Action
+
+- Run one manual `tokyobeta-prod-daily-etl` after deploy with:
+  - `--DAILY_TARGET_DATE=2026-02-19`
+  - `--DAILY_FORCE_REBUILD_SNAPSHOT_DATE=2026-02-19`
+  - `--DAILY_OCCUPANCY_REBUILD_START_DATE=2026-02-04`
+- Validate:
+  - `gold.occupancy_daily_metrics` has rows for `2026-02-04`..`2026-02-10`,
+  - no rows for `2026-02-11`..`2026-02-18`,
+  - physical-room reconciliation for `2026-02-19` onward.
+
+---
+
 ## Template for Future Incidents
 
 **Date:**  

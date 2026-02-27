@@ -579,6 +579,18 @@ def test_runtime_date_falls_back_on_invalid(monkeypatch):
     assert result == date(2026, 2, 1)
 
 
+def test_runtime_optional_date_reads_valid_env(monkeypatch):
+    monkeypatch.setenv("DAILY_OCCUPANCY_REBUILD_START_DATE", "2026-02-04")
+    result = daily_etl.runtime_optional_date("DAILY_OCCUPANCY_REBUILD_START_DATE")
+    assert result == date(2026, 2, 4)
+
+
+def test_runtime_optional_date_returns_none_on_invalid(monkeypatch):
+    monkeypatch.setenv("DAILY_OCCUPANCY_REBUILD_START_DATE", "invalid-date")
+    result = daily_etl.runtime_optional_date("DAILY_OCCUPANCY_REBUILD_START_DATE")
+    assert result is None
+
+
 def test_runtime_int_reads_valid_env(monkeypatch):
     monkeypatch.setenv("DAILY_MAX_DUMP_STALE_DAYS", "0")
     result = daily_etl.runtime_int("DAILY_MAX_DUMP_STALE_DAYS", 1, minimum=0)
@@ -700,6 +712,39 @@ def test_run_dbt_transformations_default_skips_post_run(monkeypatch):
     assert len(run_commands) == 2
     assert "--vars" in run_commands[0]
     assert "2026-02-14" in " ".join(run_commands[0])
+
+
+def test_run_dbt_transformations_includes_force_rebuild_snapshot_var(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(daily_etl, "get_aurora_credentials", lambda: ("user", "pass"))
+    monkeypatch.setattr(daily_etl, "cleanup_dbt_tmp_tables", lambda: 0)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "unit-test-bucket")
+    monkeypatch.setitem(daily_etl.args, "AURORA_ENDPOINT", "test.cluster.amazonaws.com")
+    monkeypatch.setitem(daily_etl.args, "ENVIRONMENT", "prod")
+    monkeypatch.setenv("DBT_EXCLUDE_MODELS", "")
+    monkeypatch.setenv("DBT_PRE_RUN_MODELS", "silver.tenant_room_snapshot_daily")
+    monkeypatch.delenv("DBT_POST_RUN_MODELS", raising=False)
+    monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-19")
+    monkeypatch.setenv("DAILY_FORCE_REBUILD_SNAPSHOT_DATE", "2026-02-19")
+    monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
+
+    def fake_run(cmd, check=False, capture_output=False, text=False):
+        calls.append(cmd)
+        if check:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+    monkeypatch.setattr(daily_etl.subprocess, "run", fake_run)
+
+    assert daily_etl.run_dbt_transformations() is True
+
+    run_commands = [cmd for cmd in calls if len(cmd) > 1 and cmd[0].endswith("/dbt") and cmd[1] == "run"]
+    assert run_commands
+    vars_payload = " ".join(run_commands[0])
+    assert "daily_snapshot_date" in vars_payload
+    assert "force_rebuild_snapshot_date" in vars_payload
+    assert "2026-02-19" in vars_payload
 
 
 def test_run_dbt_transformations_retries_lock_wait(monkeypatch):
@@ -896,7 +941,7 @@ def test_compute_occupancy_kpis_for_dates_future_projection_continues_from_previ
 
             if (
                 "FROM silver.tenant_room_snapshot_daily" in sql_compact
-                and "management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)" in sql_compact
+                and "management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)" in sql_compact
             ):
                 snapshot_date = params[0]
                 self._next_fetchone = {"count": self.occupied_counts.get(snapshot_date, 0)}
@@ -1027,7 +1072,7 @@ def test_compute_occupancy_kpis_fact_day_uses_same_day_end_rooms_even_if_previou
 
             if (
                 "FROM silver.tenant_room_snapshot_daily" in sql_compact
-                and "management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)" in sql_compact
+                and "management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)" in sql_compact
                 and "snapshot_date = %s" in sql_compact
             ):
                 snapshot_date = params[0]
@@ -1127,7 +1172,7 @@ def test_compute_occupancy_kpis_forward_fills_missing_fact_day_from_next_snapsho
 
             if (
                 "FROM silver.tenant_room_snapshot_daily" in sql_compact
-                and "management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)" in sql_compact
+                and "management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)" in sql_compact
                 and "snapshot_date = %s" in sql_compact
             ):
                 snapshot_date = params[0]
@@ -1157,7 +1202,7 @@ def test_compute_occupancy_kpis_forward_fills_missing_fact_day_from_next_snapsho
                 self._next_fetchone = None
                 return
 
-            if "first_apps" in sql_compact or "move_in_date" in sql_compact or "moveout_plans_date" in sql_compact:
+            if "first_apps" in sql_compact or "move_in_date" in sql_compact or "moveout_date" in sql_compact:
                 raise AssertionError("Did not expect movements/applications queries for missing snapshot day")
 
             raise AssertionError(f"Unexpected SQL executed: {sql_compact!r} params={params!r}")
@@ -1240,7 +1285,7 @@ def test_compute_occupancy_kpis_for_dates_skips_gap_dates(monkeypatch):
 
             if (
                 "FROM silver.tenant_room_snapshot_daily" in sql_compact
-                and "management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)" in sql_compact
+                and "management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)" in sql_compact
                 and "snapshot_date = %s" in sql_compact
             ):
                 snapshot_date = params[0]
@@ -1302,6 +1347,101 @@ def test_compute_occupancy_kpis_for_dates_skips_gap_dates(monkeypatch):
     assert FixedDate(2026, 2, 15) not in cursor.inserted_rows
 
 
+def test_compute_occupancy_kpis_bridge_day_sets_period_start_rooms_null():
+    class FakeCursor:
+        def __init__(self):
+            self.as_of_snapshot_date = date(2026, 2, 19)
+            self.gap_dates = [date(2026, 2, 18)]
+            self.snapshot_exists = {date(2026, 2, 19)}
+            self.occupied_on_date = {date(2026, 2, 19): 11_176}
+            self.inserted_rows = {}
+            self._next_fetchall = []
+            self._next_fetchone = None
+
+        def execute(self, sql, params=None):
+            sql_compact = " ".join(sql.split())
+            params = params or ()
+
+            if "SELECT MAX(snapshot_date) AS max_snapshot_date" in sql_compact:
+                self._next_fetchone = {"max_snapshot_date": self.as_of_snapshot_date}
+                return
+
+            if "SELECT check_date FROM gold.data_quality_calendar" in sql_compact:
+                self._next_fetchall = [
+                    {"check_date": check_date}
+                    for check_date in self.gap_dates
+                ]
+                return
+
+            if "SELECT 1 FROM silver.tenant_room_snapshot_daily" in sql_compact and "LIMIT 1" in sql_compact:
+                snapshot_date = params[0]
+                self._next_fetchone = ({"1": 1} if snapshot_date in self.snapshot_exists else None)
+                return
+
+            if "first_apps" in sql_compact:
+                self._next_fetchone = {"count": 0}
+                return
+
+            if "AND move_in_date = %s" in sql_compact:
+                self._next_fetchone = {"count": 0}
+                return
+
+            if "AND moveout_date = %s" in sql_compact:
+                self._next_fetchone = {"count": 0}
+                return
+
+            if (
+                "FROM silver.tenant_room_snapshot_daily" in sql_compact
+                and "snapshot_date = %s" in sql_compact
+                and "COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count" in sql_compact
+            ):
+                snapshot_date = params[0]
+                self._next_fetchone = {"count": self.occupied_on_date.get(snapshot_date, 0)}
+                return
+
+            if sql_compact.startswith("INSERT INTO gold.occupancy_daily_metrics"):
+                (
+                    snapshot_date,
+                    applications,
+                    new_moveins,
+                    new_moveouts,
+                    occupancy_delta,
+                    period_start_rooms,
+                    period_end_rooms,
+                    occupancy_rate,
+                ) = params
+                self.inserted_rows[snapshot_date] = {
+                    "applications": applications,
+                    "new_moveins": new_moveins,
+                    "new_moveouts": new_moveouts,
+                    "occupancy_delta": occupancy_delta,
+                    "period_start_rooms": period_start_rooms,
+                    "period_end_rooms": period_end_rooms,
+                    "occupancy_rate": occupancy_rate,
+                }
+                self._next_fetchone = None
+                return
+
+            raise AssertionError(f"Unexpected SQL executed: {sql_compact!r} params={params!r}")
+
+        def fetchone(self):
+            result = self._next_fetchone
+            self._next_fetchone = None
+            return result
+
+        def fetchall(self):
+            result = self._next_fetchall
+            self._next_fetchall = []
+            return result
+
+    cursor = FakeCursor()
+    processed = daily_etl.compute_occupancy_kpis_for_dates(cursor, [date(2026, 2, 19)])
+
+    assert processed == 1
+    assert cursor.inserted_rows[date(2026, 2, 19)]["period_start_rooms"] is None
+    assert cursor.inserted_rows[date(2026, 2, 19)]["period_end_rooms"] == 11_176
+
+
 def test_compute_occupancy_kpis_for_dates_queries_do_not_filter_room_primary_for_pre_movein_kpis(monkeypatch):
     """Applications and new move-in paths must not intersect with is_room_primary.
 
@@ -1349,7 +1489,7 @@ def test_compute_occupancy_kpis_for_dates_queries_do_not_filter_room_primary_for
 
             if (
                 "FROM silver.tenant_room_snapshot_daily" in sql_compact
-                and "management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)" in sql_compact
+                and "management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)" in sql_compact
                 and "snapshot_date = %s" in sql_compact
             ):
                 self._next_fetchone = {"count": 1}
@@ -1697,6 +1837,131 @@ def test_update_gold_occupancy_kpis_purges_gap_rows_before_recompute(monkeypatch
         date(2026, 2, 16),
         date(2026, 2, 17),
     ]
+
+
+def test_update_gold_occupancy_kpis_honors_rebuild_start_override(monkeypatch):
+    class FakeCursor:
+        def __init__(self):
+            self._next_fetchone = None
+
+        def execute(self, sql, params=None):
+            sql_compact = " ".join(sql.split())
+            if "SELECT MAX(snapshot_date) AS max_snapshot_date FROM silver.tenant_room_snapshot_daily" in sql_compact:
+                self._next_fetchone = {"max_snapshot_date": date(2026, 2, 19)}
+                return
+            raise AssertionError(f"Unexpected SQL: {sql_compact}")
+
+        def fetchone(self):
+            result = self._next_fetchone
+            self._next_fetchone = None
+            return result
+
+        def fetchall(self):
+            return []
+
+        def close(self):
+            return None
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_obj = FakeCursor()
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            return None
+
+        def close(self):
+            return None
+
+    captured = {}
+    fake_connection = FakeConnection()
+
+    monkeypatch.setenv("DAILY_OCCUPANCY_REBUILD_START_DATE", "2026-02-04")
+    monkeypatch.setattr(daily_etl, "get_aurora_credentials", lambda: ("user", "pass"))
+    monkeypatch.setattr(daily_etl.pymysql, "connect", lambda **kwargs: fake_connection)
+    monkeypatch.setattr(daily_etl, "ensure_occupancy_kpi_table_exists", lambda cursor: None)
+    monkeypatch.setattr(
+        daily_etl,
+        "get_missing_silver_snapshot_dates",
+        lambda cursor, start_date, end_date: [],
+    )
+    monkeypatch.setattr(
+        daily_etl,
+        "get_stale_gold_occupancy_dates",
+        lambda cursor, start_date, end_date: [],
+    )
+    monkeypatch.setattr(
+        daily_etl,
+        "get_gap_dates_for_window",
+        lambda cursor, start_date, end_date: [
+            date(2026, 2, 11),
+            date(2026, 2, 12),
+            date(2026, 2, 13),
+            date(2026, 2, 14),
+            date(2026, 2, 15),
+            date(2026, 2, 16),
+            date(2026, 2, 17),
+            date(2026, 2, 18),
+        ],
+    )
+    monkeypatch.setattr(
+        daily_etl,
+        "purge_gold_occupancy_gap_rows",
+        lambda cursor, start_date, end_date: 0,
+    )
+
+    def fake_compute(cursor, target_dates):
+        captured["target_dates"] = sorted(target_dates)
+        return len(target_dates)
+
+    monkeypatch.setattr(daily_etl, "compute_occupancy_kpis_for_dates", fake_compute)
+
+    processed = daily_etl.update_gold_occupancy_kpis(
+        target_date=date(2026, 2, 19),
+        lookback_days=3,
+        forward_days=0,
+    )
+
+    assert processed == len(captured["target_dates"])
+    assert date(2026, 2, 4) in captured["target_dates"]
+    assert date(2026, 2, 10) in captured["target_dates"]
+    assert date(2026, 2, 19) in captured["target_dates"]
+    assert date(2026, 2, 11) not in captured["target_dates"]
+    assert date(2026, 2, 18) not in captured["target_dates"]
+
+
+def test_build_manual_quality_calendar_overrides_window_contract():
+    rows = daily_etl.build_manual_quality_calendar_overrides()
+    by_date = {row["check_date"]: row for row in rows}
+
+    for day in range(4, 11):
+        entry = by_date[date(2026, 2, day)]
+        assert entry["dump_status"] == "valid"
+        assert entry["is_gap"] == 0
+        assert entry["reason"] == "manual_valid_override_pre_gap"
+
+    for day in range(11, 19):
+        entry = by_date[date(2026, 2, day)]
+        assert entry["dump_status"] == "invalid_or_missing"
+        assert entry["is_gap"] == 1
+        assert entry["reason"] == "corrupted_snapshot_window"
+
+
+def test_tenant_room_snapshot_model_supports_force_rebuild_snapshot_date():
+    model_path = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "dbt"
+        / "models"
+        / "silver"
+        / "tenant_room_snapshot_daily.sql"
+    )
+    sql_text = model_path.read_text(encoding="utf-8")
+
+    assert "force_rebuild_snapshot_date" in sql_text
+    assert "DELETE FROM " in sql_text
+    assert "snapshot_date = CAST('{{ force_rebuild_snapshot_date }}' AS DATE)" in sql_text
 
 
 def test_default_skip_llm_enrichment_prod_false():

@@ -54,6 +54,10 @@ rds = boto3.client('rds')
 TOTAL_PHYSICAL_ROOMS = 16108
 TOKYO_TIMEZONE = timezone(timedelta(hours=9))
 _AURORA_CREDENTIALS = None
+LEGACY_VALID_OVERRIDE_START = date(2026, 2, 4)
+LEGACY_VALID_OVERRIDE_END = date(2026, 2, 10)
+CORRUPTED_GAP_START = date(2026, 2, 11)
+CORRUPTED_GAP_END = date(2026, 2, 18)
 VALID_GEO_LAT_MIN = 35.0
 VALID_GEO_LAT_MAX = 36.0
 VALID_GEO_LON_MIN = 139.0
@@ -185,6 +189,20 @@ def runtime_date(name: str, default: date) -> date:
     except ValueError:
         print(f"Invalid {name}={raw!r}; using default {default.isoformat()}")
         return default
+
+
+def runtime_optional_date(name: str) -> date | None:
+    """Read YYYY-MM-DD runtime date from env/argv, else return None."""
+    raw = os.environ.get(name)
+    if raw is None:
+        raw = optional_argv_value(name)
+    if raw is None:
+        return None
+    try:
+        return datetime.strptime(raw.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        print(f"Invalid {name}={raw!r}; ignoring override")
+        return None
 
 
 def get_artifact_release() -> str | None:
@@ -822,6 +840,43 @@ def build_data_quality_calendar_entries(
                 "is_gap": 0 if status == "valid" else 1,
             }
         )
+
+    return rows
+
+
+def build_manual_quality_calendar_overrides() -> list[dict[str, Any]]:
+    """Build hard overrides for known-valid and quarantined historical dates."""
+    rows: list[dict[str, Any]] = []
+
+    current = LEGACY_VALID_OVERRIDE_START
+    while current <= LEGACY_VALID_OVERRIDE_END:
+        rows.append(
+            {
+                "check_date": current,
+                "dump_status": "valid",
+                "reason": "manual_valid_override_pre_gap",
+                "source_host": "",
+                "source_database": "",
+                "manifest_key": get_dump_manifest_key(current),
+                "is_gap": 0,
+            }
+        )
+        current += timedelta(days=1)
+
+    current = CORRUPTED_GAP_START
+    while current <= CORRUPTED_GAP_END:
+        rows.append(
+            {
+                "check_date": current,
+                "dump_status": "invalid_or_missing",
+                "reason": "corrupted_snapshot_window",
+                "source_host": "",
+                "source_database": "",
+                "manifest_key": get_dump_manifest_key(current),
+                "is_gap": 1,
+            }
+        )
+        current += timedelta(days=1)
 
     return rows
 
@@ -1687,8 +1742,17 @@ def run_dbt_transformations():
     # not the Aurora server clock (typically UTC). This avoids off-by-one day
     # snapshots when the job runs at 07:00 JST (22:00 UTC previous day).
     snapshot_date = runtime_date("DAILY_TARGET_DATE", datetime.now().date())
-    dbt_vars_payload = json.dumps({"daily_snapshot_date": snapshot_date.isoformat()})
+    dbt_vars: Dict[str, str] = {"daily_snapshot_date": snapshot_date.isoformat()}
+    force_rebuild_snapshot_date = runtime_optional_date("DAILY_FORCE_REBUILD_SNAPSHOT_DATE")
+    if force_rebuild_snapshot_date is not None:
+        dbt_vars["force_rebuild_snapshot_date"] = force_rebuild_snapshot_date.isoformat()
+    dbt_vars_payload = json.dumps(dbt_vars)
     print(f"[dbt_vars] daily_snapshot_date={snapshot_date.isoformat()}")
+    if force_rebuild_snapshot_date is not None:
+        print(
+            "[dbt_vars] force_rebuild_snapshot_date="
+            f"{force_rebuild_snapshot_date.isoformat()}"
+        )
 
     # Exclude optional models from the main graph run.
     # Override via DBT_EXCLUDE_MODELS env var (comma-separated list).
@@ -2743,84 +2807,20 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
 
     period_end_by_date: Dict[date, int] = {}
     processed_count = 0
-    use_room_primary_filter = True
 
-    def _is_missing_room_primary_error(exc: Exception) -> bool:
-        text = str(exc)
-        return "Unknown column 'is_room_primary'" in text
-
-    def _snapshot_exists_query(snapshot_date: date, use_primary: bool) -> str:
-        if use_primary:
-            return """
-                SELECT 1
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                  AND is_room_primary = TRUE
-                LIMIT 1
-                """
-        return """
+    def snapshot_exists(snapshot_date: date) -> bool:
+        if snapshot_date in gap_dates:
+            return False
+        cursor.execute(
+            """
             SELECT 1
             FROM silver.tenant_room_snapshot_daily
             WHERE snapshot_date = %s
-              AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
             LIMIT 1
-            """
-
-    def _occupied_rooms_query(use_primary: bool) -> str:
-        if use_primary:
-            return """
-                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                  AND is_room_primary = TRUE
-                  AND management_status_code IN (4,5,6,7,9,10,11,12,13,14,15)
-                """
-        return """
-            SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
-            FROM silver.tenant_room_snapshot_daily
-            WHERE snapshot_date = %s
-              AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
-            """
-
-    def _new_moveouts_query(use_primary: bool) -> str:
-        if use_primary:
-            return """
-                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                  AND is_room_primary = TRUE
-                  AND moveout_date = %s
-                  AND management_status_code IN (14, 15, 16, 17)
-                """
-        return """
-            SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
-            FROM silver.tenant_room_snapshot_daily
-            WHERE snapshot_date = %s
-              AND moveout_date = %s
-              AND management_status_code IN (14, 15, 16, 17)
-            """
-
-    def snapshot_exists(snapshot_date: date) -> bool:
-        nonlocal use_room_primary_filter
-        if snapshot_date in gap_dates:
-            return False
-
-        query = _snapshot_exists_query(snapshot_date, use_room_primary_filter)
-        try:
-            cursor.execute(query, (snapshot_date,))
-            return cursor.fetchone() is not None
-        except Exception as exc:
-            if _is_missing_room_primary_error(exc):
-                if use_room_primary_filter:
-                    print(
-                        "WARN: is_room_primary not available; falling back to status-based "
-                        "occupancy presence for snapshot existence checks"
-                    )
-                    use_room_primary_filter = False
-                query = _snapshot_exists_query(snapshot_date, use_room_primary_filter)
-                cursor.execute(query, (snapshot_date,))
-                return cursor.fetchone() is not None
-            raise
+            """,
+            (snapshot_date,),
+        )
+        return cursor.fetchone() is not None
 
     def next_available_snapshot_date(from_date: date) -> date | None:
         cursor.execute(
@@ -2841,23 +2841,15 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         return row.get("next_snapshot_date")
 
     def count_occupied_rooms(snapshot_date: date) -> int:
-        nonlocal use_room_primary_filter
-        query = _occupied_rooms_query(use_room_primary_filter)
-        try:
-            cursor.execute(query, (snapshot_date,))
-        except Exception as exc:
-            if not use_room_primary_filter:
-                raise
-            if _is_missing_room_primary_error(exc):
-                print(
-                    "WARN: is_room_primary not available; falling back to status-based "
-                    "occupied room filter for count_occupied_rooms"
-                )
-                use_room_primary_filter = False
-                query = _occupied_rooms_query(use_room_primary_filter)
-                cursor.execute(query, (snapshot_date,))
-            else:
-                raise
+        cursor.execute(
+            """
+            SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
+            FROM silver.tenant_room_snapshot_daily
+            WHERE snapshot_date = %s
+              AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
+            """,
+            (snapshot_date,),
+        )
         return int(cursor.fetchone()["count"])
 
     def get_prior_valid_period_end(target_date: date) -> int:
@@ -2947,22 +2939,16 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         if missing_fact_snapshot:
             new_moveouts = 0
         else:
-            query = _new_moveouts_query(use_room_primary_filter)
-            try:
-                cursor.execute(query, (snapshot_date_filter, target_date))
-            except Exception as exc:
-                if not use_room_primary_filter:
-                    raise
-                if _is_missing_room_primary_error(exc):
-                    print(
-                        "WARN: is_room_primary not available; falling back to status-based "
-                        "moveout filter"
-                    )
-                    use_room_primary_filter = False
-                    query = _new_moveouts_query(use_room_primary_filter)
-                    cursor.execute(query, (snapshot_date_filter, target_date))
-                else:
-                    raise
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND moveout_date = %s
+                  AND management_status_code IN (14, 15, 16, 17)
+                """,
+                (snapshot_date_filter, target_date),
+            )
             new_moveouts = cursor.fetchone()["count"]
 
         occupancy_delta = int(new_moveins) - int(new_moveouts)
@@ -2976,13 +2962,16 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
             # Fact days: compute end rooms from same-day snapshot if present (or forward-filled snapshot if missing),
             # then derive start rooms from delta. This avoids collapsing to 0 when previous day snapshot is missing.
             period_end_rooms = count_occupied_rooms(snapshot_date_filter)
-            period_start_rooms = int(period_end_rooms) - int(occupancy_delta)
-            if period_start_rooms < 0:
-                print(
-                    "WARN: Derived period_start_rooms < 0; clamping. "
-                    f"date={target_date} end={period_end_rooms} delta={occupancy_delta}"
-                )
-                period_start_rooms = 0
+            if previous_date in gap_dates:
+                period_start_rooms = None
+            else:
+                period_start_rooms = int(period_end_rooms) - int(occupancy_delta)
+                if period_start_rooms < 0:
+                    print(
+                        "WARN: Derived period_start_rooms < 0; clamping. "
+                        f"date={target_date} end={period_end_rooms} delta={occupancy_delta}"
+                    )
+                    period_start_rooms = 0
             if period_end_rooms < 0:
                 period_end_rooms = 0
         if is_future:
@@ -3150,9 +3139,20 @@ def update_gold_occupancy_kpis(target_date: date, lookback_days: int, forward_da
     cursor = connection.cursor()
     try:
         ensure_occupancy_kpi_table_exists(cursor)
+        base_start_date = target_date - timedelta(days=lookback_days)
+        rebuild_start_override = runtime_optional_date(
+            "DAILY_OCCUPANCY_REBUILD_START_DATE"
+        )
+        if rebuild_start_override is not None:
+            base_start_date = min(base_start_date, rebuild_start_override)
+            print(
+                "Applying occupancy rebuild start override: "
+                f"{rebuild_start_override.isoformat()}"
+            )
+        base_end_date = target_date + timedelta(days=forward_days)
         base_dates = [
-            target_date + timedelta(days=i)
-            for i in range(-lookback_days, forward_days + 1)
+            base_start_date + timedelta(days=i)
+            for i in range((base_end_date - base_start_date).days + 1)
         ]
         cursor.execute(
             """
@@ -3489,6 +3489,12 @@ def main():
             quality_rows = build_data_quality_calendar_entries(
                 expected_date=expected_dump_date,
                 lookback_days=data_quality_lookback_days,
+            )
+            quality_rows.extend(build_manual_quality_calendar_overrides())
+            # Apply last-write-wins semantics on check_date so manual overrides
+            # deterministically supersede manifest-derived status.
+            quality_rows = list(
+                {row["check_date"]: row for row in quality_rows}.values()
             )
             quality_calendar_gap_days = sum(row["is_gap"] for row in quality_rows)
 

@@ -468,3 +468,76 @@ aws sso login --profile gghouse
 1. Install direnv: `brew install direnv`
 2. Add hook to shell rc file
 3. Allow for this repo: `direnv allow`
+
+---
+
+## Physical-Room Occupancy Recovery (Feb 2026 Corrupted Window)
+
+### Runtime Contracts
+- `DAILY_FORCE_REBUILD_SNAPSHOT_DATE` (optional `YYYY-MM-DD`)
+  - Passed to dbt as `force_rebuild_snapshot_date`.
+  - `silver.tenant_room_snapshot_daily` deletes and reinserts that snapshot date on incremental runs.
+- `DAILY_OCCUPANCY_REBUILD_START_DATE` (optional `YYYY-MM-DD`)
+  - Expands occupancy recompute start date deterministically.
+- `DAILY_MAX_DUMP_STALE_DAYS=0` in production Glue defaults.
+  - Daily ETL fails when same-day dump is not available.
+
+### Occupancy KPI Rules (gold.occupancy_daily_metrics)
+- Fact-day `period_end_rooms` uses physical-room distinct count from silver:
+  - `COUNT(DISTINCT CONCAT(apartment_id, '-', room_id))`
+  - status set: `(7, 9, 10, 11, 12, 13, 14, 15)`
+- Date-quality gap dates are skipped.
+- Bridge-day rule:
+  - if previous calendar date is gap, set `period_start_rooms = NULL` for first non-gap day.
+
+### Corrupted Window Override Policy
+- Forced valid range: `2026-02-04` to `2026-02-10`
+- Forced gap range: `2026-02-11` to `2026-02-18`
+- These overrides are upserted into `gold.data_quality_calendar` on each daily ETL run.
+
+### One-Time Recovery Commands
+```bash
+# 1) Quarantine 2026-02-18 dump + manifest before invalidation
+aws s3 cp s3://jram-gghouse/dumps/gghouse_20260218.sql \
+  s3://jram-gghouse/quarantine/manual-corrupt-window-2026-02-11-to-2026-02-18/dumps/gghouse_20260218.sql \
+  --profile gghouse
+
+aws s3 cp s3://jram-gghouse/dumps-manifest/gghouse_20260218.json \
+  s3://jram-gghouse/quarantine/manual-corrupt-window-2026-02-11-to-2026-02-18/dumps-manifest/gghouse_20260218.json \
+  --profile gghouse
+
+# 2) Force rebuild snapshot + occupancy recompute from 2026-02-04
+aws glue start-job-run \
+  --job-name tokyobeta-prod-daily-etl \
+  --arguments '{
+    "--DAILY_TARGET_DATE":"2026-02-19",
+    "--DAILY_FORCE_REBUILD_SNAPSHOT_DATE":"2026-02-19",
+    "--DAILY_OCCUPANCY_REBUILD_START_DATE":"2026-02-04"
+  }' \
+  --profile gghouse
+```
+
+### Validation Queries
+```sql
+-- Gold coverage restored for valid dates
+SELECT snapshot_date
+FROM gold.occupancy_daily_metrics
+WHERE snapshot_date BETWEEN '2026-02-04' AND '2026-02-10'
+ORDER BY snapshot_date;
+
+-- Quarantine dates excluded
+SELECT snapshot_date
+FROM gold.occupancy_daily_metrics
+WHERE snapshot_date BETWEEN '2026-02-11' AND '2026-02-18'
+ORDER BY snapshot_date;
+
+-- Physical-room count reconciliation
+SELECT
+  s.snapshot_date,
+  COUNT(DISTINCT CONCAT(s.apartment_id, '-', s.room_id)) AS physical_rooms
+FROM silver.tenant_room_snapshot_daily s
+WHERE s.snapshot_date BETWEEN '2026-02-19' AND '2026-02-22'
+  AND s.management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
+GROUP BY s.snapshot_date
+ORDER BY s.snapshot_date;
+```
