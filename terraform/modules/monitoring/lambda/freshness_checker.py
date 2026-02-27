@@ -421,6 +421,10 @@ def lambda_handler(event, context):
         event = {}
 
     suppress_notifications = parse_bool(event.get('suppress_notifications'), False)
+    suppress_metric_publish = parse_bool(
+        event.get('suppress_metric_publish'),
+        suppress_notifications,
+    )
     skip_upstream_sync_check = parse_bool(event.get('skip_upstream_sync_check'), False)
 
     print(f'Checking table freshness for: {TABLES_TO_CHECK}')
@@ -461,7 +465,8 @@ def lambda_handler(event, context):
                     table_info = check_table_freshness(cursor, table)
                     results.append(table_info)
 
-                    safe_publish_metric(table, table_info['days_old'])
+                    if not suppress_metric_publish:
+                        safe_publish_metric(table, table_info['days_old'])
 
                     if table_info['days_old'] >= ERROR_DAYS:
                         stale_tables.append(table_info)
@@ -481,7 +486,8 @@ def lambda_handler(event, context):
                         )
                 except Exception as error:
                     print(f'Error checking {table}: {error}')
-                    safe_publish_metric(table, 999)
+                    if not suppress_metric_publish:
+                        safe_publish_metric(table, 999)
 
         today = current_jst_date()
         for day_shift in range(0, DUMP_ERROR_DAYS + 1):
@@ -492,7 +498,8 @@ def lambda_handler(event, context):
             for prefix in S3_PREFIXES:
                 dump_check = check_dump_file(prefix, date_str)
                 if dump_check['missing']:
-                    safe_publish_dump_metric(prefix, 'DumpFileMissing', 1)
+                    if not suppress_metric_publish:
+                        safe_publish_dump_metric(prefix, 'DumpFileMissing', 1)
                     issues.append(dump_check)
                     print(
                         f'⚠️ Missing dump file on {date_str} for {prefix}: '
@@ -501,7 +508,8 @@ def lambda_handler(event, context):
                     continue
 
                 if not dump_check['ok']:
-                    safe_publish_dump_metric(prefix, 'DumpFileTooSmall', 1)
+                    if not suppress_metric_publish:
+                        safe_publish_dump_metric(prefix, 'DumpFileTooSmall', 1)
                     dump_check['error'] = 'size_below_min'
                     issues.append(dump_check)
                     print(
@@ -510,7 +518,8 @@ def lambda_handler(event, context):
                     )
                     continue
 
-                safe_publish_dump_metric(prefix, 'DumpFileMissing', 0)
+                if not suppress_metric_publish:
+                    safe_publish_dump_metric(prefix, 'DumpFileMissing', 0)
                 healthy_prefixes += 1
 
             date_failed = False
@@ -532,11 +541,14 @@ def lambda_handler(event, context):
                 print(f'⚠️ No healthy dump found for {date_str}')
 
                 if not REQUIRE_ALL_DUMP_PREFIXES:
-                    safe_publish_dump_metric('global', 'NoHealthyDump', 1)
+                    if not suppress_metric_publish:
+                        safe_publish_dump_metric('global', 'NoHealthyDump', 1)
                 else:
-                    safe_publish_dump_metric('global', 'DumpPrefixIssue', len(issues))
+                    if not suppress_metric_publish:
+                        safe_publish_dump_metric('global', 'DumpPrefixIssue', len(issues))
         if stale_dumps:
-            safe_publish_dump_metric('global', 'StaleDumpEntries', len(stale_dumps))
+            if not suppress_metric_publish:
+                safe_publish_dump_metric('global', 'StaleDumpEntries', len(stale_dumps))
             if not suppress_notifications:
                 send_dump_alert(stale_dumps)
 
@@ -575,6 +587,7 @@ def lambda_handler(event, context):
                     'stale_upstream': stale_upstream,
                     'upstream_manifest_key': upstream_manifest_key,
                     'notifications_suppressed': suppress_notifications,
+                    'metrics_suppressed': suppress_metric_publish,
                     'upstream_sync_check_skipped': skip_upstream_sync_check,
                 }
             ),
