@@ -1,8 +1,17 @@
+{% set daily_snapshot_date = var('daily_snapshot_date', none) %}
+{% set force_rebuild_snapshot_date = var('force_rebuild_snapshot_date', none) %}
+{% set pre_hooks = ["SET SESSION innodb_lock_wait_timeout = 120"] %}
+{% if force_rebuild_snapshot_date is not none %}
+    {% do pre_hooks.append(
+        "DELETE FROM " ~ this ~ " WHERE snapshot_date = CAST('" ~ force_rebuild_snapshot_date ~ "' AS DATE)"
+    ) %}
+{% endif %}
+
 {{
     config(
         materialized='incremental',
         incremental_strategy='append',
-        pre_hook="SET SESSION innodb_lock_wait_timeout = 120",
+        pre_hook=pre_hooks,
         on_schema_change='append_new_columns',
         schema='silver'
     )
@@ -98,8 +107,6 @@ WITH all_active_movings AS (
         -- Filter 3: Exclude cancelled contracts
         AND COALESCE(m.cancel_flag, 0) = 0
 ),
-
-{% set daily_snapshot_date = var('daily_snapshot_date', none) %}
 
 tenant_room_assignments AS (
     -- Take only the most recent moving per tenant-room combination
@@ -253,7 +260,12 @@ SELECT * FROM final
 
 {% if is_incremental() %}
   -- Append only when today's snapshot date is newer than the latest loaded date
-  WHERE snapshot_date > COALESCE((SELECT MAX(snapshot_date) FROM {{ this }}), CAST('1900-01-01' AS DATE))
+  WHERE (
+      snapshot_date > COALESCE((SELECT MAX(snapshot_date) FROM {{ this }}), CAST('1900-01-01' AS DATE))
+      {% if force_rebuild_snapshot_date is not none %}
+      OR snapshot_date = CAST('{{ force_rebuild_snapshot_date }}' AS DATE)
+      {% endif %}
+  )
 {% endif %}
 
 ORDER BY snapshot_date, tenant_name, property, room_number
