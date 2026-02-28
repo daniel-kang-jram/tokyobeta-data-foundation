@@ -45,6 +45,39 @@ sys.modules['awsglue.job'] = mock_glue_job
 sys.modules['pyspark'] = Mock()
 sys.modules['pyspark.context'] = mock_spark_context
 
+# pymysql depends on the cryptography library which can panic at import time when
+# pip-installed and system versions conflict.  Pre-stub the package so all glue
+# scripts can be collected regardless of driver availability.  Tests that need
+# pymysql behaviour pass Mock connections/cursors directly into the functions
+# under test, so the real driver is never needed during unit testing.
+if 'pymysql' not in sys.modules:
+    _mock_pymysql = Mock()
+    # Real sentinel classes are required so that Mock(spec=pymysql.Connection) /
+    # Mock(spec=pymysql.cursors.Cursor) don't raise InvalidSpecError.
+    # The classes must declare the methods that tests access through the spec-mock.
+    class _Connection:
+        def cursor(self): ...
+        def commit(self): ...
+        def rollback(self): ...
+        def close(self): ...
+
+    class _Cursor:
+        def execute(self, query, args=None): ...
+        def executemany(self, query, args=None): ...
+        def fetchone(self): ...
+        def fetchall(self): ...
+        def fetchmany(self, size=None): ...
+        def close(self): ...
+        def __enter__(self): ...
+        def __exit__(self, *a): ...
+
+    _mock_pymysql.Connection = _Connection
+    _mock_pymysql.cursors = Mock()
+    _mock_pymysql.cursors.Cursor = _Cursor
+    _mock_pymysql.cursors.DictCursor = type("DictCursor", (_Cursor,), {})
+    sys.modules['pymysql'] = _mock_pymysql
+    sys.modules['pymysql.cursors'] = _mock_pymysql.cursors
+
 # Add repo root + scripts directory to path (must be portable across CI runners)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
