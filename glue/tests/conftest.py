@@ -45,6 +45,18 @@ sys.modules['awsglue.job'] = mock_glue_job
 sys.modules['pyspark'] = Mock()
 sys.modules['pyspark.context'] = mock_spark_context
 
+# pymysql depends on the cryptography library which can panic at import time when
+# pip-installed and system versions conflict.  Pre-stub the package so all glue
+# scripts can be collected regardless of driver availability.  Tests that need
+# pymysql behaviour pass Mock connections/cursors directly into the functions
+# under test, so the real driver is never needed during unit testing.
+if 'pymysql' not in sys.modules:
+    _mock_pymysql = Mock()
+    _mock_pymysql.cursors = Mock()
+    _mock_pymysql.cursors.DictCursor = type("DictCursor", (), {})
+    sys.modules['pymysql'] = _mock_pymysql
+    sys.modules['pymysql.cursors'] = _mock_pymysql.cursors
+
 # Add repo root + scripts directory to path (must be portable across CI runners)
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))

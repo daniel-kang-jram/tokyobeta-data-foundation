@@ -402,6 +402,27 @@ models:
       - name: municipality
         tests:
           - not_null
+      - name: movein_count
+        description: Weekly move-in count for this municipality
+        tests:
+          - not_null
+      - name: moveout_count
+        description: Weekly move-out count for this municipality
+        tests:
+          - not_null
+      - name: net_change
+        description: Move-ins minus move-outs (can be negative)
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: ['week_start', 'municipality']
+      - dbt_utils.expression_is_true:
+          expression: "movein_count >= 0 AND moveout_count >= 0"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "net_change = movein_count - moveout_count"
+          severity: error
 
   - name: property_churn_weekly
     description: Weekly net change (move-ins - move-outs) by property.
@@ -414,6 +435,27 @@ models:
       - name: asset_id_hj
         tests:
           - not_null
+      - name: movein_count
+        description: Weekly move-in count for this property
+        tests:
+          - not_null
+      - name: moveout_count
+        description: Weekly move-out count for this property
+        tests:
+          - not_null
+      - name: net_change
+        description: Move-ins minus move-outs (can be negative)
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: ['week_start', 'asset_id_hj']
+      - dbt_utils.expression_is_true:
+          expression: "movein_count >= 0 AND moveout_count >= 0"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "net_change = movein_count - moveout_count"
+          severity: error
 
   - name: moveouts_reason_weekly
     description: Weekly move-out counts by reason (and basic segments).
@@ -426,3 +468,18 @@ models:
       - name: moveout_reason_en
         tests:
           - not_null
+      - name: tenant_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['individual', 'corporate']
+      - name: moveout_count
+        description: Weekly move-out count for this dimension combination
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: ['week_start', 'moveout_reason_en', 'tenant_type', 'rent_range']
+      - dbt_utils.expression_is_true:
+          expression: "moveout_count >= 0"
+          severity: error
