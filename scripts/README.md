@@ -23,6 +23,7 @@ This directory contains operational, setup, and maintenance scripts for the Toky
 - **`analyze_rent_roll_vs_gold.py`**: Compares Rent Roll data with Gold tables.
 - **`count_unique_active_tenants.py`**: Counts active tenants based on business logic.
 - **`query_gold_active_tenants.py`**: Queries Gold tables for active tenant counts.
+- **`flash_report_fill/`**: Isolated module to compute and fill the monthly occupancy flash report template from Aurora.
 
 ### Subdirectories
 - **`tests/`**: Integration and unit tests for scripts.
@@ -57,3 +58,27 @@ python3 scripts/emergency_staging_fix.py --check-only
 ```bash
 ./scripts/setup_direnv.sh
 ```
+
+## February Flash Report Automation
+
+Use the dedicated module under `scripts/flash_report_fill/`:
+
+```bash
+python3 scripts/flash_report_fill/fill_flash_report.py \
+  --template-path "/Users/danielkang/Downloads/February Occupancy Flash Report_Template_GG追記20260224.xlsx" \
+  --output-dir "/Users/danielkang/Downloads" \
+  --snapshot-start-jst "2026-02-01 00:00:00 JST" \
+  --snapshot-asof-jst "2026-02-26 05:00:00 JST" \
+  --feb-end-jst "2026-02-28 23:59:59 JST" \
+  --mar-start-jst "2026-03-01 00:00:00 JST" \
+  --mar-end-jst "2026-03-31 23:59:59 JST" \
+  --aws-profile gghouse \
+  --db-host 127.0.0.1 \
+  --db-port 3306 \
+  --emit-flags-csv
+```
+
+Notes:
+- Use an SSH/SSM tunnel to Aurora when running locally.
+- The script writes only input cells and preserves formula cells.
+- Outputs include filled workbook, metrics CSV, reconciliation CSV, and optional anomaly flag CSVs.
