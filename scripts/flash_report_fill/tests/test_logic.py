@@ -46,3 +46,15 @@ def test_metric_query_has_expected_window_operators() -> None:
     assert "movein_date <= %(snapshot_asof)s" in completed_movein_sql
     assert "movein_date > %(snapshot_asof)s" in planned_movein_sql
     assert "movein_date <= %(feb_end)s" in planned_movein_sql
+
+
+def test_metric_query_deduplicates_after_window_filter() -> None:
+    queries = build_metric_queries()
+
+    completed_movein_sql = queries["feb_completed_moveins"].sql
+
+    assert "filtered_contracts AS (" in completed_movein_sql
+    assert "deduplicated_filtered_contracts AS (" in completed_movein_sql
+    assert completed_movein_sql.index("filtered_contracts AS (") < completed_movein_sql.index(
+        "ROW_NUMBER() OVER ("
+    )

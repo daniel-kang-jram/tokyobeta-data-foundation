@@ -24,7 +24,7 @@ END
 """.strip()
 
 BASE_CONTRACTS_CTE = """
-WITH deduplicated_contracts AS (
+WITH base_contracts AS (
     SELECT
         m.id AS moving_id,
         m.tenant_id,
@@ -34,31 +34,22 @@ WITH deduplicated_contracts AS (
         m.moveout_date,
         m.moveout_plans_date,
         m.moveout_date_integrated,
+        m.updated_at,
         m.moving_agreement_type,
         COALESCE(m.cancel_flag, 0) AS cancel_flag,
-        t.status AS management_status_code,
-        ROW_NUMBER() OVER (
-            PARTITION BY m.tenant_id, m.apartment_id, m.room_id
-            ORDER BY m.movein_date DESC, m.updated_at DESC, m.id DESC
-        ) AS rn
+        t.status AS management_status_code
     FROM staging.movings m
     INNER JOIN staging.tenants t
         ON m.tenant_id = t.id
     WHERE COALESCE(m.cancel_flag, 0) = 0
 ),
-contracts AS (
-    SELECT
-        d.*,
-        CONCAT(d.apartment_id, '-', d.room_id) AS room_key,
-        COALESCE(d.moveout_plans_date, d.moveout_date) AS effective_moveout_at
-    FROM deduplicated_contracts d
-    WHERE d.rn = 1
-),
 classified AS (
     SELECT
         c.*,
+        CONCAT(c.apartment_id, '-', c.room_id) AS room_key,
+        COALESCE(c.moveout_plans_date, c.moveout_date) AS effective_moveout_at,
         {tenant_type_case} AS tenant_type
-    FROM contracts c
+    FROM base_contracts c
 )
 """.strip().format(tenant_type_case=TENANT_TYPE_CASE)
 
@@ -102,72 +93,119 @@ def is_active_at_snapshot(
     return move_out_dt > snapshot_ts
 
 
+def _build_metric_sql(where_clause: str, result_select_sql: str) -> str:
+    """Build metric SQL with deduplication applied after metric-specific filtering."""
+    return f"""
+{BASE_CONTRACTS_CTE},
+filtered_contracts AS (
+    SELECT *
+    FROM classified
+    WHERE {where_clause}
+),
+deduplicated_filtered_contracts AS (
+    SELECT
+        f.*,
+        ROW_NUMBER() OVER (
+            PARTITION BY f.tenant_id, f.apartment_id, f.room_id
+            ORDER BY f.movein_date DESC, f.updated_at DESC, f.moving_id DESC
+        ) AS rn
+    FROM filtered_contracts f
+)
+{result_select_sql}
+""".strip()
+
+
 def build_metric_queries() -> Dict[str, QuerySpec]:
     """Build decision-complete SQL specs for all flash report metrics."""
-    d5_sql = f"""
-{BASE_CONTRACTS_CTE}
-SELECT
-    COUNT(DISTINCT room_key) AS occupied_rooms
-FROM classified
-WHERE CAST(movein_date AS DATETIME) <= %(snapshot_start)s
+    d5_where = f"""
+CAST(movein_date AS DATETIME) <= %(snapshot_start)s
   AND (
       effective_moveout_at IS NULL
       OR CAST(effective_moveout_at AS DATETIME) > %(snapshot_start)s
   )
   AND management_status_code IN {ACTIVE_OCCUPANCY_STATUSES}
 """.strip()
+    d5_sql = _build_metric_sql(
+        where_clause=d5_where,
+        result_select_sql="""
+SELECT
+    COUNT(DISTINCT room_key) AS occupied_rooms
+FROM deduplicated_filtered_contracts
+WHERE rn = 1
+""".strip(),
+    )
 
     def split_moveins(window_start_param: str, window_end_param: str, status_tuple: tuple[int, ...]) -> str:
-        return f"""
-{BASE_CONTRACTS_CTE}
-SELECT
-    tenant_type,
-    COUNT(DISTINCT room_key) AS cnt
-FROM classified
-WHERE movein_date >= %({window_start_param})s
+        where_clause = f"""
+movein_date >= %({window_start_param})s
   AND movein_date <= %({window_end_param})s
   AND management_status_code IN {status_tuple}
-GROUP BY tenant_type
 """.strip()
+        return _build_metric_sql(
+            where_clause=where_clause,
+            result_select_sql="""
+SELECT
+    tenant_type,
+    COUNT(DISTINCT room_key) AS cnt
+FROM deduplicated_filtered_contracts
+WHERE rn = 1
+GROUP BY tenant_type
+""".strip(),
+        )
 
     def split_planned_moveins(window_end_param: str) -> str:
-        return f"""
-{BASE_CONTRACTS_CTE}
-SELECT
-    tenant_type,
-    COUNT(DISTINCT room_key) AS cnt
-FROM classified
-WHERE movein_date > %(snapshot_asof)s
+        where_clause = f"""
+movein_date > %(snapshot_asof)s
   AND movein_date <= %({window_end_param})s
   AND management_status_code IN {PLANNED_MOVEIN_STATUSES}
-GROUP BY tenant_type
 """.strip()
+        return _build_metric_sql(
+            where_clause=where_clause,
+            result_select_sql="""
+SELECT
+    tenant_type,
+    COUNT(DISTINCT room_key) AS cnt
+FROM deduplicated_filtered_contracts
+WHERE rn = 1
+GROUP BY tenant_type
+""".strip(),
+        )
 
     def split_completed_moveouts(window_start_param: str, window_end_param: str) -> str:
-        return f"""
-{BASE_CONTRACTS_CTE}
-SELECT
-    tenant_type,
-    COUNT(DISTINCT room_key) AS cnt
-FROM classified
-WHERE moveout_plans_date >= %({window_start_param})s
+        where_clause = f"""
+moveout_plans_date >= %({window_start_param})s
   AND moveout_plans_date <= %({window_end_param})s
   AND management_status_code IN {COMPLETED_MOVEOUT_STATUSES}
-GROUP BY tenant_type
 """.strip()
-
-    def split_planned_moveouts(window_end_param: str) -> str:
-        return f"""
-{BASE_CONTRACTS_CTE}
+        return _build_metric_sql(
+            where_clause=where_clause,
+            result_select_sql="""
 SELECT
     tenant_type,
     COUNT(DISTINCT room_key) AS cnt
-FROM classified
-WHERE moveout_date > %(snapshot_asof)s
+FROM deduplicated_filtered_contracts
+WHERE rn = 1
+GROUP BY tenant_type
+""".strip(),
+        )
+
+    def split_planned_moveouts(window_end_param: str) -> str:
+        where_clause = f"""
+moveout_date > %(snapshot_asof)s
   AND moveout_date <= %({window_end_param})s
   AND management_status_code IN {PLANNED_MOVEOUT_STATUSES}
-GROUP BY tenant_type
 """.strip()
+        return _build_metric_sql(
+            where_clause=where_clause,
+            result_select_sql="""
+SELECT
+    tenant_type,
+    COUNT(DISTINCT room_key) AS cnt
+FROM deduplicated_filtered_contracts
+WHERE rn = 1
+GROUP BY tenant_type
+""".strip(),
+        )
 
     return {
         "d5_occupied_rooms": QuerySpec(

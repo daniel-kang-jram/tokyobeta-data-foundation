@@ -319,6 +319,7 @@ def main() -> int:
         recon_records = build_reconciliation_records(
             cursor=cursor,
             cell_values=cell_values,
+            snapshot_start_date=snapshot_start.date(),
             snapshot_asof_date=snapshot_asof.date(),
             feb_start_date=feb_start.date(),
             feb_end_date=feb_end.date(),

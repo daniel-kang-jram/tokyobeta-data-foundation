@@ -70,14 +70,16 @@ def test_reconciliation_records_to_csv_rows_shape() -> None:
 class _ReconCursor:
     def __init__(self):
         self.last_sql = ""
+        self.last_params = None
+        self.calls = []
 
     def execute(self, sql, params):
         self.last_sql = sql
+        self.last_params = params
+        self.calls.append((sql, params))
 
     def fetchone(self):
         sql = self.last_sql
-        if "MAX(snapshot_date)" in sql:
-            return {"snapshot_date": date(2026, 2, 26)}
         if "is_room_primary = TRUE" in sql:
             return {"occupied_rooms": 111}
         if "SUM(new_moveins)" in sql:
@@ -106,6 +108,7 @@ def test_build_reconciliation_records_returns_expected_rows() -> None:
             "D17": 6,
             "E17": 2,
         },
+        snapshot_start_date=date(2026, 2, 1),
         snapshot_asof_date=date(2026, 2, 26),
         feb_start_date=date(2026, 2, 1),
         feb_end_date=date(2026, 2, 28),
@@ -115,3 +118,6 @@ def test_build_reconciliation_records_returns_expected_rows() -> None:
 
     assert len(rows) == 5
     assert rows[0].reconciliation_id == "silver_occupied_rooms"
+    assert rows[0].asof_date == "2026-02-01"
+    assert "snapshot_start date" in rows[0].note
+    assert any("snapshot_date = %s" in sql and params == (date(2026, 2, 1),) for sql, params in cursor.calls)

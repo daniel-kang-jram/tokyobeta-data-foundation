@@ -52,6 +52,7 @@ def reconciliation_records_to_csv_rows(
 def build_reconciliation_records(
     cursor,
     cell_values: Dict[str, int],
+    snapshot_start_date: date,
     snapshot_asof_date: date,
     feb_start_date: date,
     feb_end_date: date,
@@ -62,24 +63,37 @@ def build_reconciliation_records(
     records: List[ReconciliationRecord] = []
 
     expected_d5 = int(cell_values.get("D5", 0))
-    silver_snapshot_date = _max_silver_snapshot(cursor, snapshot_asof_date)
-    if silver_snapshot_date is not None:
-        silver_occupied = _silver_occupied_rooms(cursor, silver_snapshot_date)
-        records.append(
-            ReconciliationRecord(
-                reconciliation_id="silver_occupied_rooms",
-                expected_value=expected_d5,
-                reference_value=silver_occupied,
-                delta=expected_d5 - silver_occupied,
-                reference_source="silver.tenant_room_snapshot_daily",
-                note="Compared D5 against latest silver snapshot on or before as-of date.",
-                asof_date=str(silver_snapshot_date),
-            )
+    silver_occupied = _silver_occupied_rooms(cursor, snapshot_start_date)
+    records.append(
+        ReconciliationRecord(
+            reconciliation_id="silver_occupied_rooms",
+            expected_value=expected_d5,
+            reference_value=silver_occupied,
+            delta=expected_d5 - silver_occupied,
+            reference_source="silver.tenant_room_snapshot_daily",
+            note="Compared D5 against silver snapshot at snapshot_start date.",
+            asof_date=str(snapshot_start_date),
         )
+    )
 
-    feb_our_moveins = int(cell_values.get("D11", 0) + cell_values.get("E11", 0) + cell_values.get("D12", 0) + cell_values.get("E12", 0))
-    feb_our_moveouts = int(cell_values.get("D15", 0) + cell_values.get("E15", 0) + cell_values.get("D16", 0) + cell_values.get("E16", 0))
-    mar_our_moveins = int(cell_values.get("D13", 0) + cell_values.get("E13", 0) + cell_values.get("D14", 0) + cell_values.get("E14", 0))
+    feb_our_moveins = int(
+        cell_values.get("D11", 0)
+        + cell_values.get("E11", 0)
+        + cell_values.get("D12", 0)
+        + cell_values.get("E12", 0)
+    )
+    feb_our_moveouts = int(
+        cell_values.get("D15", 0)
+        + cell_values.get("E15", 0)
+        + cell_values.get("D16", 0)
+        + cell_values.get("E16", 0)
+    )
+    mar_our_moveins = int(
+        cell_values.get("D13", 0)
+        + cell_values.get("E13", 0)
+        + cell_values.get("D14", 0)
+        + cell_values.get("E14", 0)
+    )
     mar_our_moveouts = int(cell_values.get("D17", 0) + cell_values.get("E17", 0))
 
     feb_gold = _gold_month_totals(cursor, feb_start_date, feb_end_date)
@@ -131,21 +145,6 @@ def build_reconciliation_records(
     )
 
     return records
-
-
-def _max_silver_snapshot(cursor, snapshot_asof_date: date) -> date | None:
-    cursor.execute(
-        """
-        SELECT MAX(snapshot_date) AS snapshot_date
-        FROM silver.tenant_room_snapshot_daily
-        WHERE snapshot_date <= %s
-        """,
-        (snapshot_asof_date,),
-    )
-    row = cursor.fetchone()
-    if not row:
-        return None
-    return row["snapshot_date"] if isinstance(row, dict) else row[0]
 
 
 def _silver_occupied_rooms(cursor, snapshot_date: date) -> int:
