@@ -65,6 +65,32 @@ models:
         description: Number of days in this status (calculated from valid_from to valid_to or today)
       - name: dbt_updated_at
         description: Timestamp when this record was created/updated by dbt
+  - name: stg_inquiries
+    description: Cleaned customer inquiry data with conversion tracking
+    config:
+      schema: silver
+    columns:
+      - name: inquiry_id
+        description: Primary key - inquiry ID
+        tests:
+          - not_null
+      - name: tenant_id
+        description: Foreign key to tenants (NULL if inquiry did not convert)
+      - name: inquiry_date
+        description: Date of inquiry (derived from created_at)
+        tests:
+          - not_null
+      - name: inquiry_timestamp
+        description: Full timestamp of inquiry creation
+        tests:
+          - not_null
+      - name: converted_to_tenant
+        description: 1 if the inquiry converted to a tenant record, 0 otherwise
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+
   - name: stg_movings
     description: Cleaned contract lifecycle data with semantic code labels
     config:

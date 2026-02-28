@@ -366,41 +366,108 @@ class TestCreateTableBackups:
 
 class TestMainWorkflow:
     """Test end-to-end silver transformer workflow."""
-    
-    @patch('boto3.client')
-    @patch('subprocess.run')
+
     @patch('pymysql.connect')
+    @patch('subprocess.run')
     def test_full_workflow_success(
         self,
-        mock_connect,
         mock_subprocess,
-        mock_boto_client,
+        mock_connect,
         mock_aurora_connection,
         mock_secretsmanager_client,
-        mock_dbt_result
+        mock_dbt_result,
+        monkeypatch,
     ):
-        """Should execute full silver transformation workflow."""
-        # Setup mocks
-        mock_boto_client.return_value = mock_secretsmanager_client
-        mock_connect.return_value = mock_aurora_connection
+        """main() should return a SUCCESS result dict with all expected keys."""
+        import silver_transformer
+
+        monkeypatch.setitem(silver_transformer.args, 'DBT_PROJECT_PATH', 's3://test-bucket/dbt-project')
+        monkeypatch.setattr(silver_transformer, 'secretsmanager', mock_secretsmanager_client)
+
+        # Subprocess always succeeds (dbt deps, seed, run, test)
         mock_subprocess.return_value = mock_dbt_result
-        
-        # This will be the main() function call once implemented
-        # result = main()
-        # assert result['status'] == 'SUCCESS'
-        # assert result['models_built'] == 6
-        # assert result['backup_count'] > 0
-        pass
-    
-    def test_validates_staging_dependencies(self):
-        """Should verify staging tables exist before transforming."""
-        # Test will verify required staging tables are present
-        pass
-    
-    def test_handles_dbt_compilation_errors(self):
-        """Should handle dbt compilation errors gracefully."""
-        # Test will verify error handling for dbt failures
-        pass
+
+        # DB connection: cursor returns no temp tables and no existing silver tables
+        cursor = mock_aurora_connection.cursor()
+        cursor.fetchall.return_value = []   # no __dbt_tmp tables to drop
+        cursor.fetchone.return_value = None  # tables don't exist → backup count = 0
+        mock_connect.return_value = mock_aurora_connection
+
+        result = silver_transformer.main()
+
+        assert result['status'] == 'SUCCESS'
+        assert 'models_built' in result
+        assert 'backup_count' in result
+        assert 'tests_passed' in result
+        assert 'tests_failed' in result
+        assert 'duration_seconds' in result
+
+    @patch('pymysql.connect')
+    @patch('subprocess.run')
+    def test_cleanup_tmp_tables_called_before_models(
+        self,
+        mock_subprocess,
+        mock_connect,
+        mock_aurora_connection,
+        mock_secretsmanager_client,
+        mock_dbt_result,
+        monkeypatch,
+    ):
+        """cleanup_dbt_tmp_tables should be called before running dbt models."""
+        import silver_transformer
+
+        monkeypatch.setitem(silver_transformer.args, 'DBT_PROJECT_PATH', 's3://test-bucket/dbt-project')
+        monkeypatch.setattr(silver_transformer, 'secretsmanager', mock_secretsmanager_client)
+
+        mock_subprocess.return_value = mock_dbt_result
+
+        cursor = mock_aurora_connection.cursor()
+        cursor.fetchall.return_value = []
+        cursor.fetchone.return_value = None
+        mock_connect.return_value = mock_aurora_connection
+
+        silver_transformer.main()
+
+        # Verify a query for __dbt_tmp tables was issued via the cursor
+        all_sql = [str(c) for c in cursor.execute.call_args_list]
+        assert any('__dbt_tmp' in s for s in all_sql), (
+            "cleanup_dbt_tmp_tables must query for leftover temp tables before running dbt"
+        )
+
+    @patch('pymysql.connect')
+    @patch('subprocess.run')
+    def test_handles_dbt_compilation_errors(
+        self,
+        mock_subprocess,
+        mock_connect,
+        mock_aurora_connection,
+        mock_secretsmanager_client,
+        mock_dbt_result,
+        monkeypatch,
+    ):
+        """When dbt run fails with CalledProcessError, main() should propagate the exception."""
+        import subprocess
+        import silver_transformer
+
+        monkeypatch.setitem(silver_transformer.args, 'DBT_PROJECT_PATH', 's3://test-bucket/dbt-project')
+        monkeypatch.setattr(silver_transformer, 'secretsmanager', mock_secretsmanager_client)
+
+        # First subprocess call (aws s3 sync) succeeds; second (dbt deps) succeeds;
+        # third (dbt seed) succeeds; fourth (dbt run) fails.
+        mock_subprocess.side_effect = [
+            mock_dbt_result,   # aws s3 sync
+            mock_dbt_result,   # dbt deps
+            mock_dbt_result,   # dbt seed
+            subprocess.CalledProcessError(1, ['dbt', 'run'], 'Compilation error in model'),
+        ]
+
+        cursor = mock_aurora_connection.cursor()
+        cursor.fetchall.return_value = []
+        cursor.fetchone.return_value = None
+        mock_connect.return_value = mock_aurora_connection
+
+        with pytest.raises(subprocess.CalledProcessError):
+            silver_transformer.main()
 
 
 # Run tests with: pytest glue/tests/test_silver_transformer.py -v
