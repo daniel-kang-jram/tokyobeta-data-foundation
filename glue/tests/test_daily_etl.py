@@ -963,7 +963,7 @@ def test_compute_occupancy_kpis_for_dates_future_projection_continues_from_previ
                 self._next_fetchone = {"count": self.applications.get(target_date, 0)}
                 return
 
-            if "AND move_in_date = %s" in sql_compact:
+            if "AND m.original_movein_date = %s" in sql_compact:
                 target_date = params[1]
                 self._next_fetchone = {"count": self.moveins.get(target_date, 0)}
                 return
@@ -1099,7 +1099,7 @@ def test_compute_occupancy_kpis_fact_day_uses_same_day_end_rooms_even_if_previou
                 self._next_fetchone = {"count": self.applications.get(target_date, 0)}
                 return
 
-            if "AND move_in_date = %s" in sql_compact:
+            if "AND m.original_movein_date = %s" in sql_compact:
                 target_date = params[1]
                 self._next_fetchone = {"count": self.moveins.get(target_date, 0)}
                 return
@@ -1241,7 +1241,7 @@ def test_compute_occupancy_kpis_forward_fills_missing_fact_day_from_next_snapsho
                 self._next_fetchone = None
                 return
 
-            if "first_apps" in sql_compact or "move_in_date" in sql_compact or "moveout_date" in sql_compact:
+            if "first_apps" in sql_compact or "original_movein_date" in sql_compact or "moveout_date" in sql_compact:
                 raise AssertionError("Did not expect movements/applications queries for missing snapshot day")
 
             raise AssertionError(f"Unexpected SQL executed: {sql_compact!r} params={params!r}")
@@ -1314,7 +1314,7 @@ def test_compute_occupancy_kpis_for_dates_skips_gap_dates(monkeypatch):
                 self._next_fetchone = {"count": 0}
                 return
 
-            if "AND move_in_date = %s" in sql_compact:
+            if "AND m.original_movein_date = %s" in sql_compact:
                 self._next_fetchone = {"count": 0}
                 return
 
@@ -1421,7 +1421,7 @@ def test_compute_occupancy_kpis_bridge_day_sets_period_start_rooms_null():
                 self._next_fetchone = {"count": 0}
                 return
 
-            if "AND move_in_date = %s" in sql_compact:
+            if "AND m.original_movein_date = %s" in sql_compact:
                 self._next_fetchone = {"count": 0}
                 return
 
@@ -1518,7 +1518,7 @@ def test_compute_occupancy_kpis_for_dates_queries_do_not_filter_room_primary_for
                 self._next_fetchone = {"count": 0}
                 return
 
-            if "AND move_in_date = %s" in sql_compact:
+            if "AND m.original_movein_date = %s" in sql_compact:
                 self._next_fetchone = {"count": 0}
                 return
 
@@ -1569,12 +1569,12 @@ def test_compute_occupancy_kpis_for_dates_queries_do_not_filter_room_primary_for
     assert processed == 1
 
     apps_query = [q for q, _ in fake_cursor.seen_queries if "first_apps" in q][0]
-    movein_query = [q for q, _ in fake_cursor.seen_queries if "AND move_in_date = %s" in q][0]
+    movein_query = [q for q, _ in fake_cursor.seen_queries if "AND m.original_movein_date = %s" in q][0]
 
     assert "is_room_primary = TRUE" not in apps_query
     assert "is_room_primary = TRUE" not in movein_query
     assert "management_status_code IN (4, 5)" in apps_query
-    assert "management_status_code IN (4, 5, 6, 7, 9)" in movein_query
+    assert "management_status_code IN (4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15)" in movein_query
 
 
 def test_load_tenant_snapshots_from_s3_skips_gap_and_invalid_manifest(monkeypatch):

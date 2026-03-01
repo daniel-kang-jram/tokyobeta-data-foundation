@@ -2800,7 +2800,7 @@ def ensure_occupancy_kpi_table_exists(cursor) -> None:
         CREATE TABLE IF NOT EXISTS gold.occupancy_daily_metrics (
             snapshot_date DATE NOT NULL,
             applications INT COMMENT '申込: First appearance of pairs in status 4 or 5',
-            new_moveins INT COMMENT '新規入居者: Pairs with move_in_date = snapshot_date',
+            new_moveins INT COMMENT '新規入居者: Pairs with original_movein_date = snapshot_date',
             new_moveouts INT COMMENT '新規退去者: Pairs with moveout date = snapshot_date',
             occupancy_delta INT COMMENT '稼働室数増減: new_moveins - new_moveouts',
             period_start_rooms INT COMMENT '期首稼働室数: Occupied count on previous day',
@@ -2977,13 +2977,18 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         if missing_fact_snapshot:
             new_moveins = 0
         else:
-            cursor.execute("""
-                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                  AND move_in_date = %s
-                  AND management_status_code IN (4, 5, 6, 7, 9)
-            """, (snapshot_date_filter, target_date))
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT CONCAT(s.apartment_id, '-', s.room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily s
+                INNER JOIN staging.movings m
+                    ON m.id = s.moving_id
+                WHERE s.snapshot_date = %s
+                  AND m.original_movein_date = %s
+                  AND s.management_status_code IN (4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15)
+                """,
+                (snapshot_date_filter, target_date),
+            )
             new_moveins = cursor.fetchone()["count"]
 
         if missing_fact_snapshot:
