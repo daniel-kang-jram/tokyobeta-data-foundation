@@ -1760,6 +1760,92 @@ def test_compute_occupancy_kpis_for_dates_falls_back_when_room_primary_column_mi
     assert "COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count" in fallback_query
 
 
+def test_compute_occupancy_kpis_for_dates_falls_back_when_room_primary_unpopulated():
+    class FakeCursor:
+        def __init__(self):
+            self.as_of_snapshot_date = date(2026, 2, 16)
+            self.snapshot_exists = {date(2026, 2, 16)}
+            self.seen_queries: list[tuple[str, tuple]] = []
+            self.inserted_rows = {}
+            self._next_fetchall = []
+            self._next_fetchone = None
+            self.primary_query_attempts = 0
+            self.legacy_query_attempts = 0
+
+        def execute(self, sql, params=None):
+            sql_compact = " ".join(sql.split())
+            params = tuple(params or ())
+            self.seen_queries.append((sql_compact, params))
+
+            if "SELECT MAX(snapshot_date) AS max_snapshot_date" in sql_compact:
+                self._next_fetchone = {"max_snapshot_date": self.as_of_snapshot_date}
+                return
+
+            if "SELECT check_date FROM gold.data_quality_calendar" in sql_compact:
+                self._next_fetchall = []
+                return
+
+            if "SELECT 1 FROM silver.tenant_room_snapshot_daily" in sql_compact and "LIMIT 1" in sql_compact:
+                self._next_fetchone = {"1": 1} if params[0] in self.snapshot_exists else None
+                return
+
+            if "first_apps" in sql_compact:
+                self._next_fetchone = {"count": 0}
+                return
+
+            if "AND m.original_movein_date = %s" in sql_compact:
+                self._next_fetchone = {"count": 0}
+                return
+
+            if "AND moveout_date = %s" in sql_compact:
+                self._next_fetchone = {"count": 0}
+                return
+
+            if (
+                "FROM silver.tenant_room_snapshot_daily" in sql_compact
+                and "snapshot_date = %s" in sql_compact
+                and "is_room_primary = TRUE" in sql_compact
+            ):
+                self.primary_query_attempts += 1
+                self._next_fetchone = {"count": 0}
+                return
+
+            if (
+                "FROM silver.tenant_room_snapshot_daily" in sql_compact
+                and "snapshot_date = %s" in sql_compact
+                and "management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)" in sql_compact
+            ):
+                self.legacy_query_attempts += 1
+                self._next_fetchone = {"count": 88}
+                return
+
+            if sql_compact.startswith("INSERT INTO gold.occupancy_daily_metrics"):
+                self.inserted_rows[params[0]] = {"period_end_rooms": params[6]}
+                self._next_fetchone = None
+                return
+
+            raise AssertionError(f"Unexpected SQL: {sql_compact!r} params={params!r}")
+
+        def fetchone(self):
+            result = self._next_fetchone
+            self._next_fetchone = None
+            return result
+
+        def fetchall(self):
+            result = self._next_fetchall
+            self._next_fetchall = []
+            return result
+
+    cursor = FakeCursor()
+
+    processed = daily_etl.compute_occupancy_kpis_for_dates(cursor, [date(2026, 2, 16)])
+
+    assert processed == 1
+    assert cursor.primary_query_attempts == 1
+    assert cursor.legacy_query_attempts == 1
+    assert cursor.inserted_rows[date(2026, 2, 16)]["period_end_rooms"] == 88
+
+
 def test_load_tenant_snapshots_from_s3_skips_gap_and_invalid_manifest(monkeypatch):
     class FakeCursor:
         def __init__(self):

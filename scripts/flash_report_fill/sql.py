@@ -209,12 +209,16 @@ def build_metric_queries(config: FlashReportQueryConfig | None = None) -> Dict[s
         "move-out prediction",
     )
 
-    def split_moveins(window_start_param: str, window_end_param: str, status_tuple: tuple[int, ...]) -> str:
+    def split_moveins(
+        window_start_param: str, window_end_param: str, status_tuple: tuple[int, ...]
+    ) -> str:
+        _ = status_tuple  # Completed move-ins are event/date driven, not current-status driven.
         where_clause = f"""
 original_movein_date >= %({window_start_param})s
   AND original_movein_date <= %({window_end_param})s
+  AND movein_date IS NOT NULL
+  AND movein_date <= %({window_end_param})s
   AND COALESCE(move_renew_flag, 0) = 0
-  AND management_status_code IN {status_tuple}
 """.strip()
         return _build_metric_sql(
             where_clause=where_clause,
