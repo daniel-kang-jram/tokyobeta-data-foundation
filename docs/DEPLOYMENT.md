@@ -159,6 +159,19 @@ Sign-off entries are appended to this file for auditability.
 - Failing Criteria: route marker mismatch on `/occupancy`, `/moveins`, `/moveouts`, `/geography`, `/pricing`; release blockers remain unresolved.
 - Approver: automated smoke execution record (pending human release approval)
 
+## Evidence Auth Smoke Sign-off
+
+- Date (UTC): 2026-03-01T18:15:22Z
+- Base URL: https://intelligence.jram.jp
+- Artifact Directory: artifacts/evidence-auth-smoke/prod-20260302-030445
+- Route Matrix Result: FAIL (all route H1 marker checks timed out after auth)
+- Pricing Funnel Result: FAIL (blocked by route marker mismatch on `/pricing`)
+- Metadata JSON Result (`application/json` + no `/api//`): FAIL (`/api//{route}/evidencemeta.json` requests observed in network log)
+- Parse Error Check (`Unexpected token '<'`): FAIL (console/pageerror includes metadata JSON parse failure)
+- Decision: NO-GO
+- Failing Criteria: production deploy with metadata-path/route-content fixes is pending; current production artifact still serves stale route behavior.
+- Approver: automated smoke execution record (deployment deferred by release owner)
+
 ---
 
 ## Evidence Rollback Criteria

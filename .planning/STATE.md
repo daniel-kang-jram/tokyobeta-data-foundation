@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
-status: complete
-last_updated: "2026-03-01T17:48:11Z"
+status: in_progress
+last_updated: "2026-03-01T18:41:17Z"
 progress:
   total_phases: 2
-  completed_phases: 2
-  total_plans: 9
+  completed_phases: 1
+  total_plans: 10
   completed_plans: 9
 ---
 
@@ -18,10 +18,10 @@ progress:
 
 ## Current Phase
 - `2` Evidence dashboard authenticated UAT and release readiness
-- Status: complete
-- Plan progress: `4/4` completed
+- Status: in progress (NO-GO, deploy pending)
+- Plan progress: `4/5` completed (`02-05` blocked)
 - Last completed plan: `02-04-PLAN.md` (Phase 2)
-- Next plan: None (phase complete)
+- Next plan: `02-05-PLAN.md` pending production deploy + smoke rerun
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -52,6 +52,9 @@ progress:
 - [Phase 02-04]: Release sign-off is GO only when all route/KPI/time/funnel/metadata/artifact checks pass; otherwise NO-GO.
 - [Phase 02-04]: Pricing release criteria must explicitly include the four funnel markers as deterministic blockers.
 - [Phase 02-04]: Production authenticated smoke on 2026-03-01 recorded NO-GO due route marker mismatches across all gated routes.
+- [Phase 02-05]: Authenticated smoke now emits `auth_redirects`, redirect chains, and deterministic failure kinds for route-level blockers.
+- [Phase 02-05]: Production login automation supports User ID selector variants (including `#u`) used by current login UI.
+- [Phase 02-05]: Plan closed in NO-GO blocked-ready state because production deploy was deferred; do not mark Phase 2 complete yet.
 
 ## Performance Metrics
 | Phase | Plan | Duration | Tasks | Files |
@@ -67,8 +70,11 @@ progress:
 | 02 | 04 | 12 min | 3 | 4 |
 
 ## Blockers
-- None
+- Production deployment required before final GO sign-off:
+  - deploy latest Evidence build to production
+  - rerun authenticated smoke and verify all route/metadata checks pass
+  - append GO sign-off entry in `docs/DEPLOYMENT.md`
 
 ## Session
-- Updated: 2026-03-01T17:48:11Z
-- Stopped At: Completed 02-04-PLAN.md
+- Updated: 2026-03-01T18:41:17Z
+- Stopped At: Blocked on deploy-deferred closure for 02-05-PLAN.md

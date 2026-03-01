@@ -30,7 +30,8 @@
 **Goal:** Stabilize authenticated dashboard routing and complete production UAT so KPI-centric pages can be signed off without route or metadata regressions.
 **Requirements**: [EVD-REL-001], [EVD-REL-002], [EVD-REL-003], [EVD-REL-004], [EVD-REL-005]
 **Depends on:** Phase 1
-**Plans:** 4/4 plans complete
+**Status:** In progress (NO-GO, production deploy pending as of 2026-03-01)
+**Plans:** 4/5 plans complete
 
 **Success Criteria:**
 1. Authenticated route navigation works for all primary dashboard pages and shows route-specific content.
@@ -45,3 +46,4 @@
 | 02-02 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-02-SUMMARY.md` |
 | 02-03 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-03-SUMMARY.md` |
 | 02-04 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-04-SUMMARY.md` |
+| 02-05 | Blocked (deploy deferred) | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-05-SUMMARY.md` |
