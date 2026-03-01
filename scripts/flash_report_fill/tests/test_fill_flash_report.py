@@ -72,6 +72,10 @@ def test_parse_args_defaults(monkeypatch) -> None:
     assert args.db_host == fill_flash_report.DEFAULT_DB_HOST
     assert args.db_port == fill_flash_report.DEFAULT_DB_PORT
     assert args.sheet_name == "Flash Report（2月）"
+    assert args.snapshot_asof_jst == "2026-02-28 05:00:00 JST"
+    assert args.d5_mode == "fact_aligned"
+    assert args.movein_prediction_date_column == "original_movein_date"
+    assert args.moveout_prediction_date_column == "moveout_date"
 
 
 def test_resolve_db_credentials_uses_cli_override() -> None:
@@ -203,10 +207,15 @@ def test_main_check_only_writes_csv_outputs(tmp_path: Path, monkeypatch) -> None
         sheet_name="Flash Report（2月）",
         output_dir=str(tmp_path),
         snapshot_start_jst="2026-02-01 00:00:00 JST",
-        snapshot_asof_jst="2026-02-26 05:00:00 JST",
+        snapshot_asof_jst="2026-02-28 05:00:00 JST",
         feb_end_jst="2026-02-28 23:59:59 JST",
         mar_start_jst="2026-03-01 00:00:00 JST",
         mar_end_jst="2026-03-31 23:59:59 JST",
+        d5_mode="fact_aligned",
+        movein_prediction_date_column="original_movein_date",
+        moveout_prediction_date_column="moveout_date",
+        d5_benchmark=11271,
+        d5_tolerance=10,
         aws_profile="gghouse",
         aws_region="ap-northeast-1",
         db_host="127.0.0.1",
@@ -250,6 +259,7 @@ def test_main_check_only_writes_csv_outputs(tmp_path: Path, monkeypatch) -> None
             )
         ],
     )
+    monkeypatch.setattr(fill_flash_report, "build_d5_discrepancy_records", lambda **kwargs: ([], []))
 
     rc = fill_flash_report.main()
     assert rc == 0
@@ -267,10 +277,15 @@ def test_main_write_mode_creates_filled_workbook(tmp_path: Path, monkeypatch) ->
         sheet_name="Flash Report（2月）",
         output_dir=str(tmp_path),
         snapshot_start_jst="2026-02-01 00:00:00 JST",
-        snapshot_asof_jst="2026-02-26 05:00:00 JST",
+        snapshot_asof_jst="2026-02-28 05:00:00 JST",
         feb_end_jst="2026-02-28 23:59:59 JST",
         mar_start_jst="2026-03-01 00:00:00 JST",
         mar_end_jst="2026-03-31 23:59:59 JST",
+        d5_mode="fact_aligned",
+        movein_prediction_date_column="original_movein_date",
+        moveout_prediction_date_column="moveout_date",
+        d5_benchmark=11271,
+        d5_tolerance=10,
         aws_profile="gghouse",
         aws_region="ap-northeast-1",
         db_host="127.0.0.1",
@@ -300,6 +315,7 @@ def test_main_write_mode_creates_filled_workbook(tmp_path: Path, monkeypatch) ->
         lambda cursor, params, limit: ({"double_active_rooms": [], "tenant_switch_gaps": [], "same_tenant_multi_status": []}, []),
     )
     monkeypatch.setattr(fill_flash_report, "build_reconciliation_records", lambda **kwargs: [])
+    monkeypatch.setattr(fill_flash_report, "build_d5_discrepancy_records", lambda **kwargs: ([], []))
 
     rc = fill_flash_report.main()
     assert rc == 0
@@ -315,10 +331,15 @@ def test_main_raises_if_formula_cells_change(tmp_path: Path, monkeypatch) -> Non
         sheet_name="Flash Report（2月）",
         output_dir=str(tmp_path),
         snapshot_start_jst="2026-02-01 00:00:00 JST",
-        snapshot_asof_jst="2026-02-26 05:00:00 JST",
+        snapshot_asof_jst="2026-02-28 05:00:00 JST",
         feb_end_jst="2026-02-28 23:59:59 JST",
         mar_start_jst="2026-03-01 00:00:00 JST",
         mar_end_jst="2026-03-31 23:59:59 JST",
+        d5_mode="fact_aligned",
+        movein_prediction_date_column="original_movein_date",
+        moveout_prediction_date_column="moveout_date",
+        d5_benchmark=11271,
+        d5_tolerance=10,
         aws_profile="gghouse",
         aws_region="ap-northeast-1",
         db_host="127.0.0.1",
@@ -347,6 +368,7 @@ def test_main_raises_if_formula_cells_change(tmp_path: Path, monkeypatch) -> Non
         lambda cursor, params, limit: ({"double_active_rooms": [], "tenant_switch_gaps": [], "same_tenant_multi_status": []}, []),
     )
     monkeypatch.setattr(fill_flash_report, "build_reconciliation_records", lambda **kwargs: [])
+    monkeypatch.setattr(fill_flash_report, "build_d5_discrepancy_records", lambda **kwargs: ([], []))
     monkeypatch.setattr(
         fill_flash_report,
         "get_formula_cells",

@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import date
 
 from scripts.flash_report_fill.reconciliation import (
+    build_d5_discrepancy_records,
     build_reconciliation_records,
     metrics_records_to_csv_rows,
     reconciliation_records_to_csv_rows,
 )
-from scripts.flash_report_fill.types import MetricRecord, ReconciliationRecord
+from scripts.flash_report_fill.types import MetricRecord, ReconciliationRecord, WarningRecord
 
 
 def test_metrics_records_to_csv_rows_has_required_columns() -> None:
@@ -84,6 +85,16 @@ class _ReconCursor:
             return {"occupied_rooms": 111}
         if "SUM(new_moveins)" in sql:
             return {"moveins": 200, "moveouts": 150}
+        if "d5_strict_count" in sql:
+            return {"d5_strict_count": 10883}
+        if "d5_fact_aligned_count" in sql:
+            return {"d5_fact_aligned_count": 11273}
+        if "d5_discrepancy_categories" in sql:
+            return {
+                "excluded_by_strict_gating": 420,
+                "excluded_by_status7_midnight": 23,
+                "multi_tenant_collision_rooms": 77,
+            }
         return {"occupied_rooms": 111}
 
 
@@ -121,3 +132,31 @@ def test_build_reconciliation_records_returns_expected_rows() -> None:
     assert rows[0].asof_date == "2026-02-01"
     assert "snapshot_start date" in rows[0].note
     assert any("snapshot_date = %s" in sql and params == (date(2026, 2, 1),) for sql, params in cursor.calls)
+
+
+def test_build_d5_discrepancy_records_returns_records_and_warning() -> None:
+    cursor = _ReconCursor()
+    records, warnings = build_d5_discrepancy_records(
+        cursor=cursor,
+        snapshot_start_ts="2026-02-01 00:00:00",
+        snapshot_start_date=date(2026, 2, 1),
+        benchmark_value=11271,
+        tolerance=10,
+    )
+
+    assert [r.reconciliation_id for r in records] == [
+        "d5_strict_vs_benchmark",
+        "d5_fact_aligned_vs_benchmark",
+        "d5_discrepancy_excluded_by_strict_gating",
+        "d5_discrepancy_excluded_by_status7_midnight",
+        "d5_discrepancy_multi_tenant_collision_rooms",
+    ]
+    assert records[0].reference_value == 10883
+    assert records[1].reference_value == 11273
+    assert warnings == [
+        WarningRecord(
+            code="WARN_D5_BENCHMARK_DELTA",
+            message="D5 strict and fact-aligned results differ from benchmark beyond tolerance.",
+            count=388,
+        )
+    ]

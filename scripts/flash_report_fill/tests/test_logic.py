@@ -34,6 +34,7 @@ def test_metric_query_uses_expected_moveout_fields() -> None:
 
     assert "moveout_plans_date" in completed_moveout_sql
     assert "moveout_date > %(snapshot_asof)s" in planned_moveout_sql
+    assert "management_status_code IN (14, 15, 16, 17)" in planned_moveout_sql
 
 
 def test_metric_query_has_expected_window_operators() -> None:
@@ -44,8 +45,9 @@ def test_metric_query_has_expected_window_operators() -> None:
 
     assert "movein_date >= %(feb_start)s" in completed_movein_sql
     assert "movein_date <= %(snapshot_asof)s" in completed_movein_sql
-    assert "movein_date > %(snapshot_asof)s" in planned_movein_sql
-    assert "movein_date <= %(feb_end)s" in planned_movein_sql
+    assert "original_movein_date > %(snapshot_asof)s" in planned_movein_sql
+    assert "original_movein_date <= %(feb_end)s" in planned_movein_sql
+    assert "management_status_code IN (4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15)" in planned_movein_sql
 
 
 def test_metric_query_deduplicates_after_window_filter() -> None:
@@ -58,3 +60,13 @@ def test_metric_query_deduplicates_after_window_filter() -> None:
     assert completed_movein_sql.index("filtered_contracts AS (") < completed_movein_sql.index(
         "ROW_NUMBER() OVER ("
     )
+
+
+def test_d5_fact_aligned_query_uses_is_moveout_and_room_priority() -> None:
+    queries = build_metric_queries()
+    d5_sql = queries["d5_occupied_rooms"].sql
+
+    assert "is_moveout = 0" in d5_sql
+    assert "management_status_code <> 7" in d5_sql
+    assert "movein_date < %(snapshot_start)s" in d5_sql
+    assert "PARTITION BY apartment_id, room_id" in d5_sql
