@@ -1,6 +1,6 @@
 # Operations & Runbooks
 
-**Last Updated:** February 28, 2026
+**Last Updated:** March 1, 2026
 
 This document consolidates all operational procedures, setup guides, and troubleshooting runbooks for the TokyoBeta Data Consolidation project.
 
@@ -176,6 +176,58 @@ cp .env.example .env
 npm run dev
 npm run sources
 ```
+
+### Evidence gold refresh verification
+
+Use this acceptance flow after any page-source update or incident response.
+
+#### 1. Build and page contract smoke check
+```bash
+cd /Users/danielkang/tokyobeta-data-consolidation/evidence
+npm run build
+rg -n "from aurora_gold\\.(kpi_month_end_metrics|kpi_reference_trace|funnel_application_to_movein_periodized|funnel_application_to_movein_segment_share|movein_profile_monthly|moveout_profile_monthly|municipality_churn_weekly|property_churn_weekly)" \
+  pages/index.md pages/funnel.md pages/geography.md pages/pricing.md pages/moveins.md pages/moveouts.md
+```
+
+Expected output:
+- `pages/index.md` includes `kpi_month_end_metrics` and `kpi_reference_trace`.
+- `pages/funnel.md` includes `funnel_application_to_movein_periodized`.
+- `pages/pricing.md` includes `funnel_application_to_movein_segment_share`.
+- `pages/geography.md`, `pages/moveins.md`, and `pages/moveouts.md` point only to aurora_gold-backed marts.
+
+#### 2. Parity-critical page-to-source mapping
+
+| Page | Required source contracts |
+| --- | --- |
+| `index.md` | `aurora_gold.kpi_month_end_metrics`, `aurora_gold.kpi_reference_trace` |
+| `funnel.md` | `aurora_gold.funnel_application_to_movein_periodized`, `aurora_gold.funnel_application_to_movein_daily` |
+| `geography.md` | `aurora_gold.municipality_churn_weekly`, `aurora_gold.property_churn_weekly` |
+| `pricing.md` | `aurora_gold.funnel_application_to_movein_segment_share`, `aurora_gold.funnel_application_to_movein_periodized` |
+| `moveins.md` | `aurora_gold.movein_profile_monthly`, `aurora_gold.move_events_weekly` |
+| `moveouts.md` | `aurora_gold.moveout_profile_monthly`, `aurora_gold.move_events_weekly` |
+
+#### 3. Timestamp and freshness label validation
+```bash
+cd /Users/danielkang/tokyobeta-data-consolidation/evidence
+rg -n "Time basis:|Freshness:" \
+  pages/index.md pages/funnel.md pages/geography.md pages/pricing.md pages/moveins.md pages/moveouts.md
+```
+
+Expected output:
+- Every listed page returns both `Time basis:` and `Freshness:` labels.
+- If either label is missing for any page, treat release as parity-incomplete and block deployment.
+
+#### 4. Operator CSV export checks
+```bash
+cd /Users/danielkang/tokyobeta-data-consolidation/evidence
+rg -n "downloadable=\\{true\\}" \
+  pages/funnel.md pages/pricing.md pages/moveins.md pages/moveouts.md pages/geography.md
+```
+
+Expected output:
+- Core operational detail tables are CSV-exportable on parity pages.
+- `pricing.md`, `moveins.md`, and `moveouts.md` must always return at least one downloadable table each.
+- `geography.md` detail tables should remain exportable for incident triage.
 
 ### Security & Access
 - Use a dedicated read-only DB user limited to `gold.*`.
