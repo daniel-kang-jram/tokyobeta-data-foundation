@@ -45,6 +45,14 @@ class _CountCursor:
         return {"total_rooms": 123}
 
 
+class _NoQueryCursor:
+    def execute(self, sql):
+        raise AssertionError("DB query should not be executed for fixed room denominator")
+
+    def fetchone(self):
+        return {"total_rooms": 99999}
+
+
 def _create_template(path: Path) -> None:
     wb = Workbook()
     ws = wb.active
@@ -195,7 +203,8 @@ def test_window_and_total_rooms_helpers() -> None:
         "snapshot_start": "2026-02-01 00:00:00",
     }
     assert fill_flash_report._window_for_metric("mar_planned_moveins", params) == ("2026-03-01", "2026-03-31")
-    assert fill_flash_report._fetch_total_rooms(_CountCursor()) == 123
+    assert fill_flash_report._fetch_total_rooms(_CountCursor()) == 16109
+    assert fill_flash_report._fetch_total_rooms(_NoQueryCursor()) == 16109
 
 
 def test_main_check_only_writes_csv_outputs(tmp_path: Path, monkeypatch) -> None:

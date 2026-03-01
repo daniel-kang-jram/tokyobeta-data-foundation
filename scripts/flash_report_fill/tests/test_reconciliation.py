@@ -147,12 +147,15 @@ def test_build_d5_discrepancy_records_returns_records_and_warning() -> None:
     assert [r.reconciliation_id for r in records] == [
         "d5_strict_vs_benchmark",
         "d5_fact_aligned_vs_benchmark",
+        "d5_fact_aligned_minus_strict",
         "d5_discrepancy_excluded_by_strict_gating",
         "d5_discrepancy_excluded_by_status7_midnight",
         "d5_discrepancy_multi_tenant_collision_rooms",
     ]
     assert records[0].reference_value == 10883
     assert records[1].reference_value == 11273
+    assert records[2].reference_value == 390
+    assert "difference between fact-aligned and strict occupancy logic" in records[2].note
     assert warnings == [
         WarningRecord(
             code="WARN_D5_BENCHMARK_DELTA",
