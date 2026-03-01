@@ -5,6 +5,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAYOUT_TEMPLATE = REPO_ROOT / "evidence/.evidence/template/src/pages/+layout.js"
+LAYOUT_PAGE_OVERRIDE = REPO_ROOT / "evidence/pages/+layout.js"
 EVIDENCE_BUILD = REPO_ROOT / "evidence/build"
 ROUTE_PAGES = ("occupancy", "moveins", "moveouts", "geography", "pricing")
 ROUTE_CONTRACT_VERIFIER = REPO_ROOT / "scripts/evidence/verify_route_contract.mjs"
@@ -43,3 +44,14 @@ def test_route_contract_verifier_script_exists_with_required_checks() -> None:
     assert "--routes" in source
     assert "evidencemeta.json" in source
     assert "/api//" in source
+
+
+def test_layout_uses_effective_route_id_fallback_for_client_hydration() -> None:
+    """Layout must fallback to url.pathname when route.id is absent on the client."""
+    template_source = LAYOUT_TEMPLATE.read_text(encoding="utf-8")
+    page_source = LAYOUT_PAGE_OVERRIDE.read_text(encoding="utf-8")
+
+    for source in (template_source, page_source):
+        assert "resolveRouteId(route.id, url.pathname)" in source
+        assert "const routeHash = md5(effectiveRouteId);" in source
+        assert "getRouteMetadataPath(effectiveRouteId)" in source

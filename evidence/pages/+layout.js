@@ -90,20 +90,35 @@ const getRouteMetadataPath = (routeId) => {
 	return normalizedRouteId ? `/api/${normalizedRouteId}/evidencemeta.json` : '/api/evidencemeta.json';
 };
 
+/**
+ * @param {string | null | undefined} routeId
+ * @param {string | null | undefined} pathname
+ * @returns {string}
+ */
+const resolveRouteId = (routeId, pathname) => {
+	const normalizedRouteId = typeof routeId === 'string' ? routeId.trim() : '';
+	if (normalizedRouteId.length > 0) return normalizedRouteId;
+
+	const normalizedPathname = (pathname ?? '/').replace(/\/+$/, '');
+	return normalizedPathname === '' ? '/' : normalizedPathname;
+};
+
 /** @type {Map<string, { inputs: Record<string, string> }>} */
 const dummy_pages = new Map();
 
 /** @satisfies {import("./$types").LayoutLoad} */
 export const load = async ({ fetch, route, params, url }) => {
+	const effectiveRouteId = resolveRouteId(route.id, url.pathname);
+
 	const [{ customFormattingSettings }, pagesManifest, evidencemeta] = await Promise.all([
 		fetch(addBasePath('/api/customFormattingSettings.json/GET.json')).then((x) => x.json()),
 		fetch(addBasePath('/api/pagesManifest.json')).then((x) => x.json()),
-		fetch(addBasePath(getRouteMetadataPath(route.id)))
+		fetch(addBasePath(getRouteMetadataPath(effectiveRouteId)))
 			.then((x) => x.json())
 			.catch(() => ({ queries: [] }))
 	]);
 
-	const routeHash = md5(route.id);
+	const routeHash = md5(effectiveRouteId);
 	const paramsHash = md5(
 		Object.entries(params)
 			.sort()
@@ -111,7 +126,8 @@ export const load = async ({ fetch, route, params, url }) => {
 			.join('\x1E')
 	);
 	const isUserPage =
-		route.id && system_routes.every((system_route) => !route.id.startsWith(system_route));
+		effectiveRouteId &&
+		system_routes.every((system_route) => !effectiveRouteId.startsWith(system_route));
 
 	/** @type {App.PageData["data"]} */
 	let data = {};
@@ -160,7 +176,7 @@ export const load = async ({ fetch, route, params, url }) => {
 	}
 
 	let tree = pagesManifest;
-	for (const part of (route.id ?? '').split('/').slice(1)) {
+	for (const part of effectiveRouteId.split('/').slice(1)) {
 		tree = tree.children[part];
 		if (!tree) break;
 		if (tree.frontMatter?.title) {
