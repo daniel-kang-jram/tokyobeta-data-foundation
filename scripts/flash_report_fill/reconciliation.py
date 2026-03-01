@@ -5,8 +5,6 @@ from typing import Dict, Iterable, List, Tuple
 
 from scripts.flash_report_fill.sql import (
     ACTIVE_OCCUPANCY_STATUSES,
-    D5_MODE_FACT_ALIGNED,
-    D5_MODE_STRICT,
     build_metric_queries,
 )
 from scripts.flash_report_fill.types import FlashReportQueryConfig, MetricRecord, ReconciliationRecord, WarningRecord
@@ -160,25 +158,13 @@ def build_d5_discrepancy_records(
     benchmark_value: int = 11271,
     tolerance: int = 10,
 ) -> Tuple[List[ReconciliationRecord], List[WarningRecord]]:
-    """Build deterministic D5 discrepancy diagnostics and tolerance warnings."""
-    strict_count = _query_d5_strict_count(cursor, snapshot_start_ts)
+    """Build D5 fact-aligned diagnostics and tolerance warnings."""
     fact_aligned_count = _query_d5_fact_aligned_count(cursor, snapshot_start_ts)
     categories = _query_d5_discrepancy_categories(cursor, snapshot_start_ts)
 
-    strict_delta = strict_count - benchmark_value
     fact_aligned_delta = fact_aligned_count - benchmark_value
-    fact_minus_strict_delta = fact_aligned_count - strict_count
 
     records = [
-        ReconciliationRecord(
-            reconciliation_id="d5_strict_vs_benchmark",
-            expected_value=benchmark_value,
-            reference_value=strict_count,
-            delta=strict_delta,
-            reference_source="staging.movings+staging.tenants",
-            note="Strict point-in-time occupancy with active status filter.",
-            asof_date=str(snapshot_start_date),
-        ),
         ReconciliationRecord(
             reconciliation_id="d5_fact_aligned_vs_benchmark",
             expected_value=benchmark_value,
@@ -189,53 +175,32 @@ def build_d5_discrepancy_records(
             asof_date=str(snapshot_start_date),
         ),
         ReconciliationRecord(
-            reconciliation_id="d5_fact_aligned_minus_strict",
+            reconciliation_id="d5_discrepancy_status7_midnight_adjusted_rooms",
             expected_value=0,
-            reference_value=fact_minus_strict_delta,
-            delta=fact_minus_strict_delta,
+            reference_value=categories["status7_midnight_adjusted_rooms"],
+            delta=categories["status7_midnight_adjusted_rooms"],
             reference_source="staging.movings+staging.tenants",
-            note=(
-                "Net difference between fact-aligned and strict occupancy logic "
-                "(status/room-priority operational view minus strict point-in-time date gating)."
-            ),
+            note="Rooms adjusted out by status=7 midnight correction in fact-aligned mode.",
             asof_date=str(snapshot_start_date),
         ),
         ReconciliationRecord(
-            reconciliation_id="d5_discrepancy_excluded_by_strict_gating",
+            reconciliation_id="d5_discrepancy_fact_multi_tenant_collision_rooms",
             expected_value=0,
-            reference_value=categories["excluded_by_strict_gating"],
-            delta=categories["excluded_by_strict_gating"],
+            reference_value=categories["fact_multi_tenant_collision_rooms"],
+            delta=categories["fact_multi_tenant_collision_rooms"],
             reference_source="staging.movings+staging.tenants",
-            note="Rooms included by fact-aligned logic but excluded by strict date gating.",
-            asof_date=str(snapshot_start_date),
-        ),
-        ReconciliationRecord(
-            reconciliation_id="d5_discrepancy_excluded_by_status7_midnight",
-            expected_value=0,
-            reference_value=categories["excluded_by_status7_midnight"],
-            delta=categories["excluded_by_status7_midnight"],
-            reference_source="staging.movings+staging.tenants",
-            note="Rooms removed by status=7 midnight correction.",
-            asof_date=str(snapshot_start_date),
-        ),
-        ReconciliationRecord(
-            reconciliation_id="d5_discrepancy_multi_tenant_collision_rooms",
-            expected_value=0,
-            reference_value=categories["multi_tenant_collision_rooms"],
-            delta=categories["multi_tenant_collision_rooms"],
-            reference_source="staging.movings+staging.tenants",
-            note="Physical rooms with multiple fact candidates before room-priority selection.",
+            note="Physical rooms with multiple fact-aligned candidates before room-priority selection.",
             asof_date=str(snapshot_start_date),
         ),
     ]
 
     warnings: List[WarningRecord] = []
-    if abs(strict_delta) > tolerance or abs(fact_aligned_delta) > tolerance:
+    if abs(fact_aligned_delta) > tolerance:
         warnings.append(
             WarningRecord(
-                code="WARN_D5_BENCHMARK_DELTA",
-                message="D5 strict and fact-aligned results differ from benchmark beyond tolerance.",
-                count=max(abs(strict_delta), abs(fact_aligned_delta)),
+                code="WARN_D5_FACT_ALIGNED_BENCHMARK_DELTA",
+                message="D5 fact-aligned result differs from benchmark beyond tolerance.",
+                count=abs(fact_aligned_delta),
             )
         )
 
@@ -304,37 +269,6 @@ WITH base AS (
         ON m.tenant_id = t.id
     WHERE COALESCE(m.cancel_flag, 0) = 0
 ),
-strict_filtered AS (
-    SELECT
-        b.*,
-        COALESCE(b.moveout_plans_date, b.moveout_date) AS effective_moveout_at,
-        CONCAT(b.apartment_id, '-', b.room_id) AS strict_room_key
-    FROM base b
-    WHERE b.management_status_code IN {active_statuses}
-      AND CAST(b.movein_date AS DATETIME) <= %(snapshot_start_ts)s
-      AND (
-          COALESCE(b.moveout_plans_date, b.moveout_date) IS NULL
-          OR CAST(COALESCE(b.moveout_plans_date, b.moveout_date) AS DATETIME) > %(snapshot_start_ts)s
-      )
-),
-strict_dedup_tenant_room AS (
-    SELECT
-        s.*,
-        ROW_NUMBER() OVER (
-            PARTITION BY s.tenant_id, s.apartment_id, s.room_id
-            ORDER BY s.movein_date DESC, s.updated_at DESC, s.moving_id DESC
-        ) AS strict_rn_tenant_room
-    FROM strict_filtered s
-),
-strict_latest_tenant_room AS (
-    SELECT *
-    FROM strict_dedup_tenant_room
-    WHERE strict_rn_tenant_room = 1
-),
-strict_rooms AS (
-    SELECT DISTINCT strict_room_key AS room_key, apartment_id, room_id
-    FROM strict_latest_tenant_room
-),
 fact_filtered AS (
     SELECT
         b.*,
@@ -394,27 +328,8 @@ fact_rooms AS (
 )
 """.strip().format(active_statuses=ACTIVE_OCCUPANCY_STATUSES)
 
-
-def _query_d5_strict_count(cursor, snapshot_start_ts: str) -> int:
-    strict_query = build_metric_queries(
-        FlashReportQueryConfig(d5_mode=D5_MODE_STRICT)
-    )["d5_occupied_rooms"].sql
-    strict_query = strict_query.replace("AS occupied_rooms", "AS d5_strict_count", 1)
-    cursor.execute(
-        """
-/* d5_strict_count */
-"""
-        + strict_query,
-        {"snapshot_start": snapshot_start_ts},
-    )
-    row = cursor.fetchone() or {}
-    return int(row.get("d5_strict_count", 0))
-
-
 def _query_d5_fact_aligned_count(cursor, snapshot_start_ts: str) -> int:
-    fact_aligned_query = build_metric_queries(
-        FlashReportQueryConfig(d5_mode=D5_MODE_FACT_ALIGNED)
-    )["d5_occupied_rooms"].sql
+    fact_aligned_query = build_metric_queries(FlashReportQueryConfig())["d5_occupied_rooms"].sql
     fact_aligned_query = fact_aligned_query.replace("AS occupied_rooms", "AS d5_fact_aligned_count", 1)
     cursor.execute(
         """
@@ -432,13 +347,6 @@ def _query_d5_discrepancy_categories(cursor, snapshot_start_ts: str) -> Dict[str
         f"""
 /* d5_discrepancy_categories */
 {D5_DISCREPANCY_BASE_CTE},
-strict_excluded AS (
-    SELECT f.room_key
-    FROM fact_rooms f
-    LEFT JOIN strict_rooms s
-        ON f.room_key = s.room_key
-    WHERE s.room_key IS NULL
-),
 status7_midnight_excluded AS (
     SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS room_count
     FROM base
@@ -456,15 +364,13 @@ multi_tenant_collisions AS (
     ) c
 )
 SELECT
-    (SELECT COUNT(*) FROM strict_excluded) AS excluded_by_strict_gating,
-    (SELECT room_count FROM status7_midnight_excluded) AS excluded_by_status7_midnight,
-    (SELECT room_count FROM multi_tenant_collisions) AS multi_tenant_collision_rooms
+    (SELECT room_count FROM status7_midnight_excluded) AS status7_midnight_adjusted_rooms,
+    (SELECT room_count FROM multi_tenant_collisions) AS fact_multi_tenant_collision_rooms
 """,
         {"snapshot_start_ts": snapshot_start_ts},
     )
     row = cursor.fetchone() or {}
     return {
-        "excluded_by_strict_gating": int(row.get("excluded_by_strict_gating", 0) or 0),
-        "excluded_by_status7_midnight": int(row.get("excluded_by_status7_midnight", 0) or 0),
-        "multi_tenant_collision_rooms": int(row.get("multi_tenant_collision_rooms", 0) or 0),
+        "status7_midnight_adjusted_rooms": int(row.get("status7_midnight_adjusted_rooms", 0) or 0),
+        "fact_multi_tenant_collision_rooms": int(row.get("fact_multi_tenant_collision_rooms", 0) or 0),
     }

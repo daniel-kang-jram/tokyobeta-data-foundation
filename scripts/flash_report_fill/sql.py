@@ -15,10 +15,6 @@ COMPLETED_MOVEIN_STATUSES = (6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17)
 COMPLETED_MOVEOUT_STATUSES = (16, 17)
 PLANNED_MOVEOUT_STATUSES = (14, 15, 16, 17)
 
-D5_MODE_STRICT = "strict"
-D5_MODE_FACT_ALIGNED = "fact_aligned"
-SUPPORTED_D5_MODES = (D5_MODE_STRICT, D5_MODE_FACT_ALIGNED)
-
 DEFAULT_MOVEIN_PREDICTION_COLUMN = "original_movein_date"
 DEFAULT_MOVEOUT_PREDICTION_COLUMN = "moveout_date"
 SUPPORTED_MOVEIN_PREDICTION_COLUMNS = ("movein_date", "original_movein_date", "movein_decided_date")
@@ -129,13 +125,6 @@ def _validate_prediction_column(column: str, allowed: tuple[str, ...], kind: str
     return column
 
 
-def _validate_d5_mode(mode: str) -> str:
-    if mode not in SUPPORTED_D5_MODES:
-        allowed_str = ", ".join(SUPPORTED_D5_MODES)
-        raise ValueError(f"Unsupported d5 mode: {mode}. Allowed: {allowed_str}")
-    return mode
-
-
 def _build_metric_sql(where_clause: str, result_select_sql: str) -> str:
     """Build metric SQL with deduplication applied after metric-specific filtering."""
     return f"""
@@ -205,30 +194,9 @@ WHERE room_priority_rn = 1
 """.strip()
 
 
-def _build_d5_strict_sql() -> str:
-    d5_where = f"""
-CAST(movein_date AS DATETIME) <= %(snapshot_start)s
-  AND (
-      effective_moveout_at IS NULL
-      OR CAST(effective_moveout_at AS DATETIME) > %(snapshot_start)s
-  )
-  AND management_status_code IN {ACTIVE_OCCUPANCY_STATUSES}
-""".strip()
-    return _build_metric_sql(
-        where_clause=d5_where,
-        result_select_sql="""
-SELECT
-    COUNT(DISTINCT room_key) AS occupied_rooms
-FROM deduplicated_filtered_contracts
-WHERE rn = 1
-""".strip(),
-    )
-
-
 def build_metric_queries(config: FlashReportQueryConfig | None = None) -> Dict[str, QuerySpec]:
     """Build decision-complete SQL specs for all flash report metrics."""
     query_config = config or FlashReportQueryConfig()
-    d5_mode = _validate_d5_mode(query_config.d5_mode)
     movein_prediction_date_column = _validate_prediction_column(
         query_config.movein_prediction_date_column,
         SUPPORTED_MOVEIN_PREDICTION_COLUMNS,
@@ -312,7 +280,7 @@ GROUP BY tenant_type
 """.strip(),
         )
 
-    d5_sql = _build_d5_fact_aligned_sql() if d5_mode == D5_MODE_FACT_ALIGNED else _build_d5_strict_sql()
+    d5_sql = _build_d5_fact_aligned_sql()
 
     return {
         "d5_occupied_rooms": QuerySpec(
@@ -321,7 +289,7 @@ GROUP BY tenant_type
             source_layer="staging",
             result_mode="scalar",
             value_column="occupied_rooms",
-            query_tag=f"metric:d5:{d5_mode}",
+            query_tag="metric:d5:fact_aligned",
         ),
         "feb_completed_moveins": QuerySpec(
             metric_id="feb_completed_moveins",

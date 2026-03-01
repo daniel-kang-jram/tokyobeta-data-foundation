@@ -81,7 +81,6 @@ def test_parse_args_defaults(monkeypatch) -> None:
     assert args.db_port == fill_flash_report.DEFAULT_DB_PORT
     assert args.sheet_name == "Flash Report（2月）"
     assert args.snapshot_asof_jst == "2026-02-28 05:00:00 JST"
-    assert args.d5_mode == "fact_aligned"
     assert args.movein_prediction_date_column == "original_movein_date"
     assert args.moveout_prediction_date_column == "moveout_date"
 
@@ -220,7 +219,6 @@ def test_main_check_only_writes_csv_outputs(tmp_path: Path, monkeypatch) -> None
         feb_end_jst="2026-02-28 23:59:59 JST",
         mar_start_jst="2026-03-01 00:00:00 JST",
         mar_end_jst="2026-03-31 23:59:59 JST",
-        d5_mode="fact_aligned",
         movein_prediction_date_column="original_movein_date",
         moveout_prediction_date_column="moveout_date",
         d5_benchmark=11271,
@@ -290,7 +288,6 @@ def test_main_write_mode_creates_filled_workbook(tmp_path: Path, monkeypatch) ->
         feb_end_jst="2026-02-28 23:59:59 JST",
         mar_start_jst="2026-03-01 00:00:00 JST",
         mar_end_jst="2026-03-31 23:59:59 JST",
-        d5_mode="fact_aligned",
         movein_prediction_date_column="original_movein_date",
         moveout_prediction_date_column="moveout_date",
         d5_benchmark=11271,
@@ -344,7 +341,6 @@ def test_main_raises_if_formula_cells_change(tmp_path: Path, monkeypatch) -> Non
         feb_end_jst="2026-02-28 23:59:59 JST",
         mar_start_jst="2026-03-01 00:00:00 JST",
         mar_end_jst="2026-03-31 23:59:59 JST",
-        d5_mode="fact_aligned",
         movein_prediction_date_column="original_movein_date",
         moveout_prediction_date_column="moveout_date",
         d5_benchmark=11271,

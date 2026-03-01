@@ -73,7 +73,6 @@ python3 scripts/flash_report_fill/fill_flash_report.py \
   --feb-end-jst "2026-02-28 23:59:59 JST" \
   --mar-start-jst "2026-03-01 00:00:00 JST" \
   --mar-end-jst "2026-03-31 23:59:59 JST" \
-  --d5-mode fact_aligned \
   --movein-prediction-date-column original_movein_date \
   --moveout-prediction-date-column moveout_date \
   --d5-benchmark 11271 \
@@ -104,5 +103,5 @@ Notes:
 - Exports:
   - filled workbook (`February_Occupancy_FlashReport_filled_YYYYMMDD_HHMM.xlsx`)
   - metrics CSV
-  - reconciliation CSV (includes `d5_strict` and `d5_fact_aligned` vs benchmark)
+  - reconciliation CSV (includes `d5_fact_aligned` vs benchmark + fact-aligned diagnostic categories)
   - optional anomaly flag CSVs

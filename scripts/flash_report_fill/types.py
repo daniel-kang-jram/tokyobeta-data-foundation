@@ -72,6 +72,5 @@ class RunContext:
 class FlashReportQueryConfig:
     """Runtime options controlling flash-report query behavior."""
 
-    d5_mode: str = "fact_aligned"
     movein_prediction_date_column: str = "original_movein_date"
     moveout_prediction_date_column: str = "moveout_date"

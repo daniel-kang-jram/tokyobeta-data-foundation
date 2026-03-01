@@ -38,11 +38,9 @@ from scripts.flash_report_fill.sql import (
     COMPLETED_MOVEOUT_STATUSES,
     DEFAULT_MOVEIN_PREDICTION_COLUMN,
     DEFAULT_MOVEOUT_PREDICTION_COLUMN,
-    D5_MODE_FACT_ALIGNED,
     INDIVIDUAL_CODES,
     PLANNED_MOVEIN_STATUSES,
     PLANNED_MOVEOUT_STATUSES,
-    SUPPORTED_D5_MODES,
     SUPPORTED_MOVEIN_PREDICTION_COLUMNS,
     SUPPORTED_MOVEOUT_PREDICTION_COLUMNS,
     build_metric_queries,
@@ -87,7 +85,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--feb-end-jst", default="2026-02-28 23:59:59 JST")
     parser.add_argument("--mar-start-jst", default="2026-03-01 00:00:00 JST")
     parser.add_argument("--mar-end-jst", default="2026-03-31 23:59:59 JST")
-    parser.add_argument("--d5-mode", default=D5_MODE_FACT_ALIGNED, choices=SUPPORTED_D5_MODES)
     parser.add_argument(
         "--movein-prediction-date-column",
         default=DEFAULT_MOVEIN_PREDICTION_COLUMN,
@@ -210,7 +207,8 @@ def print_schema_mapping(query_config: FlashReportQueryConfig, sheet_name: str) 
         f"completed_moveout={COMPLETED_MOVEOUT_STATUSES}, "
         f"planned_moveout={PLANNED_MOVEOUT_STATUSES}"
     )
-    print(f"d5 mode: {query_config.d5_mode} (join=movings.tenant_id -> tenants.id)")
+    print("d5 mode: fact_aligned (strict archived)")
+    print("d5 join/dedupe: movings.tenant_id -> tenants.id, tenant-room dedupe then room-priority dedupe")
     print(f"target sheet: {sheet_name}")
     print(f"contract split: individual={INDIVIDUAL_CODES}, corporate=(2, 3), unknown=excluded")
     print("======================")
@@ -279,7 +277,6 @@ def main() -> int:
 
     sheet_name = _resolve_sheet_name(template_path, args.sheet_name)
     query_config = FlashReportQueryConfig(
-        d5_mode=args.d5_mode,
         movein_prediction_date_column=args.movein_prediction_date_column,
         moveout_prediction_date_column=args.moveout_prediction_date_column,
     )
