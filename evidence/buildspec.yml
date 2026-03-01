@@ -28,6 +28,7 @@ phases:
         PY
       - NODE_OPTIONS="--max-old-space-size=4096" npm run sources -- --sources aurora_gold
       - NODE_OPTIONS="--max-old-space-size=4096" npm run build
+      - node ../scripts/evidence/verify_route_contract.mjs --build-dir build --routes occupancy moveins moveouts geography pricing
       - test -f static/__auth/assets/bg.mp4
       - |
         aws s3 sync build/ "s3://$EVIDENCE_S3_BUCKET/" \

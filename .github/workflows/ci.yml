@@ -155,12 +155,26 @@ jobs:
             exit 0
           fi
 
-          CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- evidence/ | wc -l)
-          if [[ "$CHANGED" -gt 0 ]]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
+          WATCH_PATHS=(
+            "evidence/"
+            "scripts/evidence/"
+            "scripts/tests/"
+            ".github/workflows/"
+            "evidence/buildspec.yml"
+          )
+
+          CHANGED=false
+          while IFS= read -r changed_file; do
+            [[ -z "$changed_file" ]] && continue
+            for watch_path in "${WATCH_PATHS[@]}"; do
+              if [[ "$changed_file" == "$watch_path"* ]]; then
+                CHANGED=true
+                break 2
+              fi
+            done
+          done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
       - name: Skip if no Evidence changes
         if: steps.evidence_changes.outputs.changed != 'true'
         run: echo "No Evidence path changes detected. Skipping."
@@ -169,6 +183,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version-file: evidence/.nvmrc
+      - name: Set up Python
+        if: steps.evidence_changes.outputs.changed == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Install Evidence dependencies
         if: steps.evidence_changes.outputs.changed == 'true'
         run: |
@@ -179,3 +198,12 @@ jobs:
         run: |
           cd evidence
           npm run build
+      - name: Verify Evidence route contract
+        if: steps.evidence_changes.outputs.changed == 'true'
+        run: |
+          node scripts/evidence/verify_route_contract.mjs --build-dir evidence/build --routes occupancy moveins moveouts geography pricing
+      - name: Run Evidence guardrail tests
+        if: steps.evidence_changes.outputs.changed == 'true'
+        run: |
+          python3 -m pytest scripts/tests/test_evidence_auth_asset_guard.py scripts/tests/test_evidence_release_guardrails.py -q
+          python3 -m pytest scripts/tests/test_evidence_authenticated_smoke_contract.py -q
