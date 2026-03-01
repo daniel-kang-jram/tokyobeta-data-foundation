@@ -2890,17 +2890,42 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
             return None
         return row.get("next_snapshot_date")
 
+    def is_missing_is_room_primary_error(exc: Exception) -> bool:
+        args = getattr(exc, "args", ())
+        if not args:
+            return False
+        code = args[0]
+        if code != 1054:
+            return False
+        message = str(args[1]) if len(args) > 1 else str(exc)
+        return "is_room_primary" in message
+
     def count_occupied_rooms(snapshot_date: date) -> int:
-        cursor.execute(
-            """
-            SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
-            FROM silver.tenant_room_snapshot_daily
-            WHERE snapshot_date = %s
-              AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
-            """,
-            (snapshot_date,),
-        )
-        return int(cursor.fetchone()["count"])
+        try:
+            cursor.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND is_room_primary = TRUE
+                """,
+                (snapshot_date,),
+            )
+            return int(cursor.fetchone()["count"])
+        except Exception as exc:
+            if not is_missing_is_room_primary_error(exc):
+                raise
+            # Compatibility fallback for pre-backfill environments.
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
+                """,
+                (snapshot_date,),
+            )
+            return int(cursor.fetchone()["count"])
 
     def get_prior_valid_period_end(target_date: date) -> int:
         if target_date in period_end_by_date:
