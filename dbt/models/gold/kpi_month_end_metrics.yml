@@ -1,0 +1,76 @@
+version: 2
+
+models:
+  - name: kpi_month_end_metrics
+    description: |
+      Canonical KPI contract table for occupancy and room-economics cards.
+      Grain: 1 row per as_of_date (with month-end flag).
+      This model encodes same-day move-out handling and exposes a definition version
+      for downstream traceability.
+    config:
+      schema: gold
+    columns:
+      - name: as_of_date
+        description: KPI as-of date for all metrics on the row
+        tests:
+          - unique
+          - not_null
+      - name: is_month_end
+        description: TRUE when as_of_date is the final day of its month
+      - name: total_physical_rooms
+        description: Portfolio denominator used for occupancy and per-available-room metrics
+        tests:
+          - not_null
+      - name: occupancy_room_count_0000
+        description: Occupied room count at 00:00 (same-day move-ins excluded)
+        tests:
+          - not_null
+      - name: occupancy_room_count_eod
+        description: Occupied room count at end of day
+        tests:
+          - not_null
+      - name: same_day_moveins
+        description: Same-day move-ins applied during the day
+        tests:
+          - not_null
+      - name: same_day_moveouts
+        description: Same-day move-outs applied during the day
+        tests:
+          - not_null
+      - name: occupancy_rate
+        description: End-of-day occupancy ratio (occupancy_room_count_eod / total_physical_rooms)
+        tests:
+          - not_null
+      - name: rent_jpy
+        description: Average occupied-room rent at 00:00 baseline (JPY)
+        tests:
+          - not_null
+      - name: revpar_jpy
+        description: Revenue per available room in JPY (rent_jpy * occupancy_rate)
+        tests:
+          - not_null
+      - name: recpar_cash_jpy
+        description: Cash-adjusted revenue per available room in JPY
+        tests:
+          - not_null
+      - name: cash_realization_rate
+        description: Cash realization multiplier used for RecPAR(Cash)
+        tests:
+          - not_null
+      - name: same_day_moveout_policy
+        description: Canonical same-day occupancy policy token
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['count_moveout_room_at_0000_exclude_same_day_moveins']
+      - name: kpi_definition_version
+        description: Version identifier for KPI calculation contract
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "occupancy_rate >= 0 AND occupancy_rate <= 1"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "occupancy_room_count_eod = occupancy_room_count_0000 + same_day_moveins - same_day_moveouts"
+          severity: error

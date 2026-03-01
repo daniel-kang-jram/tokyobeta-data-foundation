@@ -1,6 +1,6 @@
 # Data Model & Schema
 
-**Last Updated:** February 14, 2026
+**Last Updated:** March 1, 2026
 
 This document defines the data model, schema relationships, business logic, and data quality rules for the TokyoBeta Data Consolidation project.
 
@@ -153,9 +153,26 @@ These gold tables power the Evidence dashboard experience (fact vs projection bo
 |-------|-------|---------|
 | `gold.occupancy_kpi_meta` | 1 row | As-of snapshot date + freshness signals for Fact vs Projection styling |
 | `gold.occupancy_daily_metrics` | 1 row / day | Portfolio occupancy KPIs (includes future projections) |
+| `gold.kpi_month_end_metrics` | 1 row / as-of date | Canonical KPI contract for occupancy, RENT, RevPAR, and RecPAR(Cash) with definition versioning |
 | `gold.dim_property` | 1 row / property | Property attributes + validated coordinates |
 | `gold.occupancy_property_daily` | 1 row / (day, property) | Daily property occupancy (facts from snapshots) |
 | `gold.occupancy_property_map_latest` | 1 row / property | Latest snapshot + 7-day deltas for map rendering |
+
+### Canonical KPI Contract Ownership (`gold.kpi_month_end_metrics`)
+
+| KPI Field | Definition | SQL Ownership |
+|-----------|------------|---------------|
+| `as_of_date` | Canonical date context shared by all KPI values in the row | `dbt/models/gold/kpi_month_end_metrics.sql` (`snapshot_room_primary`) |
+| `occupancy_room_count_0000` | Occupied rooms at 00:00; same-day move-ins excluded | `dbt/models/gold/kpi_month_end_metrics.sql` (`room_primary_occupied_rooms_0000` with fallback to `gold.occupancy_daily_metrics.period_start_rooms`) |
+| `occupancy_room_count_eod` | End-of-day occupied rooms | `dbt/models/gold/kpi_month_end_metrics.sql` (`room_primary_occupied_rooms_eod` with fallback to `gold.occupancy_daily_metrics.period_end_rooms`) |
+| `same_day_moveins` | Same-day move-ins used in day progression | `dbt/models/gold/kpi_month_end_metrics.sql` (`same_day_moveins_gold` / `room_primary_same_day_moveins`) |
+| `same_day_moveouts` | Same-day move-outs counted in day progression | `dbt/models/gold/kpi_month_end_metrics.sql` (`same_day_moveouts_gold` / `room_primary_same_day_moveouts`) |
+| `occupancy_rate` | `occupancy_room_count_eod / total_physical_rooms` | `dbt/models/gold/kpi_month_end_metrics.sql` (`final`) |
+| `rent_jpy` | Average occupied-room rent at 00:00 baseline (JPY) | `dbt/models/gold/kpi_month_end_metrics.sql` (`room_primary_rent_sum_jpy_0000 / room_primary_occupied_rooms_0000`) |
+| `revpar_jpy` | `rent_jpy * occupancy_rate` | `dbt/models/gold/kpi_month_end_metrics.sql` (`final`) |
+| `recpar_cash_jpy` | `revpar_jpy * cash_realization_rate` | `dbt/models/gold/kpi_month_end_metrics.sql` (`final`) |
+| `same_day_moveout_policy` | Explicit policy token: count same-day move-out rooms at 00:00 while excluding same-day move-ins from 00:00 | `dbt/models/gold/kpi_month_end_metrics.sql` (constant contract field) |
+| `kpi_definition_version` | Versioned KPI contract identifier for traceability | `dbt/models/gold/kpi_month_end_metrics.sql` (constant contract field) |
 
 ### Move-In / Move-Out Profiling
 
