@@ -218,7 +218,10 @@ def _silver_occupied_rooms(cursor, snapshot_date: date) -> int:
             """,
             (snapshot_date,),
         )
-    except Exception:
+    except Exception as exc:
+        # Compatibility fallback for environments where is_room_primary is absent.
+        if not _is_missing_is_room_primary_error(exc):
+            raise
         cursor.execute(
             """
             SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS occupied_rooms
@@ -230,6 +233,17 @@ def _silver_occupied_rooms(cursor, snapshot_date: date) -> int:
     row = cursor.fetchone()
     value = row["occupied_rooms"] if isinstance(row, dict) else row[0]
     return int(value or 0)
+
+
+def _is_missing_is_room_primary_error(exc: Exception) -> bool:
+    args = getattr(exc, "args", ())
+    if not args:
+        return False
+    code = args[0]
+    if code != 1054:
+        return False
+    message = str(args[1]) if len(args) > 1 else str(exc)
+    return "is_room_primary" in message
 
 
 def _gold_month_totals(cursor, month_start: date, month_end: date) -> Dict[str, int]:

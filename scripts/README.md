@@ -98,8 +98,10 @@ Notes:
 - Supports both workbook profiles:
   - `Flash Report（2月）` (legacy)
   - `Flash Report（2月28日）` / `Flash Report（3月～）` (updated)
+- D5 occupancy is fact-aligned only (strict mode archived).
 - For updated sheets, `D14/E14` (March planned move-ins) are intentionally left blank.
 - Writes only input cells and preserves profile-specific formula cells (`E5`, `H*` or `I*`, etc.).
+- Workbook denominator remains fixed at `16109` by business rule.
 - Exports:
   - filled workbook (`February_Occupancy_FlashReport_filled_YYYYMMDD_HHMM.xlsx`)
   - metrics CSV

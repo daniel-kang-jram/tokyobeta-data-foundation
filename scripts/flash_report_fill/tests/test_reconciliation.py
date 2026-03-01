@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from scripts.flash_report_fill.reconciliation import (
+    _silver_occupied_rooms,
     build_d5_discrepancy_records,
     build_reconciliation_records,
     metrics_records_to_csv_rows,
@@ -95,6 +98,46 @@ class _ReconCursor:
         return {"occupied_rooms": 111}
 
 
+class _SilverFallbackCursor:
+    def __init__(self):
+        self.calls = []
+        self.call_count = 0
+        self.last_sql = ""
+
+    def execute(self, sql, params):
+        self.call_count += 1
+        self.last_sql = sql
+        self.calls.append((sql, params))
+        if "is_room_primary = TRUE" in sql:
+            raise RuntimeError(1054, "Unknown column 'is_room_primary' in 'where clause'")
+
+    def fetchone(self):
+        return {"occupied_rooms": 321}
+
+
+class _SilverErrorCursor:
+    def execute(self, sql, params):
+        raise RuntimeError(2013, "Lost connection to MySQL server during query")
+
+    def fetchone(self):
+        return {"occupied_rooms": 0}
+
+
+class _SilverUnexpectedButRecoverableCursor:
+    def __init__(self):
+        self.call_count = 0
+        self.calls = []
+
+    def execute(self, sql, params):
+        self.call_count += 1
+        self.calls.append((sql, params))
+        if self.call_count == 1:
+            raise RuntimeError(1205, "Lock wait timeout exceeded; try restarting transaction")
+
+    def fetchone(self):
+        return {"occupied_rooms": 654}
+
+
 def test_build_reconciliation_records_returns_expected_rows() -> None:
     cursor = _ReconCursor()
     rows = build_reconciliation_records(
@@ -129,6 +172,32 @@ def test_build_reconciliation_records_returns_expected_rows() -> None:
     assert rows[0].asof_date == "2026-02-01"
     assert "snapshot_start date" in rows[0].note
     assert any("snapshot_date = %s" in sql and params == (date(2026, 2, 1),) for sql, params in cursor.calls)
+
+
+def test_silver_occupied_rooms_uses_fallback_only_for_missing_is_room_primary_column() -> None:
+    cursor = _SilverFallbackCursor()
+    value = _silver_occupied_rooms(cursor, date(2026, 2, 1))
+    assert value == 321
+    assert cursor.call_count == 2
+    assert "is_room_primary = TRUE" in cursor.calls[0][0]
+    assert "WHERE snapshot_date = %s" in cursor.calls[1][0]
+
+
+def test_silver_occupied_rooms_reraises_unexpected_database_errors() -> None:
+    cursor = _SilverErrorCursor()
+    try:
+        _silver_occupied_rooms(cursor, date(2026, 2, 1))
+        assert False, "expected RuntimeError to be raised"
+    except RuntimeError as exc:
+        assert exc.args[0] == 2013
+
+
+def test_silver_occupied_rooms_does_not_fallback_for_non_missing_column_errors() -> None:
+    cursor = _SilverUnexpectedButRecoverableCursor()
+    with pytest.raises(RuntimeError) as excinfo:
+        _silver_occupied_rooms(cursor, date(2026, 2, 1))
+    assert excinfo.value.args[0] == 1205
+    assert cursor.call_count == 1
 
 
 def test_build_d5_discrepancy_records_returns_records_and_warning() -> None:

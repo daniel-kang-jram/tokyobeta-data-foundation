@@ -49,7 +49,6 @@ from scripts.flash_report_fill.types import FlashReportQueryConfig, MetricRecord
 
 
 JST = ZoneInfo("Asia/Tokyo")
-REPORT_FORMULA_DENOMINATOR = 16109
 DEFAULT_TEMPLATE_PATH = "/Users/danielkang/Downloads/February Occupancy Flash Report_Template_GG追記20260224.xlsx"
 DEFAULT_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-1:343881458651:secret:tokyobeta/prod/aurora/credentials-tlWiUd"
 DEFAULT_DB_HOST = "127.0.0.1"
@@ -222,11 +221,6 @@ def _window_for_metric(metric_id: str, params: Dict[str, object]) -> Tuple[str, 
     return str(params["snapshot_start"]), str(params["snapshot_start"])
 
 
-def _fetch_total_rooms(cursor) -> int:
-    # Business-agreed physical room denominator (historical DB room master can include retired rooms).
-    return REPORT_FORMULA_DENOMINATOR
-
-
 def _resolve_sheet_name(template_path: Path, requested_sheet_name: str) -> str:
     workbook = load_workbook(template_path, read_only=True, data_only=False)
     try:
@@ -358,19 +352,6 @@ def main() -> int:
                         query_sql=spec.sql,
                     )
                 )
-
-        total_rooms_db = _fetch_total_rooms(cursor)
-        if total_rooms_db != REPORT_FORMULA_DENOMINATOR:
-            warnings.append(
-                WarningRecord(
-                    code="WARN_ROOM_DENOMINATOR_MISMATCH",
-                    message=(
-                        f"Workbook denominator is {REPORT_FORMULA_DENOMINATOR}, "
-                        f"but DB room count is {total_rooms_db}. Formulas were not changed."
-                    ),
-                    count=abs(total_rooms_db - REPORT_FORMULA_DENOMINATOR),
-                )
-            )
 
         check_rows, check_warnings = run_anomaly_checks(cursor, params, limit=args.flags_limit)
         warnings.extend(check_warnings)

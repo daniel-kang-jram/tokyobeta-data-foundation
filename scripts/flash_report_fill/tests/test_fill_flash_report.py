@@ -37,22 +37,6 @@ class _DummyConnection:
         return object()
 
 
-class _CountCursor:
-    def execute(self, sql):
-        self._last_sql = sql
-
-    def fetchone(self):
-        return {"total_rooms": 123}
-
-
-class _NoQueryCursor:
-    def execute(self, sql):
-        raise AssertionError("DB query should not be executed for fixed room denominator")
-
-    def fetchone(self):
-        return {"total_rooms": 99999}
-
-
 def _create_template(path: Path) -> None:
     wb = Workbook()
     ws = wb.active
@@ -193,7 +177,7 @@ def test_open_connection_calls_pymysql(monkeypatch) -> None:
     assert called["host"] == "127.0.0.1"
 
 
-def test_window_and_total_rooms_helpers() -> None:
+def test_window_helper() -> None:
     params = {
         "feb_start": "2026-02-01",
         "feb_end": "2026-02-28",
@@ -202,8 +186,6 @@ def test_window_and_total_rooms_helpers() -> None:
         "snapshot_start": "2026-02-01 00:00:00",
     }
     assert fill_flash_report._window_for_metric("mar_planned_moveins", params) == ("2026-03-01", "2026-03-31")
-    assert fill_flash_report._fetch_total_rooms(_CountCursor()) == 16109
-    assert fill_flash_report._fetch_total_rooms(_NoQueryCursor()) == 16109
 
 
 def test_main_check_only_writes_csv_outputs(tmp_path: Path, monkeypatch) -> None:
@@ -245,7 +227,6 @@ def test_main_check_only_writes_csv_outputs(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setattr(fill_flash_report, "resolve_db_credentials", lambda _: ("u", "p"))
     monkeypatch.setattr(fill_flash_report, "open_connection", lambda *_args, **_kwargs: _DummyConnection())
     monkeypatch.setattr(fill_flash_report, "execute_metric_query", _fake_execute_metric_query)
-    monkeypatch.setattr(fill_flash_report, "_fetch_total_rooms", lambda cursor: 16000)
     monkeypatch.setattr(
         fill_flash_report,
         "run_anomaly_checks",
@@ -314,7 +295,6 @@ def test_main_write_mode_creates_filled_workbook(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(fill_flash_report, "resolve_db_credentials", lambda _: ("u", "p"))
     monkeypatch.setattr(fill_flash_report, "open_connection", lambda *_args, **_kwargs: _DummyConnection())
     monkeypatch.setattr(fill_flash_report, "execute_metric_query", _fake_execute_metric_query)
-    monkeypatch.setattr(fill_flash_report, "_fetch_total_rooms", lambda cursor: 16109)
     monkeypatch.setattr(
         fill_flash_report,
         "run_anomaly_checks",
@@ -366,7 +346,6 @@ def test_main_raises_if_formula_cells_change(tmp_path: Path, monkeypatch) -> Non
         "execute_metric_query",
         lambda cursor, spec, params: 1 if spec.result_mode == "scalar" else {"individual": 1, "corporate": 1, "unknown": 0},
     )
-    monkeypatch.setattr(fill_flash_report, "_fetch_total_rooms", lambda cursor: 16109)
     monkeypatch.setattr(
         fill_flash_report,
         "run_anomaly_checks",
