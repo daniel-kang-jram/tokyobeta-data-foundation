@@ -41,6 +41,24 @@ def _create_updated_template(path: Path) -> None:
     wb.save(path)
 
 
+def _create_updated_merged_template(path: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Flash Report（3月～）"
+    ws["D5"] = 100
+    ws["E5"] = "=+D5/16109"
+    ws["I9"] = "=+D9/16109"
+    ws["I10"] = "=+D10/16109"
+    ws["I11"] = "=+D11/16109"
+    ws["I12"] = "=+D12/16109"
+    ws["I13"] = "=+D13/16109"
+    ws["I14"] = "=+D14/16109"
+    ws["I15"] = "=+D15/16109"
+    ws.merge_cells("D11:E11")
+    ws.merge_cells("D12:E12")
+    wb.save(path)
+
+
 def test_write_flash_report_cells_preserves_formula_cells(tmp_path: Path) -> None:
     template_path = tmp_path / "template.xlsx"
     output_path = tmp_path / "out.xlsx"
@@ -126,3 +144,22 @@ def test_write_flash_report_cells_preserves_updated_profile_formulas(tmp_path: P
     assert ws["E11"].value == 9
     assert ws["I9"].value == "=+D9/16109"
     assert ws["I15"].value == "=+D15/16109"
+
+
+def test_write_flash_report_cells_handles_merged_input_targets(tmp_path: Path) -> None:
+    template_path = tmp_path / "updated_merged_template.xlsx"
+    output_path = tmp_path / "updated_merged_out.xlsx"
+    _create_updated_merged_template(template_path)
+
+    write_flash_report_cells(
+        template_path=template_path,
+        output_path=output_path,
+        sheet_name="Flash Report（3月～）",
+        values={"D11": 30, "E11": 9, "D12": 5, "E12": 2},
+    )
+
+    ws = load_workbook(output_path)["Flash Report（3月～）"]
+    assert ws["D11"].value == 39
+    assert ws["D12"].value == 7
+    assert ws["I11"].value == "=+D11/16109"
+    assert ws["I12"].value == "=+D12/16109"

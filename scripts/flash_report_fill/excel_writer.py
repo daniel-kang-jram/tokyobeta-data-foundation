@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, Iterable
 
+from openpyxl.cell.cell import MergedCell
 from openpyxl import load_workbook
 
 
@@ -102,7 +103,28 @@ def write_flash_report_cells(
         raise ValueError(f"Sheet not found: {sheet_name}")
     sheet = workbook[sheet_name]
 
+    def _resolve_writable_cell(cell: str) -> str:
+        target = sheet[cell]
+        if not isinstance(target, MergedCell):
+            return cell
+        for merged_range in sheet.merged_cells.ranges:
+            if cell in merged_range:
+                return merged_range.start_cell.coordinate
+        return cell
+
+    resolved_values: Dict[str, int] = {}
     for cell, value in values.items():
+        writable_cell = _resolve_writable_cell(cell)
+        resolved_values[writable_cell] = resolved_values.get(writable_cell, 0) + int(value)
+
+    protected_resolved_overwrites = sorted(set(resolved_values) & formula_protected_cells)
+    if protected_resolved_overwrites:
+        raise ValueError(
+            "Attempted to overwrite formula cells: "
+            + ", ".join(protected_resolved_overwrites)
+        )
+
+    for cell, value in resolved_values.items():
         sheet[cell] = int(value)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
