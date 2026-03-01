@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
 status: in_progress
-last_updated: "2026-03-01T17:15:27.289Z"
+last_updated: "2026-03-01T17:24:19Z"
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 9
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -19,9 +19,9 @@ progress:
 ## Current Phase
 - `2` Evidence dashboard authenticated UAT and release readiness
 - Status: in progress
-- Plan progress: `1/4` completed
-- Last completed plan: `02-01-PLAN.md` (Phase 2)
-- Next plan: `02-02-PLAN.md`
+- Plan progress: `2/4` completed
+- Last completed plan: `02-02-PLAN.md` (Phase 2)
+- Next plan: `02-03-PLAN.md`
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -43,6 +43,9 @@ progress:
 - [Phase 02]: Gate CI and daily deploy path on route-contract verification to prevent overwrite regressions.
 - [Phase 02]: Implement metadata-path normalization in tracked evidence/pages/+layout.js because .evidence/template is regenerated on each build.
 - [Phase 02]: Gate route integrity with a dedicated verifier script that checks malformed /api// paths and required route metadata references.
+- [Phase 02]: Expose authenticated smoke route assertions through --print-route-matrix for deterministic machine checks.
+- [Phase 02]: Add dry-run mode to validate route-matrix contracts without live credentials.
+- [Phase 02]: Run production auth smoke via dedicated GitHub workflow with always-on artifact upload for release evidence.
 
 ## Performance Metrics
 | Phase | Plan | Duration | Tasks | Files |
@@ -53,10 +56,11 @@ progress:
 | 01 | 04 | 9 min | 3 | 5 |
 | 01 | 05 | 3 min | 1 | 1 |
 | 02 | 01 | 6 min | 3 | 3 |
+| 02 | 02 | 6 min | 3 | 3 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-01T17:14:40Z
-- Stopped At: Completed 02-01-PLAN.md
+- Updated: 2026-03-01T17:24:19Z
+- Stopped At: Completed 02-02-PLAN.md
