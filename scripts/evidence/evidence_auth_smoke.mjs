@@ -7,6 +7,7 @@ import process from "node:process";
 const HOME_FALLBACK_MARKER = "KPI Landing (Gold)";
 const MALFORMED_API_PATH_PATTERN = /\/api\/\/+/;
 const METADATA_CONSOLE_FAILURE_PATTERN = /(Unexpected token '<'|evidencemeta\.json)/i;
+const AUTH_LOGIN_PATH = "/__auth/login";
 
 const ROUTE_MATRIX = Object.freeze({
   occupancy: Object.freeze({
@@ -185,6 +186,101 @@ function buildMetadataUrl(baseUrl, routePath) {
   return `${baseUrl}/api/${normalizedRoute}/evidencemeta.json`;
 }
 
+function isAuthLoginUrl(url) {
+  try {
+    return new URL(url).pathname === AUTH_LOGIN_PATH;
+  } catch {
+    return url.includes(AUTH_LOGIN_PATH);
+  }
+}
+
+function returnToMatchesRoute(url, routePath) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.pathname !== AUTH_LOGIN_PATH) {
+      return false;
+    }
+
+    const returnTo = parsed.searchParams.get("return_to");
+    if (!returnTo) {
+      return true;
+    }
+
+    return decodeURIComponent(returnTo) === routePath;
+  } catch {
+    return url.includes(`${AUTH_LOGIN_PATH}?return_to=`);
+  }
+}
+
+async function buildRedirectChain(navigationResponse) {
+  if (!navigationResponse) {
+    return [];
+  }
+
+  const chainRequests = [];
+  let currentRequest = navigationResponse.request();
+  while (currentRequest) {
+    chainRequests.unshift(currentRequest);
+    currentRequest = currentRequest.redirectedFrom();
+  }
+
+  const chain = [];
+  for (const request of chainRequests) {
+    const response = await request.response();
+    chain.push({
+      url: request.url(),
+      status: response ? response.status() : null,
+      location: response ? response.headers()["location"] ?? "" : "",
+    });
+  }
+
+  return chain;
+}
+
+function detectAuthRedirect(routePath, routeUrl, finalUrl, redirectChain, routeNetworkEntries) {
+  const redirectChainHit = redirectChain.find((entry) => returnToMatchesRoute(entry.url, routePath));
+  if (redirectChainHit) {
+    return {
+      route: routePath,
+      from_url: routeUrl,
+      to_url: redirectChainHit.url,
+      final_url: finalUrl,
+      source: "redirect_chain",
+      redirect_chain: redirectChain,
+    };
+  }
+
+  const networkHit = routeNetworkEntries.find(
+    (entry) =>
+      entry.type === "request" &&
+      returnToMatchesRoute(entry.url, routePath) &&
+      isAuthLoginUrl(entry.url)
+  );
+  if (networkHit) {
+    return {
+      route: routePath,
+      from_url: routeUrl,
+      to_url: networkHit.url,
+      final_url: finalUrl,
+      source: "network_log",
+      redirect_chain: redirectChain,
+    };
+  }
+
+  if (returnToMatchesRoute(finalUrl, routePath)) {
+    return {
+      route: routePath,
+      from_url: routeUrl,
+      to_url: finalUrl,
+      final_url: finalUrl,
+      source: "final_url",
+      redirect_chain: redirectChain,
+    };
+  }
+
+  return null;
+}
+
 async function waitForVisible(locator, timeoutMs) {
   await locator.first().waitFor({ state: "visible", timeout: timeoutMs });
 }
@@ -296,7 +392,12 @@ function createRouteResult(routeContract) {
     time_context_markers: [...routeContract.time_context_markers],
     funnel_markers: [...routeContract.funnel_markers],
     metadata_url: "",
+    final_url: "",
+    redirect_chain: [],
+    auth_redirect_detected: false,
     status: "pending",
+    failure_kind: null,
+    assertion_stage: "navigation",
     error: null,
   };
 }
@@ -324,6 +425,7 @@ async function runDryMode(options, artifactPaths) {
     base_url: options.baseUrl,
     artifact_dir: options.artifactDir,
     route_results: routeResults,
+    auth_redirects: [],
     malformed_api_requests: [],
     metadata_console_failures: [],
     negative_markers: NEGATIVE_MARKERS,
@@ -341,6 +443,7 @@ async function runSmoke(options, artifactPaths) {
   const consoleLogs = [];
   const networkLogs = [];
   const routeResults = {};
+  const authRedirects = [];
   const malformedApiRequests = [];
   const metadataConsoleFailures = [];
 
@@ -399,10 +502,36 @@ async function runSmoke(options, artifactPaths) {
       routeResults[routeKey] = routeResult;
 
       try {
-        await page.goto(`${options.baseUrl}${routeContract.path}`, {
-          waitUntil: "networkidle",
+        const routeUrl = `${options.baseUrl}${routeContract.path}`;
+        const routeNetworkStart = networkLogs.length;
+        const navigationResponse = await page.goto(routeUrl, {
+          waitUntil: "domcontentloaded",
           timeout: options.timeoutMs,
         });
+        await page.waitForLoadState("networkidle", { timeout: options.timeoutMs });
+
+        routeResult.final_url = page.url();
+        routeResult.redirect_chain = await buildRedirectChain(navigationResponse);
+
+        const routeNetworkEntries = networkLogs.slice(routeNetworkStart);
+        const authRedirect = detectAuthRedirect(
+          routeContract.path,
+          routeUrl,
+          routeResult.final_url,
+          routeResult.redirect_chain,
+          routeNetworkEntries
+        );
+        if (authRedirect) {
+          routeResult.auth_redirect_detected = true;
+          routeResult.status = "failed";
+          routeResult.failure_kind = "failed-auth-redirect";
+          routeResult.assertion_stage = "navigation";
+          routeResult.error = `Route ${routeContract.path} redirected to ${AUTH_LOGIN_PATH} after authentication.`;
+          authRedirects.push(authRedirect);
+          throw new Error(routeResult.error);
+        }
+
+        routeResult.assertion_stage = "route-markers";
 
         await assertHeading(page, routeContract.h1, options.timeoutMs);
 
@@ -422,6 +551,7 @@ async function runSmoke(options, artifactPaths) {
 
         const metadataUrl = buildMetadataUrl(options.baseUrl, routeContract.path);
         routeResult.metadata_url = metadataUrl;
+        routeResult.assertion_stage = "metadata";
 
         const metadataResponse = await context.request.get(metadataUrl, {
           timeout: options.timeoutMs,
@@ -443,10 +573,26 @@ async function runSmoke(options, artifactPaths) {
         await page.screenshot({ path: screenshotPath, fullPage: true });
 
         routeResult.status = "passed";
+        routeResult.failure_kind = null;
+        routeResult.assertion_stage = "complete";
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        routeResult.status = "failed";
-        routeResult.error = message;
+        if (routeResult.status !== "failed") {
+          routeResult.status = "failed";
+        }
+        if (!routeResult.failure_kind) {
+          routeResult.failure_kind =
+            routeResult.assertion_stage === "metadata"
+              ? "failed-metadata-check"
+              : "failed-marker-assertion";
+        }
+        if (!routeResult.error) {
+          const prefix =
+            routeResult.failure_kind === "failed-marker-assertion"
+              ? "Route content assertion failed"
+              : "Route verification failed";
+          routeResult.error = `${prefix} on ${routeContract.path}: ${message}`;
+        }
 
         const failureShotPath = path.join(
           artifactPaths.screenshotsDir,
@@ -467,6 +613,7 @@ async function runSmoke(options, artifactPaths) {
     base_url: options.baseUrl,
     artifact_dir: options.artifactDir,
     route_results: routeResults,
+    auth_redirects: authRedirects,
     malformed_api_requests: malformedApiRequests,
     metadata_console_failures: metadataConsoleFailures,
     negative_markers: NEGATIVE_MARKERS,
