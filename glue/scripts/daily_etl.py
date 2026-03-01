@@ -2901,6 +2901,19 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
         return "is_room_primary" in message
 
     def count_occupied_rooms(snapshot_date: date) -> int:
+        def count_occupied_rooms_legacy() -> int:
+            cursor.execute(
+                """
+                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
+                FROM silver.tenant_room_snapshot_daily
+                WHERE snapshot_date = %s
+                  AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
+                """,
+                (snapshot_date,),
+            )
+            row = cursor.fetchone() or {}
+            return int(row.get("count") or 0)
+
         try:
             cursor.execute(
                 """
@@ -2911,21 +2924,26 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
                 """,
                 (snapshot_date,),
             )
-            return int(cursor.fetchone()["count"])
+            row = cursor.fetchone() or {}
+            primary_count = int(row.get("count") or 0)
         except Exception as exc:
             if not is_missing_is_room_primary_error(exc):
                 raise
             # Compatibility fallback for pre-backfill environments.
-            cursor.execute(
-                """
-                SELECT COUNT(DISTINCT CONCAT(apartment_id, '-', room_id)) AS count
-                FROM silver.tenant_room_snapshot_daily
-                WHERE snapshot_date = %s
-                  AND management_status_code IN (7, 9, 10, 11, 12, 13, 14, 15)
-                """,
-                (snapshot_date,),
-            )
-            return int(cursor.fetchone()["count"])
+            return count_occupied_rooms_legacy()
+
+        # Historical snapshots can have is_room_primary present but not backfilled yet.
+        # In that case, primary_count may be 0 while legacy active-room logic is non-zero.
+        if primary_count == 0:
+            legacy_count = count_occupied_rooms_legacy()
+            if legacy_count > 0:
+                print(
+                    "WARN: is_room_primary returned 0 for snapshot_date="
+                    f"{snapshot_date}; using legacy occupied-room fallback={legacy_count}"
+                )
+                return legacy_count
+
+        return primary_count
 
     def get_prior_valid_period_end(target_date: date) -> int:
         if target_date in period_end_by_date:

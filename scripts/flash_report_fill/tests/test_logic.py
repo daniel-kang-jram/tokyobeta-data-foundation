@@ -47,8 +47,10 @@ def test_metric_query_has_expected_window_operators() -> None:
 
     assert "original_movein_date >= %(feb_start)s" in completed_movein_sql
     assert "original_movein_date <= %(snapshot_asof)s" in completed_movein_sql
+    assert "movein_date IS NOT NULL" in completed_movein_sql
+    assert "movein_date <= %(snapshot_asof)s" in completed_movein_sql
     assert "COALESCE(move_renew_flag, 0) = 0" in completed_movein_sql
-    assert "management_status_code IN (4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15)" in completed_movein_sql
+    assert "management_status_code IN" not in completed_movein_sql
 
     assert "original_movein_date > %(snapshot_asof)s" in planned_movein_sql
     assert "original_movein_date <= %(feb_end)s" in planned_movein_sql
