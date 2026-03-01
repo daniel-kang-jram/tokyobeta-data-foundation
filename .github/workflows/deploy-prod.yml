@@ -35,6 +35,9 @@ jobs:
       TF_VAR_artifact_release: ${{ github.sha }}
       TF_VAR_create_rds_cron_secret: "true"
       TF_VAR_manage_rds_cron_secret_value: "false"
+      TF_VAR_evidence_custom_domain: "intelligence.jram.jp"
+      TF_VAR_evidence_auth_base_url: "https://intelligence.jram.jp"
+      TF_VAR_evidence_enable_custom_domain: "true"
       # Keep Evidence Basic Auth enabled in Terraform-managed CloudFront config.
       # Value should be a JSON map string, e.g. {"admin":"<password>"}.
       TF_VAR_evidence_auth_users: ${{ secrets.TF_VAR_EVIDENCE_AUTH_USERS }}
