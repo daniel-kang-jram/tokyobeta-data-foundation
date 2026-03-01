@@ -138,19 +138,19 @@ variable "daily_llm_fail_on_error" {
 variable "evidence_custom_domain" {
   description = "Custom domain for hosted Evidence app"
   type        = string
-  default     = "evidence.jram.jp"
+  default     = "intelligence.jram.jp"
 }
 
 variable "evidence_enable_custom_domain" {
   description = "If true, attach evidence_custom_domain + ACM cert to CloudFront. Set true after DNS validation CNAME is in place."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "evidence_auth_base_url" {
   description = "Base URL used for Cognito callbacks (CloudFront URL until custom domain is ready)"
   type        = string
-  default     = "https://d2lnx09sw8wka0.cloudfront.net"
+  default     = "https://intelligence.jram.jp"
 }
 
 variable "evidence_enable_auth" {
