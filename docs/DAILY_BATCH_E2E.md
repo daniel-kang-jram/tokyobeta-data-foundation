@@ -241,15 +241,15 @@ ORDER BY snapshot_date;
 **Future Projections Logic:**
 - For **future dates** (> today):
   - Uses **today's snapshot** (`snapshot_date = CURDATE()`)
-  - Filters by `move_in_date` and `moveout_date` for projections
+  - Filters by `original_movein_date` (new move-in date) and `moveout_date` for projections
   - `applications` set to 0 (cannot predict)
-  - `new_moveins`: Status 4/5 with `move_in_date = future_date`
-  - `new_moveouts`: Any status with `moveout_date = future_date`
+  - `new_moveins`: Status 4/5/6/7/9/10/11/12/13/14/15 with `original_movein_date = future_date`
+  - `new_moveouts`: Status 14/15/16/17 with `moveout_date = future_date`
 
 - For **past/today dates**:
   - Uses **actual historical snapshots**
-  - `new_moveins`: Status 4/5/6/7/9 with `move_in_date = date`
-  - `new_moveouts`: Uses `moveout_plans_date = date` (actual moveouts)
+  - `new_moveins`: Status 4/5/6/7/9/10/11/12/13/14/15 with `original_movein_date = date`
+  - `new_moveouts`: Status 14/15/16/17 with `moveout_date = date`
 
 **Example:**
 ```bash

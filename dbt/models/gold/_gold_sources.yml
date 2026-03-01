@@ -18,7 +18,7 @@ sources:
 
           Metrics:
           - 申込 (applications): First appearance of pairs in status 4 or 5
-          - 新規入居者 (new_moveins): Pairs with move_in_date = snapshot_date
+          - 新規入居者 (new_moveins): Pairs with original_movein_date = snapshot_date
           - 新規退去者 (new_moveouts): Pairs with moveout date = snapshot_date
           - 稼働室数増減 (occupancy_delta): new_moveins - new_moveouts
           - 期首稼働室数 (period_start_rooms): Occupied count on previous day
@@ -68,4 +68,3 @@ sources:
           - dbt_utils.expression_is_true:
               expression: "ABS(occupancy_rate - (period_end_rooms / 16108.0)) < 0.0001"
               severity: error
-
