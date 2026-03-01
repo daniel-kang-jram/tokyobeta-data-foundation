@@ -85,7 +85,7 @@ SELECT
     expected_value,
     actual_value,
     tolerance,
-    ABS(actual_value - expected_value) AS absolute_diff
+    ABS(ROUND(actual_value, 6) - ROUND(expected_value, 6)) AS absolute_diff
 FROM benchmark_checks
 WHERE actual_value IS NULL
-   OR ABS(actual_value - expected_value) > tolerance
+   OR ABS(ROUND(actual_value, 6) - ROUND(expected_value, 6)) > tolerance

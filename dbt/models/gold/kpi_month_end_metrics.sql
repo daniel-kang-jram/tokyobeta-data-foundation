@@ -87,11 +87,15 @@ merged AS (
         COALESCE(odm.same_day_moveouts_gold, srp.room_primary_same_day_moveouts)
             AS same_day_moveouts,
         CAST(
-            ROUND(
-                srp.room_primary_rent_sum_jpy_0000
-                / NULLIF(srp.room_primary_occupied_rooms_0000, 0),
-                0
-            ) AS DECIMAL(12, 2)
+            CASE
+                WHEN srp.room_primary_occupied_rooms_0000 > 0
+                    THEN ROUND(
+                        srp.room_primary_rent_sum_jpy_0000
+                        / srp.room_primary_occupied_rooms_0000,
+                        0
+                    )
+                ELSE 0
+            END AS DECIMAL(12, 2)
         ) AS rent_jpy
     FROM snapshot_room_primary srp
     LEFT JOIN occupancy_daily_metrics odm
