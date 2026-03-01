@@ -48,6 +48,11 @@ from aurora_gold.kpi_reference_trace
   <BigValue data={kpi_latest} title="RecPAR (Cash)" value="recpar_cash_jpy" fmt="num0" />
 </Grid>
 
+<Note>
+Time basis: `kpi_month_end_metrics.as_of_date` (latest month-end record).
+Freshness: `kpi_reference_trace.freshness_lag_days` and `kpi_reference_trace.kpi_model_generated_at`.
+</Note>
+
 ## Operating Totals
 
 <Grid cols={4} gapSize="md">
@@ -56,6 +61,11 @@ from aurora_gold.kpi_reference_trace
   <BigValue data={kpi_latest} title="Same-day Move-ins" value="same_day_moveins" fmt="num0" />
   <BigValue data={kpi_latest} title="Same-day Move-outs" value="same_day_moveouts" fmt="num0" />
 </Grid>
+
+<Note>
+Time basis: room totals are aligned to `kpi_month_end_metrics.as_of_date`.
+Freshness: trace context is read from `kpi_reference_trace.gold_occupancy_max_updated_at`.
+</Note>
 
 ## KPI Trends (Month-end)
 
@@ -83,6 +93,11 @@ from aurora_gold.kpi_reference_trace
   title="RecPAR (Cash) (Month-end)"
 />
 
+<Note>
+Time basis: month-end timeline from `kpi_month_end_metrics.as_of_date`.
+Freshness: upstream lag and trace metadata come from `kpi_reference_trace`.
+</Note>
+
 ## KPI Governance & Trace
 
 <Grid cols={3} gapSize="md">
@@ -90,6 +105,11 @@ from aurora_gold.kpi_reference_trace
   <BigValue data={kpi_trace} title="Freshness Lag (Days)" value="freshness_lag_days" fmt="num0" />
   <BigValue data={kpi_trace} title="Trace Generated At" value="trace_generated_at" />
 </Grid>
+
+<Note>
+Time basis: metadata rows are keyed by `kpi_reference_trace.as_of_date`.
+Freshness: `kpi_reference_trace.trace_generated_at` and source max-updated fields indicate recency.
+</Note>
 
 ```sql kpi_definition_trace
 select

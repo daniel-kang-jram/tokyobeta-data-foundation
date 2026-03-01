@@ -103,6 +103,11 @@ order by period_start
   <BigValue data={funnel_latest_month} title="Application -> Move-in Rate" value="application_to_movein_rate" fmt="pct" />
 </Grid>
 
+<Note>
+Time basis: latest monthly `period_start` from `funnel_application_to_movein_periodized`.
+Freshness: recency is tracked by `funnel_application_to_movein_periodized.updated_at`.
+</Note>
+
 ## Period Controls
 
 <Tabs background="true">
@@ -121,6 +126,11 @@ order by period_start
     <BarChart data={funnel_monthly_total} x=period_start y=application_count y2=movein_count title="Monthly Applications vs Move-ins" />
   </Tab>
 </Tabs>
+
+<Note>
+Time basis: period controls switch `period_grain` and `period_start` in `funnel_application_to_movein_periodized`.
+Freshness: each grain uses the model-level `updated_at` field from the periodized funnel mart.
+</Note>
 
 ## Municipality and Nationality Segmentation
 
@@ -160,6 +170,11 @@ limit 25
 
 <BarChart data={funnel_top_nationality} x=nationality y=application_to_movein_rate yFmt="pct" title="Top Nationalities by Conversion Rate" />
 
+<Note>
+Time basis: segmentation uses `funnel_application_to_movein_daily.activity_date`.
+Freshness: segment charts rely on `funnel_application_to_movein_daily.updated_at`.
+</Note>
+
 ## Corporate vs Individual Cohorts
 
 ```sql funnel_tenant_type_monthly
@@ -197,8 +212,13 @@ order by period_start, tenant_type
   title="Monthly Applications by tenant_type"
 />
 
+<Note>
+Time basis: cohort trends are monthly `period_start` by `tenant_type`.
+Freshness: cohort sections use `funnel_application_to_movein_periodized.updated_at`.
+</Note>
+
 ## Detailed Funnel Tables
 
-<DataTable data={funnel_periodized} />
+<DataTable data={funnel_periodized} downloadable={true} />
 
-<DataTable data={funnel_daily} />
+<DataTable data={funnel_daily} downloadable={true} />
