@@ -2932,14 +2932,18 @@ def compute_occupancy_kpis_for_dates(cursor, target_dates: List[date]) -> int:
             # Compatibility fallback for pre-backfill environments.
             return count_occupied_rooms_legacy()
 
-        # Historical snapshots can have is_room_primary present but not backfilled yet.
-        # In that case, primary_count may be 0 while legacy active-room logic is non-zero.
-        if primary_count == 0:
+        # Temporary bounded fallback for the known corrupted historical window.
+        # Outside this range, keep strict canonical counting on is_room_primary.
+        if (
+            primary_count == 0
+            and CORRUPTED_GAP_START <= snapshot_date <= CORRUPTED_GAP_END
+        ):
             legacy_count = count_occupied_rooms_legacy()
             if legacy_count > 0:
                 print(
                     "WARN: is_room_primary returned 0 for snapshot_date="
-                    f"{snapshot_date}; using legacy occupied-room fallback={legacy_count}"
+                    f"{snapshot_date} in exceptional window; "
+                    f"using legacy occupied-room fallback={legacy_count}"
                 )
                 return legacy_count
 
