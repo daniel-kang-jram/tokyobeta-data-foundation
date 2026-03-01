@@ -65,20 +65,44 @@ Use the dedicated module under `scripts/flash_report_fill/`:
 
 ```bash
 python3 scripts/flash_report_fill/fill_flash_report.py \
-  --template-path "/Users/danielkang/Downloads/February Occupancy Flash Report_Template_GG追記20260224.xlsx" \
+  --template-path "/Users/danielkang/Downloads/March Occupancy Flash Report_02282026.xlsx" \
+  --sheet-name "Flash Report（2月28日）" \
   --output-dir "/Users/danielkang/Downloads" \
   --snapshot-start-jst "2026-02-01 00:00:00 JST" \
-  --snapshot-asof-jst "2026-02-26 05:00:00 JST" \
+  --snapshot-asof-jst "2026-02-28 05:00:00 JST" \
   --feb-end-jst "2026-02-28 23:59:59 JST" \
   --mar-start-jst "2026-03-01 00:00:00 JST" \
   --mar-end-jst "2026-03-31 23:59:59 JST" \
+  --d5-mode fact_aligned \
+  --movein-prediction-date-column original_movein_date \
+  --moveout-prediction-date-column moveout_date \
+  --d5-benchmark 11271 \
+  --d5-tolerance 10 \
   --aws-profile gghouse \
-  --db-host 127.0.0.1 \
-  --db-port 3306 \
+  --db-host tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com \
+  --db-port 3306
+```
+
+Check-only run (CSV + diagnostics only):
+
+```bash
+python3 scripts/flash_report_fill/fill_flash_report.py \
+  --template-path "/Users/danielkang/Downloads/March Occupancy Flash Report_02282026.xlsx" \
+  --sheet-name "Flash Report（2月28日）" \
+  --output-dir "/Users/danielkang/Downloads" \
+  --db-host tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com \
+  --check-only \
   --emit-flags-csv
 ```
 
 Notes:
-- Use an SSH/SSM tunnel to Aurora when running locally.
-- The script writes only input cells and preserves formula cells.
-- Outputs include filled workbook, metrics CSV, reconciliation CSV, and optional anomaly flag CSVs.
+- Supports both workbook profiles:
+  - `Flash Report（2月）` (legacy)
+  - `Flash Report（2月28日）` / `Flash Report（3月～）` (updated)
+- For updated sheets, `D14/E14` (March planned move-ins) are intentionally left blank.
+- Writes only input cells and preserves profile-specific formula cells (`E5`, `H*` or `I*`, etc.).
+- Exports:
+  - filled workbook (`February_Occupancy_FlashReport_filled_YYYYMMDD_HHMM.xlsx`)
+  - metrics CSV
+  - reconciliation CSV (includes `d5_strict` and `d5_fact_aligned` vs benchmark)
+  - optional anomaly flag CSVs
