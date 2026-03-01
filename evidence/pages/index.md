@@ -1,145 +1,118 @@
-# Gold Reporting POC
+# KPI Landing (Gold)
 
-This Evidence app evaluates business reporting viability on Aurora gold tables.
-
-- Occupancy base: `gold.occupancy_daily_metrics`
-- Move-in profile: `gold.new_contracts`
-- Move-out profile: `gold.moveouts`
-
-```sql kpi_meta
-select *
-from aurora_gold.occupancy_kpi_meta
+```sql kpi_latest
+select
+  as_of_date,
+  occupancy_rate,
+  rent_jpy,
+  revpar_jpy,
+  recpar_cash_jpy,
+  occupancy_room_count_eod,
+  total_physical_rooms,
+  same_day_moveins,
+  same_day_moveouts,
+  kpi_definition_version,
+  same_day_moveout_policy
+from aurora_gold.kpi_month_end_metrics
+where is_month_end = 1
+order by as_of_date desc
+limit 1
 ```
 
-<Grid cols={3} gapSize="md">
-  <BigValue data={kpi_meta} title="As-of Snapshot" value="as_of_snapshot_date" />
-  <BigValue data={kpi_meta} title="Lag (Days)" value="lag_days_num0" fmt="num0" />
-  <BigValue data={kpi_meta} title="Gold KPI Updated" value="gold_occupancy_max_updated_at" />
+```sql kpi_history_month_end
+select
+  as_of_date,
+  occupancy_rate,
+  rent_jpy,
+  revpar_jpy,
+  recpar_cash_jpy,
+  occupancy_room_count_eod,
+  total_physical_rooms
+from aurora_gold.kpi_month_end_metrics
+where is_month_end = 1
+  and as_of_date >= current_date - interval 365 day
+order by as_of_date
+```
+
+```sql kpi_trace
+select *
+from aurora_gold.kpi_reference_trace
+```
+
+## KPI Cards
+
+<Grid cols={4} gapSize="md">
+  <BigValue data={kpi_latest} title="Occupancy" value="occupancy_rate" fmt="pct" />
+  <BigValue data={kpi_latest} title="RENT" value="rent_jpy" fmt="num0" />
+  <BigValue data={kpi_latest} title="RevPAR" value="revpar_jpy" fmt="num0" />
+  <BigValue data={kpi_latest} title="RecPAR (Cash)" value="recpar_cash_jpy" fmt="num0" />
 </Grid>
 
-<Note>
-Fact = dates **≤ as-of snapshot date**. Projection = dates **> as-of snapshot date**.
-</Note>
+## Operating Totals
 
-```sql occupancy_hero
-with base_raw as (
-  select
-    snapshot_date,
-    as_of_snapshot_date,
-    phase,
-    occupancy_rate_pct
-  from aurora_gold.occupancy_daily_metrics_all
-  where snapshot_date between as_of_snapshot_date - INTERVAL 56 DAY
-                        and as_of_snapshot_date + INTERVAL 30 DAY
-),
-base as (
-  select
-    snapshot_date,
-    as_of_snapshot_date,
-    phase,
-    -- Guardrail: some historical rows can land near 0 due to upstream KPI glitches.
-    -- Nulling (vs filtering) keeps the series present while the chart stays readable.
-    case
-      when occupancy_rate_pct between 0.5 and 1.0 then occupancy_rate_pct
-      else null
-    end as occupancy_rate_pct
-  from base_raw
-),
-projection_stats as (
-  select
-    sum(
-      case
-        when phase = 'projection'
-          and snapshot_date > as_of_snapshot_date
-          and occupancy_rate_pct is not null then 1
-        else 0
-      end
-    ) as projection_points
-  from base
-),
-bridge as (
-  -- Duplicate the latest fact point into the projection series at the as-of date so projection
-  -- is visible even if only 1 future point exists (line charts can hide single-point series).
-  select
-    as_of_snapshot_date as snapshot_date,
-    as_of_snapshot_date,
-    'projection' as phase,
-    occupancy_rate_pct
-  from base
-  where phase = 'fact'
-    and occupancy_rate_pct is not null
-  order by snapshot_date desc
-  limit 1
-),
-projection_stub as (
-  -- If there are 0 valid future projection points in-range, add a stub point after as-of so the
-  -- projection series visibly renders (otherwise it can be fully hidden under the fact point).
-  select
-    snapshot_date + INTERVAL 1 DAY as snapshot_date,
-    as_of_snapshot_date,
-    'projection' as phase,
-    occupancy_rate_pct
-  from bridge
-  where (select projection_points from projection_stats) = 0
-)
-select * from base
-union all
-select * from bridge
-union all
-select * from projection_stub
-order by snapshot_date, phase
-```
+<Grid cols={4} gapSize="md">
+  <BigValue data={kpi_latest} title="Occupied Rooms (EOD)" value="occupancy_room_count_eod" fmt="num0" />
+  <BigValue data={kpi_latest} title="Total Physical Rooms" value="total_physical_rooms" fmt="num0" />
+  <BigValue data={kpi_latest} title="Same-day Move-ins" value="same_day_moveins" fmt="num0" />
+  <BigValue data={kpi_latest} title="Same-day Move-outs" value="same_day_moveouts" fmt="num0" />
+</Grid>
 
-## Occupancy Rate (Fact vs Projection)
+## KPI Trends (Month-end)
 
 <LineChart
-  data={occupancy_hero}
-  x=snapshot_date
-  y=occupancy_rate_pct
-  yMin={0.6}
-  yMax={0.9}
-  series=phase
-  title="Occupancy Rate (Fact vs Projection)"
-  seriesColors={{fact: "#2563eb", projection: "#f97316"}}
-  handleMissing="gap"
-  lineWidth={3}
-  markers={true}
-  markerSize={4}
-  echartsOptions={{
-    xAxis: { axisLabel: { rotate: 45 } },
-    grid: { top: 30, right: 16, left: 10, bottom: 42 }
-  }}
->
-  <ReferenceLine
-    data={kpi_meta}
-    x="as_of_snapshot_date"
-    label="As-of"
-    lineType="dashed"
-    lineColor="base-content-muted"
-    labelBackgroundColor="base-100"
-    labelBorderColor="base-300"
-    labelBorderWidth={1}
-  />
-</LineChart>
+  data={kpi_history_month_end}
+  x=as_of_date
+  y=occupancy_rate
+  yFmt="pct"
+  title="Occupancy Rate (Month-end)"
+/>
 
-```sql occupancy_all
-select *
-from aurora_gold.occupancy_daily_metrics_all
-order by snapshot_date desc
+<LineChart
+  data={kpi_history_month_end}
+  x=as_of_date
+  y=rent_jpy
+  y2=revpar_jpy
+  seriesColors={['#0f766e', '#1d4ed8']}
+  title="RENT and RevPAR (Month-end)"
+/>
+
+<LineChart
+  data={kpi_history_month_end}
+  x=as_of_date
+  y=recpar_cash_jpy
+  title="RecPAR (Cash) (Month-end)"
+/>
+
+## KPI Governance & Trace
+
+<Grid cols={3} gapSize="md">
+  <BigValue data={kpi_trace} title="As-of Date" value="as_of_date" />
+  <BigValue data={kpi_trace} title="Freshness Lag (Days)" value="freshness_lag_days" fmt="num0" />
+  <BigValue data={kpi_trace} title="Trace Generated At" value="trace_generated_at" />
+</Grid>
+
+```sql kpi_definition_trace
+select
+  as_of_date,
+  kpi_definition_version,
+  same_day_moveout_policy,
+  kpi_model_generated_at,
+  silver_snapshot_max_date,
+  gold_occupancy_max_snapshot_date,
+  gold_occupancy_max_updated_at
+from aurora_gold.kpi_reference_trace
 ```
 
-## Full KPI Table (All Dates)
+<DataTable data={kpi_definition_trace} />
 
-<DataTable data={occupancy_all} />
+## KPI History Detail
+
+<DataTable data={kpi_history_month_end} />
 
 ## Navigation
 
+- [Application -> Move-in Funnel](funnel)
 - [Occupancy Trend & Drivers](occupancy)
 - [Move-in Profiling](moveins)
 - [Move-out Profiling](moveouts)
 - [Geography & Property Breakdown](geography)
-
-## Notes
-
-- This project uses `gold.occupancy_daily_metrics` in place of the requested `gold.occupancy` table.
-- Run `npm run sources` after changing source SQL files.
