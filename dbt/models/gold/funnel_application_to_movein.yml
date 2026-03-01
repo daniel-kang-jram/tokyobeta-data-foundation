@@ -1,0 +1,102 @@
+version: 2
+
+models:
+  - name: funnel_application_to_movein_daily
+    description: |
+      Daily application-to-move-in funnel by municipality, nationality, and tenant cohort.
+      Grain: (activity_date, municipality, nationality, tenant_type).
+    config:
+      schema: gold
+    columns:
+      - name: activity_date
+        description: Inquiry date used as the funnel day anchor.
+        tests:
+          - not_null
+      - name: municipality
+        description: Municipality segment (falls back to unknown when unavailable).
+        tests:
+          - not_null
+      - name: nationality
+        description: Nationality segment (falls back to unknown when unavailable).
+        tests:
+          - not_null
+      - name: tenant_type
+        description: Tenant cohort bucket.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['individual', 'corporate', 'unknown']
+      - name: application_count
+        description: Number of inquiries in the segment and day.
+        tests:
+          - not_null
+      - name: movein_count
+        description: Number of inquiries that converted to move-ins.
+        tests:
+          - not_null
+      - name: application_to_movein_rate
+        description: Conversion rate from applications to move-ins.
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: ['activity_date', 'municipality', 'nationality', 'tenant_type']
+      - dbt_utils.expression_is_true:
+          expression: "application_count >= 0 AND movein_count >= 0 AND movein_count <= application_count"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "application_to_movein_rate >= 0 AND application_to_movein_rate <= 1"
+          severity: error
+
+  - name: funnel_application_to_movein_periodized
+    description: |
+      Periodized daily/weekly/monthly application-to-move-in funnel contract for dashboard controls.
+      Grain: (period_grain, period_start, municipality, nationality, tenant_type).
+    config:
+      schema: gold
+    columns:
+      - name: period_grain
+        description: Requested aggregation grain for the periodized view.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['daily', 'weekly', 'monthly']
+      - name: period_start
+        description: Date anchor for the selected period grain.
+        tests:
+          - not_null
+      - name: municipality
+        description: Municipality segment (falls back to unknown when unavailable).
+        tests:
+          - not_null
+      - name: nationality
+        description: Nationality segment (falls back to unknown when unavailable).
+        tests:
+          - not_null
+      - name: tenant_type
+        description: Tenant cohort bucket.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['individual', 'corporate', 'unknown']
+      - name: application_count
+        description: Applications total for the period and segment.
+        tests:
+          - not_null
+      - name: movein_count
+        description: Converted move-ins total for the period and segment.
+        tests:
+          - not_null
+      - name: application_to_movein_rate
+        description: Conversion rate from applications to move-ins.
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: ['period_grain', 'period_start', 'municipality', 'nationality', 'tenant_type']
+      - dbt_utils.expression_is_true:
+          expression: "application_count >= 0 AND movein_count >= 0 AND movein_count <= application_count"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "application_to_movein_rate >= 0 AND application_to_movein_rate <= 1"
+          severity: error
