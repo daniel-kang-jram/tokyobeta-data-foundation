@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
 status: in_progress
-last_updated: "2026-03-01T14:36:45.000Z"
+last_updated: "2026-03-01T14:48:57.493Z"
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -19,9 +19,9 @@ progress:
 ## Current Phase
 - `1` Evidence Gold KPI-Centric Refresh
 - Status: in progress
-- Plan progress: `2/4` completed
-- Last completed plan: `01-01-PLAN.md`
-- Next plan: `01-03-PLAN.md`
+- Plan progress: `3/4` completed
+- Last completed plan: `01-03-PLAN.md`
+- Next plan: `01-04-PLAN.md`
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -30,16 +30,20 @@ progress:
 - [Phase 01]: Use canonical gold.kpi_month_end_metrics as the single KPI contract for card metrics.
 - [Phase 01]: Encode same-day occupancy behavior via policy token count_moveout_room_at_0000_exclude_same_day_moveins and enforce it in tests.
 - [Phase 01]: Use tolerance-based benchmark assertions for Feb 2026 reference points to keep checks deterministic.
+- [Phase 01]: Keep Evidence wrappers as thin single-mart projections with no embedded KPI/funnel formulas.
+- [Phase 01]: Use period_grain-driven daily/weekly/monthly tabs as the user-facing funnel period control contract.
+- [Phase 01]: Require section-level Time basis/Freshness labels tied to trace/funnel freshness fields for operator-facing clarity.
 
 ## Performance Metrics
 | Phase | Plan | Duration | Tasks | Files |
 | --- | --- | --- | --- | --- |
 | 01 | 02 | 7 min | 3 | 6 |
 | 01 | 01 | 11 min | 3 | 7 |
+| 01 | 03 | 9 min | 3 | 8 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-01T14:36:45Z
-- Stopped At: Completed 01-01-PLAN.md
+- Updated: 2026-03-01T14:48:06Z
+- Stopped At: Completed 01-03-PLAN.md

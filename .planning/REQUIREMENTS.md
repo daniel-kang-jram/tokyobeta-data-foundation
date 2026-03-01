@@ -2,7 +2,7 @@
 
 ## Functional
 
-- [ ] `EVD-REFRESH-001` KPI-first landing page in gold dashboard with occupancy and operating totals.
+- [x] `EVD-REFRESH-001` KPI-first landing page in gold dashboard with occupancy and operating totals.
 - [x] `EVD-REFRESH-002` Migrate key snapshot sections (geography, funnel, pie/segment) into gold-connected dashboard.
 - [x] `EVD-REFRESH-003` KPI cards include RENT, RevPAR, and RecPAR(Cash) when source data quality allows.
 - [x] `EVD-REFRESH-004` Every KPI/chart/table shows explicit time basis (`as_of_date` or period) and freshness metadata.
@@ -22,5 +22,5 @@
 
 ## Non-Functional
 
-- [ ] `EVD-NFR-001` Dashboard must clearly communicate timestamp context to prevent reporting confusion.
-- [ ] `EVD-NFR-002` Data freshness/source trace remains visible and understandable to non-technical users.
+- [x] `EVD-NFR-001` Dashboard must clearly communicate timestamp context to prevent reporting confusion.
+- [x] `EVD-NFR-002` Data freshness/source trace remains visible and understandable to non-technical users.

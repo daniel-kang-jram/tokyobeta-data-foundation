@@ -21,5 +21,5 @@
 | --- | --- | --- |
 | 01-01 | Complete | `.planning/phases/01-evidence-gold-kpi-refresh/01-01-SUMMARY.md` |
 | 01-02 | Complete | `.planning/phases/01-evidence-gold-kpi-refresh/01-02-SUMMARY.md` |
-| 01-03 | Pending | `.planning/phases/01-evidence-gold-kpi-refresh/01-03-SUMMARY.md` |
+| 01-03 | Complete | `.planning/phases/01-evidence-gold-kpi-refresh/01-03-SUMMARY.md` |
 | 01-04 | Pending | `.planning/phases/01-evidence-gold-kpi-refresh/01-04-SUMMARY.md` |
