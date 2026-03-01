@@ -24,3 +24,11 @@
 
 - [x] `EVD-NFR-001` Dashboard must clearly communicate timestamp context to prevent reporting confusion.
 - [x] `EVD-NFR-002` Data freshness/source trace remains visible and understandable to non-technical users.
+
+## Release Readiness & UAT
+
+- [x] `EVD-REL-001` Authenticated navigation to `/occupancy`, `/moveins`, `/moveouts`, `/geography`, and `/pricing` must render route-specific content (not Home fallback).
+- [x] `EVD-REL-002` Client-side route metadata fetches must resolve to valid JSON (`/api/<page>/evidencemeta.json`) with no malformed double-slash API paths.
+- [ ] `EVD-REL-003` Production smoke validation must include automated Playwright login + route checks with captured artifacts.
+- [ ] `EVD-REL-004` Post-login dashboard pages must expose the intended KPI/time-context/funnel features before sign-off.
+- [ ] `EVD-REL-005` Deployment/runbook docs must include rollback and verification steps for Evidence route integrity and auth behavior.
