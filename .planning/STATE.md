@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
-status: in_progress
-last_updated: "2026-03-01T17:31:14Z"
+status: complete
+last_updated: "2026-03-01T17:48:11Z"
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -18,10 +18,10 @@ progress:
 
 ## Current Phase
 - `2` Evidence dashboard authenticated UAT and release readiness
-- Status: in progress
-- Plan progress: `3/4` completed
-- Last completed plan: `02-03-PLAN.md` (Phase 2)
-- Next plan: `02-04-PLAN.md`
+- Status: complete
+- Plan progress: `4/4` completed
+- Last completed plan: `02-04-PLAN.md` (Phase 2)
+- Next plan: None (phase complete)
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -49,6 +49,9 @@ progress:
 - [Phase 02]: Run verify_route_contract in buildspec immediately after Evidence build and before aws s3 sync.
 - [Phase 02]: Treat scripts, workflows, and buildspec edits as Evidence-affecting changes in CI change detection.
 - [Phase 02]: Keep authenticated smoke contract drift checks in the same Evidence guardrail CI flow.
+- [Phase 02-04]: Release sign-off is GO only when all route/KPI/time/funnel/metadata/artifact checks pass; otherwise NO-GO.
+- [Phase 02-04]: Pricing release criteria must explicitly include the four funnel markers as deterministic blockers.
+- [Phase 02-04]: Production authenticated smoke on 2026-03-01 recorded NO-GO due route marker mismatches across all gated routes.
 
 ## Performance Metrics
 | Phase | Plan | Duration | Tasks | Files |
@@ -61,10 +64,11 @@ progress:
 | 02 | 01 | 6 min | 3 | 3 |
 | 02 | 02 | 6 min | 3 | 3 |
 | 02 | 03 | 3 min | 3 | 4 |
+| 02 | 04 | 12 min | 3 | 4 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-01T17:31:14Z
-- Stopped At: Completed 02-03-PLAN.md
+- Updated: 2026-03-01T17:48:11Z
+- Stopped At: Completed 02-04-PLAN.md
