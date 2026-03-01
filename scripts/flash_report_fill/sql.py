@@ -11,8 +11,8 @@ INDIVIDUAL_CODES = (1, 6, 7, 9)
 
 ACTIVE_OCCUPANCY_STATUSES = (7, 9, 10, 11, 12, 13, 14, 15)
 PLANNED_MOVEIN_STATUSES = (4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15)
-COMPLETED_MOVEIN_STATUSES = (6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17)
-COMPLETED_MOVEOUT_STATUSES = (16, 17)
+COMPLETED_MOVEIN_STATUSES = (4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15)
+COMPLETED_MOVEOUT_STATUSES = (14, 15, 16, 17)
 PLANNED_MOVEOUT_STATUSES = (14, 15, 16, 17)
 
 DEFAULT_MOVEIN_PREDICTION_COLUMN = "original_movein_date"
@@ -20,10 +20,10 @@ DEFAULT_MOVEOUT_PREDICTION_COLUMN = "moveout_date"
 SUPPORTED_MOVEIN_PREDICTION_COLUMNS = ("movein_date", "original_movein_date", "movein_decided_date")
 SUPPORTED_MOVEOUT_PREDICTION_COLUMNS = ("moveout_date", "moveout_plans_date", "moveout_date_integrated")
 
-TENANT_TYPE_CASE = """
+TENANT_TYPE_CASE_TEMPLATE = """
 CASE
-    WHEN c.moving_agreement_type IN (2, 3) THEN 'corporate'
-    WHEN c.moving_agreement_type IN (1, 6, 7, 9) THEN 'individual'
+    WHEN {alias}.moving_agreement_type IN (2, 3) THEN 'corporate'
+    WHEN {alias}.moving_agreement_type IN (1, 6, 7, 9) THEN 'individual'
     ELSE 'unknown'
 END
 """.strip()
@@ -58,6 +58,7 @@ WITH base_contracts AS (
         m.moveout_date,
         m.moveout_plans_date,
         m.moveout_date_integrated,
+        m.move_renew_flag,
         m.updated_at,
         m.moving_agreement_type,
         COALESCE(m.cancel_flag, 0) AS cancel_flag,
@@ -76,7 +77,7 @@ classified AS (
         {tenant_type_case} AS tenant_type
     FROM base_contracts c
 )
-""".strip().format(tenant_type_case=TENANT_TYPE_CASE)
+""".strip().format(tenant_type_case=TENANT_TYPE_CASE_TEMPLATE.format(alias="c"))
 
 
 def classify_tenant_type(contract_code: int | None) -> str:
@@ -210,8 +211,9 @@ def build_metric_queries(config: FlashReportQueryConfig | None = None) -> Dict[s
 
     def split_moveins(window_start_param: str, window_end_param: str, status_tuple: tuple[int, ...]) -> str:
         where_clause = f"""
-movein_date >= %({window_start_param})s
-  AND movein_date <= %({window_end_param})s
+original_movein_date >= %({window_start_param})s
+  AND original_movein_date <= %({window_end_param})s
+  AND COALESCE(move_renew_flag, 0) = 0
   AND management_status_code IN {status_tuple}
 """.strip()
         return _build_metric_sql(
@@ -230,6 +232,7 @@ GROUP BY tenant_type
         where_clause = f"""
 {movein_prediction_date_column} > %(snapshot_asof)s
   AND {movein_prediction_date_column} <= %({window_end_param})s
+  AND COALESCE(move_renew_flag, 0) = 0
   AND management_status_code IN {PLANNED_MOVEIN_STATUSES}
 """.strip()
         return _build_metric_sql(
@@ -246,8 +249,8 @@ GROUP BY tenant_type
 
     def split_completed_moveouts(window_start_param: str, window_end_param: str) -> str:
         where_clause = f"""
-moveout_plans_date >= %({window_start_param})s
-  AND moveout_plans_date <= %({window_end_param})s
+moveout_date >= %({window_start_param})s
+  AND moveout_date <= %({window_end_param})s
   AND management_status_code IN {COMPLETED_MOVEOUT_STATUSES}
 """.strip()
         return _build_metric_sql(

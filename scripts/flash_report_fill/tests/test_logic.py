@@ -32,7 +32,9 @@ def test_metric_query_uses_expected_moveout_fields() -> None:
     completed_moveout_sql = queries["feb_completed_moveouts"].sql
     planned_moveout_sql = queries["feb_planned_moveouts"].sql
 
-    assert "moveout_plans_date" in completed_moveout_sql
+    assert "moveout_date >= %(feb_start)s" in completed_moveout_sql
+    assert "moveout_date <= %(snapshot_asof)s" in completed_moveout_sql
+    assert "management_status_code IN (14, 15, 16, 17)" in completed_moveout_sql
     assert "moveout_date > %(snapshot_asof)s" in planned_moveout_sql
     assert "management_status_code IN (14, 15, 16, 17)" in planned_moveout_sql
 
@@ -43,10 +45,14 @@ def test_metric_query_has_expected_window_operators() -> None:
     completed_movein_sql = queries["feb_completed_moveins"].sql
     planned_movein_sql = queries["feb_planned_moveins"].sql
 
-    assert "movein_date >= %(feb_start)s" in completed_movein_sql
-    assert "movein_date <= %(snapshot_asof)s" in completed_movein_sql
+    assert "original_movein_date >= %(feb_start)s" in completed_movein_sql
+    assert "original_movein_date <= %(snapshot_asof)s" in completed_movein_sql
+    assert "COALESCE(move_renew_flag, 0) = 0" in completed_movein_sql
+    assert "management_status_code IN (4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15)" in completed_movein_sql
+
     assert "original_movein_date > %(snapshot_asof)s" in planned_movein_sql
     assert "original_movein_date <= %(feb_end)s" in planned_movein_sql
+    assert "COALESCE(move_renew_flag, 0) = 0" in planned_movein_sql
     assert "management_status_code IN (4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15)" in planned_movein_sql
 
 

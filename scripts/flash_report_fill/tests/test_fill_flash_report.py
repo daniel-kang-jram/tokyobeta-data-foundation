@@ -46,6 +46,22 @@ def _create_template(path: Path) -> None:
     wb.save(path)
 
 
+def _create_updated_template(path: Path) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Flash Report（2月28日）"
+    ws["D5"] = 100
+    ws["E5"] = "=+D5/16109"
+    ws["I9"] = "=+D9/16109"
+    ws["I10"] = "=+D10/16109"
+    ws["I11"] = "=+D11/16109"
+    ws["I12"] = "=+D12/16109"
+    ws["I13"] = "=+D13/16109"
+    ws["I14"] = "=+D14/16109"
+    ws["I15"] = "=+D15/16109"
+    wb.save(path)
+
+
 def test_parse_jst_timestamp_accepts_jst_suffix() -> None:
     dt = fill_flash_report.parse_jst_timestamp("2026-02-01 00:00:00 JST")
     assert dt.year == 2026
@@ -188,6 +204,89 @@ def test_window_helper() -> None:
     assert fill_flash_report._window_for_metric("mar_planned_moveins", params) == ("2026-03-01", "2026-03-31")
 
 
+def test_metric_to_cells_updated_sheet_includes_mar_planned_moveins() -> None:
+    mapping = fill_flash_report._metric_to_cells_for_sheet("Flash Report（2月28日）")
+    assert mapping["mar_completed_moveins"] == []
+    assert mapping["mar_planned_moveins"] == [
+        ("D13", "individual", "2026-03"),
+        ("E13", "corporate", "2026-03"),
+    ]
+
+
+def test_main_write_mode_sets_short_term_corporate_row_to_zero(tmp_path: Path, monkeypatch) -> None:
+    template = tmp_path / "updated_template.xlsx"
+    _create_updated_template(template)
+
+    args = Namespace(
+        template_path=str(template),
+        sheet_name="Flash Report（2月28日）",
+        output_dir=str(tmp_path),
+        snapshot_start_jst="2026-02-01 00:00:00 JST",
+        snapshot_asof_jst="2026-02-28 05:00:00 JST",
+        feb_end_jst="2026-02-28 23:59:59 JST",
+        mar_start_jst="2026-03-01 00:00:00 JST",
+        mar_end_jst="2026-03-31 23:59:59 JST",
+        movein_prediction_date_column="original_movein_date",
+        moveout_prediction_date_column="moveout_date",
+        d5_benchmark=11271,
+        d5_tolerance=10,
+        aws_profile="gghouse",
+        aws_region="ap-northeast-1",
+        db_host="127.0.0.1",
+        db_port=3306,
+        db_name="tokyobeta",
+        secret_arn="arn:test",
+        db_user="user1",
+        db_password="pw1",
+        emit_flags_csv=False,
+        check_only=False,
+        flags_limit=10,
+        daily_sheet_name=None,
+        disable_daily_sheet_copy=False,
+    )
+
+    captured = {}
+
+    def _fake_execute_metric_query(cursor, spec, params):
+        if spec.result_mode == "scalar":
+            return 10000
+        return {"individual": 11, "corporate": 22, "unknown": 0}
+
+    def _fake_write_flash_report_cells(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(fill_flash_report, "parse_args", lambda: args)
+    monkeypatch.setattr(fill_flash_report, "resolve_db_credentials", lambda _: ("u", "p"))
+    monkeypatch.setattr(fill_flash_report, "open_connection", lambda *_args, **_kwargs: _DummyConnection())
+    monkeypatch.setattr(fill_flash_report, "execute_metric_query", _fake_execute_metric_query)
+    monkeypatch.setattr(
+        fill_flash_report,
+        "run_anomaly_checks",
+        lambda cursor, params, limit: ({"double_active_rooms": [], "tenant_switch_gaps": [], "same_tenant_multi_status": []}, []),
+    )
+    monkeypatch.setattr(fill_flash_report, "build_reconciliation_records", lambda **kwargs: [])
+    monkeypatch.setattr(fill_flash_report, "build_d5_discrepancy_records", lambda **kwargs: ([], []))
+    monkeypatch.setattr(fill_flash_report, "write_flash_report_cells", _fake_write_flash_report_cells)
+    monkeypatch.setattr(fill_flash_report, "get_formula_cells", lambda *_args, **_kwargs: {"I9": "=+D9/16109"})
+
+    rc = fill_flash_report.main()
+    assert rc == 0
+    assert captured["values"]["D14"] == 0
+    assert captured["values"]["E14"] == 0
+
+
+def test_metric_to_cells_legacy_sheet_keeps_mar_completed_and_planned_rows() -> None:
+    mapping = fill_flash_report._metric_to_cells_for_sheet("Flash Report（2月）")
+    assert mapping["mar_completed_moveins"] == [
+        ("D13", "individual", "2026-03"),
+        ("E13", "corporate", "2026-03"),
+    ]
+    assert mapping["mar_planned_moveins"] == [
+        ("D14", "individual", "2026-03"),
+        ("E14", "corporate", "2026-03"),
+    ]
+
+
 def test_main_check_only_writes_csv_outputs(tmp_path: Path, monkeypatch) -> None:
     template = tmp_path / "template.xlsx"
     _create_template(template)
@@ -216,6 +315,8 @@ def test_main_check_only_writes_csv_outputs(tmp_path: Path, monkeypatch) -> None
         emit_flags_csv=True,
         check_only=True,
         flags_limit=10,
+        daily_sheet_name=None,
+        disable_daily_sheet_copy=False,
     )
 
     def _fake_execute_metric_query(cursor, spec, params):
@@ -284,6 +385,8 @@ def test_main_write_mode_creates_filled_workbook(tmp_path: Path, monkeypatch) ->
         emit_flags_csv=False,
         check_only=False,
         flags_limit=10,
+        daily_sheet_name=None,
+        disable_daily_sheet_copy=False,
     )
 
     def _fake_execute_metric_query(cursor, spec, params):
@@ -306,6 +409,69 @@ def test_main_write_mode_creates_filled_workbook(tmp_path: Path, monkeypatch) ->
     rc = fill_flash_report.main()
     assert rc == 0
     assert list(tmp_path.glob("February_Occupancy_FlashReport_filled_*.xlsx"))
+
+
+def test_main_write_mode_uses_daily_sheet_for_updated_profile(tmp_path: Path, monkeypatch) -> None:
+    template = tmp_path / "updated_template.xlsx"
+    _create_updated_template(template)
+
+    args = Namespace(
+        template_path=str(template),
+        sheet_name="Flash Report（2月28日）",
+        output_dir=str(tmp_path),
+        snapshot_start_jst="2026-02-01 00:00:00 JST",
+        snapshot_asof_jst="2026-03-01 05:00:00 JST",
+        feb_end_jst="2026-02-28 23:59:59 JST",
+        mar_start_jst="2026-03-01 00:00:00 JST",
+        mar_end_jst="2026-03-31 23:59:59 JST",
+        movein_prediction_date_column="original_movein_date",
+        moveout_prediction_date_column="moveout_date",
+        d5_benchmark=11271,
+        d5_tolerance=10,
+        aws_profile="gghouse",
+        aws_region="ap-northeast-1",
+        db_host="127.0.0.1",
+        db_port=3306,
+        db_name="tokyobeta",
+        secret_arn="arn:test",
+        db_user="user1",
+        db_password="pw1",
+        emit_flags_csv=False,
+        check_only=False,
+        flags_limit=10,
+        daily_sheet_name=None,
+        disable_daily_sheet_copy=False,
+    )
+
+    captured = {}
+
+    def _fake_execute_metric_query(cursor, spec, params):
+        if spec.result_mode == "scalar":
+            return 10000
+        return {"individual": 1, "corporate": 2, "unknown": 0}
+
+    def _fake_write_flash_report_cells(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(fill_flash_report, "parse_args", lambda: args)
+    monkeypatch.setattr(fill_flash_report, "resolve_db_credentials", lambda _: ("u", "p"))
+    monkeypatch.setattr(fill_flash_report, "open_connection", lambda *_args, **_kwargs: _DummyConnection())
+    monkeypatch.setattr(fill_flash_report, "execute_metric_query", _fake_execute_metric_query)
+    monkeypatch.setattr(
+        fill_flash_report,
+        "run_anomaly_checks",
+        lambda cursor, params, limit: ({"double_active_rooms": [], "tenant_switch_gaps": [], "same_tenant_multi_status": []}, []),
+    )
+    monkeypatch.setattr(fill_flash_report, "build_reconciliation_records", lambda **kwargs: [])
+    monkeypatch.setattr(fill_flash_report, "build_d5_discrepancy_records", lambda **kwargs: ([], []))
+    monkeypatch.setattr(fill_flash_report, "write_flash_report_cells", _fake_write_flash_report_cells)
+    monkeypatch.setattr(fill_flash_report, "get_formula_cells", lambda *_args, **_kwargs: {"I9": "=+D9/16109"})
+
+    rc = fill_flash_report.main()
+
+    assert rc == 0
+    assert captured["sheet_name"] == "Flash Report（2月28日）"
+    assert "source_sheet_name" not in captured
 
 
 def test_main_raises_if_formula_cells_change(tmp_path: Path, monkeypatch) -> None:
@@ -336,6 +502,8 @@ def test_main_raises_if_formula_cells_change(tmp_path: Path, monkeypatch) -> Non
         emit_flags_csv=False,
         check_only=False,
         flags_limit=10,
+        daily_sheet_name=None,
+        disable_daily_sheet_copy=False,
     )
 
     monkeypatch.setattr(fill_flash_report, "parse_args", lambda: args)

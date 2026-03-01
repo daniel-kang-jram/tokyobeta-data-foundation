@@ -126,6 +126,12 @@ def test_get_formula_protected_cells_supports_updated_sheet_profile() -> None:
     assert "I15" in formula_cells
 
 
+def test_get_formula_protected_cells_supports_daily_sheet_profile() -> None:
+    formula_cells = get_formula_protected_cells("Flash Report（3月1日）")
+    assert "E5" in formula_cells
+    assert "I9" in formula_cells
+
+
 def test_write_flash_report_cells_preserves_updated_profile_formulas(tmp_path: Path) -> None:
     template_path = tmp_path / "updated_template.xlsx"
     output_path = tmp_path / "updated_out.xlsx"
@@ -163,3 +169,4 @@ def test_write_flash_report_cells_handles_merged_input_targets(tmp_path: Path) -
     assert ws["D12"].value == 7
     assert ws["I11"].value == "=+D11/16109"
     assert ws["I12"].value == "=+D12/16109"
+
