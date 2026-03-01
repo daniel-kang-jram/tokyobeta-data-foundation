@@ -144,6 +144,21 @@ NO-GO if ANY blocker is present:
 
 Sign-off entries are appended to this file for auditability.
 
+### Sign-off record (latest)
+
+## Evidence Auth Smoke Sign-off
+
+- Date (UTC): 2026-03-01T17:45:03Z
+- Base URL: https://intelligence.jram.jp
+- Artifact Directory: artifacts/evidence-auth-smoke/prod-20260302-024530
+- Route Matrix Result: FAIL (all route H1 marker checks timed out)
+- Pricing Funnel Result: FAIL (blocked by route marker mismatch on `/pricing`)
+- Metadata JSON Result (`application/json` + no `/api//`): PASS (no malformed API paths detected in summary)
+- Parse Error Check (`Unexpected token '<'`): PASS (no metadata parse errors detected in summary)
+- Decision: NO-GO
+- Failing Criteria: route marker mismatch on `/occupancy`, `/moveins`, `/moveouts`, `/geography`, `/pricing`; release blockers remain unresolved.
+- Approver: automated smoke execution record (pending human release approval)
+
 ---
 
 ## Evidence Rollback Criteria

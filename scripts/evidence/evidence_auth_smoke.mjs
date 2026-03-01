@@ -166,6 +166,17 @@ function writeJson(filePath, payload) {
   fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
 }
 
+function collectArtifactSummary(artifactPaths) {
+  const screenshotsCount = fs.existsSync(artifactPaths.screenshotsDir)
+    ? fs.readdirSync(artifactPaths.screenshotsDir).length
+    : 0;
+  return {
+    screenshots_count: screenshotsCount,
+    console_log: fs.existsSync(artifactPaths.consoleLogPath),
+    network_log: fs.existsSync(artifactPaths.networkLogPath),
+  };
+}
+
 function buildMetadataUrl(baseUrl, routePath) {
   const normalizedRoute = routePath.replace(/^\/+/, "");
   if (!normalizedRoute) {
@@ -224,17 +235,19 @@ async function authenticate(page, options) {
     'input[type="text"]',
   ];
 
+  let usernameFieldVisible = false;
   let usernameFilled = false;
   for (const selector of usernameCandidates) {
     const candidate = page.locator(selector).first();
     if (await candidate.isVisible()) {
+      usernameFieldVisible = true;
       await candidate.fill(options.username);
       usernameFilled = true;
       break;
     }
   }
 
-  if (!usernameFilled) {
+  if (usernameFieldVisible && !usernameFilled) {
     throw new Error("Unable to find a visible username/email field on login page.");
   }
 
@@ -306,7 +319,7 @@ async function runDryMode(options, artifactPaths) {
 
   writeJson(artifactPaths.consoleLogPath, []);
   writeJson(artifactPaths.networkLogPath, []);
-  writeJson(artifactPaths.summaryPath, {
+  const summary = {
     mode: "dry-run",
     base_url: options.baseUrl,
     artifact_dir: options.artifactDir,
@@ -314,7 +327,9 @@ async function runDryMode(options, artifactPaths) {
     malformed_api_requests: [],
     metadata_console_failures: [],
     negative_markers: NEGATIVE_MARKERS,
-  });
+  };
+  summary.artifacts = collectArtifactSummary(artifactPaths);
+  writeJson(artifactPaths.summaryPath, summary);
 }
 
 async function runSmoke(options, artifactPaths) {
@@ -456,6 +471,7 @@ async function runSmoke(options, artifactPaths) {
     metadata_console_failures: metadataConsoleFailures,
     negative_markers: NEGATIVE_MARKERS,
   };
+  summary.artifacts = collectArtifactSummary(artifactPaths);
   writeJson(artifactPaths.summaryPath, summary);
 
   const failedRoutes = Object.entries(routeResults)
