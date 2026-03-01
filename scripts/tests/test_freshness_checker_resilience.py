@@ -355,8 +355,21 @@ def test_lambda_handler_suppresses_notifications_when_requested(monkeypatch):
             "error": "404",
         },
     )
-    monkeypatch.setattr(checker, "publish_dump_metric", lambda *args, **kwargs: None)
-    monkeypatch.setattr(checker, "publish_metric", lambda *args, **kwargs: None)
+    published_table_metrics = []
+    published_dump_metrics = []
+
+    monkeypatch.setattr(
+        checker,
+        "publish_metric",
+        lambda table_name, days_old: published_table_metrics.append((table_name, days_old)),
+    )
+    monkeypatch.setattr(
+        checker,
+        "publish_dump_metric",
+        lambda prefix, metric_name, value: published_dump_metrics.append(
+            (prefix, metric_name, value)
+        ),
+    )
     monkeypatch.setattr(
         checker,
         "check_upstream_sync_staleness",
@@ -393,6 +406,8 @@ def test_lambda_handler_suppresses_notifications_when_requested(monkeypatch):
     assert dump_alerts == []
     assert upstream_alerts == []
     assert table_alerts == []
+    assert published_table_metrics == []
+    assert published_dump_metrics == []
 
 
 def test_load_latest_dump_manifest_paginates_before_selecting_latest(monkeypatch):

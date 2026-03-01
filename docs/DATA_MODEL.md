@@ -65,6 +65,9 @@ WHERE t.status IN (target_statuses)
 ```
 - **Use Case:** Active tenant count, current occupancy, `tokyo_beta_tenant_room_info`.
 - **Why:** 1 tenant → 1 current moving. No deduplication needed.
+- **Exception (Flash Report D5 fact-aligned mode):** `scripts/flash_report_fill` intentionally uses
+  `m.tenant_id = t.id` plus tenant-room dedupe and room-priority selection to align the operational
+  flash-report benchmark at `2026-02-01 00:00 JST`.
 
 #### B. For ALL movings/contracts (Historical)
 Use `moving.tenant_id` which captures **all** history.

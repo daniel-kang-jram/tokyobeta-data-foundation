@@ -728,6 +728,12 @@ def test_run_dbt_transformations_includes_force_rebuild_snapshot_var(monkeypatch
     monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-27")
     monkeypatch.setenv("DAILY_FORCE_REBUILD_SNAPSHOT_DATE", "2026-02-19")
     monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
+    monkeypatch.setattr(
+        daily_etl,
+        "relation_exists",
+        lambda schema_name, table_name: schema_name == "silver"
+        and table_name == "tenant_room_snapshot_daily",
+    )
 
     def fake_run(cmd, check=False, capture_output=False, text=False):
         calls.append(cmd)
@@ -745,6 +751,39 @@ def test_run_dbt_transformations_includes_force_rebuild_snapshot_var(monkeypatch
     assert '"daily_snapshot_date": "2026-02-19"' in vars_payload
     assert '"force_rebuild_snapshot_date": "2026-02-19"' in vars_payload
     assert '"daily_snapshot_date": "2026-02-27"' not in vars_payload
+
+
+def test_run_dbt_transformations_skips_force_rebuild_when_relation_missing(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(daily_etl, "get_aurora_credentials", lambda: ("user", "pass"))
+    monkeypatch.setattr(daily_etl, "cleanup_dbt_tmp_tables", lambda: 0)
+    monkeypatch.setitem(daily_etl.args, "S3_SOURCE_BUCKET", "unit-test-bucket")
+    monkeypatch.setitem(daily_etl.args, "AURORA_ENDPOINT", "test.cluster.amazonaws.com")
+    monkeypatch.setitem(daily_etl.args, "ENVIRONMENT", "prod")
+    monkeypatch.setenv("DBT_EXCLUDE_MODELS", "")
+    monkeypatch.setenv("DBT_PRE_RUN_MODELS", "silver.tenant_room_snapshot_daily")
+    monkeypatch.delenv("DBT_POST_RUN_MODELS", raising=False)
+    monkeypatch.setenv("DAILY_TARGET_DATE", "2026-02-27")
+    monkeypatch.setenv("DAILY_FORCE_REBUILD_SNAPSHOT_DATE", "2026-02-19")
+    monkeypatch.setenv("DAILY_RUN_DBT_TESTS", "false")
+    monkeypatch.setattr(daily_etl, "relation_exists", lambda schema_name, table_name: False)
+
+    def fake_run(cmd, check=False, capture_output=False, text=False):
+        calls.append(cmd)
+        if check:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+    monkeypatch.setattr(daily_etl.subprocess, "run", fake_run)
+
+    assert daily_etl.run_dbt_transformations() is True
+
+    run_commands = [cmd for cmd in calls if len(cmd) > 1 and cmd[0].endswith("/dbt") and cmd[1] == "run"]
+    assert run_commands
+    vars_payload = " ".join(run_commands[0])
+    assert '"daily_snapshot_date": "2026-02-27"' in vars_payload
+    assert "force_rebuild_snapshot_date" not in vars_payload
 
 
 def test_run_dbt_transformations_retries_lock_wait(monkeypatch):
@@ -1960,8 +1999,12 @@ def test_tenant_room_snapshot_model_supports_force_rebuild_snapshot_date():
     sql_text = model_path.read_text(encoding="utf-8")
 
     assert "force_rebuild_snapshot_date" in sql_text
-    assert "DELETE FROM " in sql_text
-    assert "snapshot_date = CAST('{{ force_rebuild_snapshot_date }}' AS DATE)" in sql_text
+    assert "{% set snapshot_model_schema = 'silver' %}" in sql_text
+    assert "{% set snapshot_model_identifier = 'tenant_room_snapshot_daily' %}" in sql_text
+    assert "\"DELETE FROM `" in sql_text
+    assert "~ snapshot_model_schema" in sql_text
+    assert "~ snapshot_model_identifier" in sql_text
+    assert "\"DELETE FROM \" ~ this" not in sql_text
 
 
 def test_default_skip_llm_enrichment_prod_false():
