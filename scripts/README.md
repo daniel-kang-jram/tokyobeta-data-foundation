@@ -99,7 +99,7 @@ Notes:
   - `Flash Report（2月）` (legacy)
   - `Flash Report（2月28日）` / `Flash Report（3月～）` (updated)
 - D5 occupancy is fact-aligned only (strict mode archived).
-- For updated sheets, `D14/E14` (March planned move-ins) are intentionally left blank.
+- Planned move-in prediction uses `staging.movings.original_movein_date` and status set `(4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15)`.
 - Writes only input cells and preserves profile-specific formula cells (`E5`, `H*` or `I*`, etc.).
 - Workbook denominator remains fixed at `16109` by business rule.
 - Exports:

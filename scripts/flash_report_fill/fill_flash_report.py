@@ -21,9 +21,9 @@ if __package__ in (None, ""):  # pragma: no cover
 
 from scripts.flash_report_fill.checks import run_anomaly_checks
 from scripts.flash_report_fill.excel_writer import (
-    UPDATED_SHEET_NAMES,
     get_formula_cells,
     get_formula_protected_cells,
+    is_updated_sheet_profile,
     write_flash_report_cells,
 )
 from scripts.flash_report_fill.reconciliation import (
@@ -70,7 +70,8 @@ LEGACY_METRIC_TO_CELLS = {
 
 UPDATED_METRIC_TO_CELLS = {
     **LEGACY_METRIC_TO_CELLS,
-    "mar_planned_moveins": [],
+    "mar_completed_moveins": [],
+    "mar_planned_moveins": [("D13", "individual", "2026-03"), ("E13", "corporate", "2026-03")],
 }
 
 
@@ -194,9 +195,9 @@ def print_schema_mapping(query_config: FlashReportQueryConfig, sheet_name: str) 
     print("=== SCHEMA MAPPING ===")
     print("source tables: staging.movings, staging.tenants, staging.rooms, staging.apartments")
     print("contract type: staging.movings.moving_agreement_type")
-    print("move-in date (completed): staging.movings.movein_date")
+    print("move-in date (completed): staging.movings.original_movein_date")
     print(f"move-in date (prediction): staging.movings.{query_config.movein_prediction_date_column}")
-    print("completed move-out date: staging.movings.moveout_plans_date (actual)")
+    print("completed move-out date: staging.movings.moveout_date (date-priority)")
     print(f"planned move-out date: staging.movings.{query_config.moveout_prediction_date_column}")
     print(
         "status sets: "
@@ -236,7 +237,7 @@ def _resolve_sheet_name(template_path: Path, requested_sheet_name: str) -> str:
 
 
 def _metric_to_cells_for_sheet(sheet_name: str) -> Dict[str, List[Tuple[str, str, str]]]:
-    if sheet_name in UPDATED_SHEET_NAMES:
+    if is_updated_sheet_profile(sheet_name):
         return UPDATED_METRIC_TO_CELLS
     return LEGACY_METRIC_TO_CELLS
 
@@ -352,6 +353,11 @@ def main() -> int:
                         query_sql=spec.sql,
                     )
                 )
+
+        if is_updated_sheet_profile(sheet_name):
+            # Updated workbook includes a short-term corporate row; keep it fixed to zero by request.
+            cell_values["D14"] = 0
+            cell_values["E14"] = 0
 
         check_rows, check_warnings = run_anomaly_checks(cursor, params, limit=args.flags_limit)
         warnings.extend(check_warnings)

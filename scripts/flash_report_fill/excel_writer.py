@@ -68,16 +68,23 @@ FORMULA_PROTECTED_CELLS = LEGACY_FORMULA_PROTECTED_CELLS
 
 def get_formula_protected_cells(sheet_name: str) -> set[str]:
     """Return formula-protected cells for the selected workbook sheet profile."""
-    if sheet_name in UPDATED_SHEET_NAMES:
+    if is_updated_sheet_profile(sheet_name):
         return set(UPDATED_FORMULA_PROTECTED_CELLS)
     return set(LEGACY_FORMULA_PROTECTED_CELLS)
 
 
 def get_allowed_input_cells(sheet_name: str) -> set[str]:
     """Return editable input cells for the selected workbook sheet profile."""
-    if sheet_name in UPDATED_SHEET_NAMES:
+    if is_updated_sheet_profile(sheet_name):
         return set(LEGACY_ALLOWED_INPUT_CELLS)
     return set(LEGACY_ALLOWED_INPUT_CELLS)
+
+
+def is_updated_sheet_profile(sheet_name: str) -> bool:
+    """Detect updated sheet layout, including daily appended copies."""
+    if sheet_name in UPDATED_SHEET_NAMES:
+        return True
+    return sheet_name.startswith("Flash Report（") and sheet_name.endswith("日）")
 
 
 def write_flash_report_cells(
@@ -101,6 +108,7 @@ def write_flash_report_cells(
     workbook = load_workbook(template_path, data_only=False)
     if sheet_name not in workbook.sheetnames:
         raise ValueError(f"Sheet not found: {sheet_name}")
+
     sheet = workbook[sheet_name]
 
     def _resolve_writable_cell(cell: str) -> str:
