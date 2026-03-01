@@ -167,6 +167,7 @@ def build_d5_discrepancy_records(
 
     strict_delta = strict_count - benchmark_value
     fact_aligned_delta = fact_aligned_count - benchmark_value
+    fact_minus_strict_delta = fact_aligned_count - strict_count
 
     records = [
         ReconciliationRecord(
@@ -185,6 +186,18 @@ def build_d5_discrepancy_records(
             delta=fact_aligned_delta,
             reference_source="staging.movings+staging.tenants",
             note="Fact-aligned occupancy using is_moveout=0 and room-priority dedupe.",
+            asof_date=str(snapshot_start_date),
+        ),
+        ReconciliationRecord(
+            reconciliation_id="d5_fact_aligned_minus_strict",
+            expected_value=0,
+            reference_value=fact_minus_strict_delta,
+            delta=fact_minus_strict_delta,
+            reference_source="staging.movings+staging.tenants",
+            note=(
+                "Net difference between fact-aligned and strict occupancy logic "
+                "(status/room-priority operational view minus strict point-in-time date gating)."
+            ),
             asof_date=str(snapshot_start_date),
         ),
         ReconciliationRecord(

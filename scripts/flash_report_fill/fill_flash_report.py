@@ -225,9 +225,8 @@ def _window_for_metric(metric_id: str, params: Dict[str, object]) -> Tuple[str, 
 
 
 def _fetch_total_rooms(cursor) -> int:
-    cursor.execute("SELECT COUNT(*) AS total_rooms FROM staging.rooms")
-    row = cursor.fetchone() or {}
-    return int(row.get("total_rooms", 0))
+    # Business-agreed physical room denominator (historical DB room master can include retired rooms).
+    return REPORT_FORMULA_DENOMINATOR
 
 
 def _resolve_sheet_name(template_path: Path, requested_sheet_name: str) -> str:
