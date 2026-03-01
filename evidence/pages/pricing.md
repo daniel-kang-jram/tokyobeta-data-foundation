@@ -1,378 +1,405 @@
-# Pricing and Portfolio Risk
+# Pricing and Segment Parity (Gold)
 
 ## Storyline
 
-This page answers: **Which segments are most exposed to vacancy risk, and what
-pricing/retention actions are justified by the snapshot?**
+This page answers: **which municipality and nationality segments are driving
+pricing pressure in the application -> move-in funnel, and where should operators
+focus next?**
 
-Because rent-band volumes are highly imbalanced, this page is ratio-first
-(replacement rate, outflow share, and churn pressure), not raw net count-first.
-
-```sql rent_band_ratio_profile
-with base as (
-  select
-    rent_band,
-    movein_count,
-    moveout_count,
-    net_change,
-    case rent_band
-      when '<50k' then 1
-      when '50-59k' then 2
-      when '60-69k' then 3
-      when '70-79k' then 4
-      when '80k+' then 5
-      else 99
-    end as band_order
-  from snapshot_csv.rent_band_inout_balance
+```sql segment_share_kpis
+with latest_month as (
+  select max(period_start) as period_start
+  from aurora_gold.funnel_application_to_movein_segment_share
+  where period_grain = 'monthly'
 ),
-totals as (
+segment_rollup as (
   select
+    segment_type,
+    segment_value,
+    sum(application_count) as application_count,
+    sum(movein_count) as movein_count,
+    cast(
+      coalesce(100.0 * sum(movein_count) / nullif(sum(application_count), 0), 0)
+      as decimal(12, 2)
+    ) as conversion_rate_pct
+  from aurora_gold.funnel_application_to_movein_segment_share s
+  join latest_month m
+    on s.period_start = m.period_start
+  where s.period_grain = 'monthly'
+    and s.segment_type in ('municipality', 'nationality')
+  group by segment_type, segment_value
+),
+overall as (
+  select
+    sum(application_count) as total_applications,
     sum(movein_count) as total_moveins,
-    sum(moveout_count) as total_moveouts
-  from base
-)
-select
-  b.rent_band,
-  b.band_order,
-  b.movein_count,
-  b.moveout_count,
-  b.net_change,
-  round(100.0 * b.movein_count / nullif(b.moveout_count, 0), 2) as replacement_rate_percent,
-  round(100.0 * (b.moveout_count - b.movein_count) / nullif(b.moveout_count, 0), 2) as net_churn_rate_percent,
-  round(100.0 * b.moveout_count / nullif(t.total_moveouts, 0), 2) as moveout_share_percent,
-  round(100.0 * b.movein_count / nullif(t.total_moveins, 0), 2) as movein_share_percent,
-  round(100.0 * b.moveout_count / nullif(b.moveout_count + b.movein_count, 0), 2) as outflow_pressure_percent,
-  round(greatest(12.0, least(56.0, sqrt(b.moveout_count) * 2.8)), 2) as bubble_size
-from base b
-cross join totals t
-order by b.band_order
-```
-
-```sql pricing_ratio_kpis
-with ratio as (
-  select
-    rent_band,
-    movein_count,
-    moveout_count,
-    case rent_band
-      when '<50k' then 1
-      when '50-59k' then 2
-      when '60-69k' then 3
-      when '70-79k' then 4
-      when '80k+' then 5
-      else 99
-    end as band_order,
-    round(100.0 * movein_count / nullif(moveout_count, 0), 2) as replacement_rate_pct,
-    round(100.0 * (moveout_count - movein_count) / nullif(moveout_count, 0), 2) as net_churn_rate_pct
-  from snapshot_csv.rent_band_inout_balance
+    cast(
+      coalesce(100.0 * sum(movein_count) / nullif(sum(application_count), 0), 0)
+      as decimal(12, 2)
+    ) as overall_conversion_rate_pct
+  from segment_rollup
 ),
-totals as (
+weakest as (
   select
-    round(100.0 * sum(movein_count) / nullif(sum(moveout_count), 0), 2) as overall_replacement_rate_percent,
-    round(100.0 * (sum(moveout_count) - sum(movein_count)) / nullif(sum(moveout_count), 0), 2) as overall_churn_pressure_percent
-  from ratio
-),
-worst as (
-  select rent_band, replacement_rate_pct
-  from ratio
-  order by replacement_rate_pct asc, moveout_count desc
+    concat(segment_type, ': ', segment_value) as weakest_segment,
+    conversion_rate_pct as weakest_conversion_rate_pct
+  from segment_rollup
+  order by conversion_rate_pct asc, application_count desc
   limit 1
 ),
 largest as (
   select
-    rent_band,
-    round(100.0 * moveout_count / nullif((select sum(moveout_count) from ratio), 0), 2) as moveout_share_pct
-  from ratio
-  order by moveout_count desc
+    concat(segment_type, ': ', segment_value) as largest_segment,
+    application_count as largest_segment_applications
+  from segment_rollup
+  order by application_count desc
   limit 1
 )
 select
-  t.overall_replacement_rate_percent,
-  t.overall_churn_pressure_percent,
-  w.rent_band as worst_replacement_band,
-  w.replacement_rate_pct as worst_replacement_rate_percent,
-  l.rent_band as largest_outflow_band,
-  l.moveout_share_pct as largest_outflow_share_percent
-from totals t
-cross join worst w
+  o.total_applications,
+  o.total_moveins,
+  o.overall_conversion_rate_pct,
+  w.weakest_segment,
+  w.weakest_conversion_rate_pct,
+  l.largest_segment,
+  l.largest_segment_applications
+from overall o
+cross join weakest w
 cross join largest l
 ```
 
-```sql rent_band_risk_heatmap
-with ratio as (
+```sql municipality_pie
+with latest_month as (
+  select max(period_start) as period_start
+  from aurora_gold.funnel_application_to_movein_segment_share
+  where period_grain = 'monthly'
+),
+base as (
   select
-    rent_band,
-    case rent_band
-      when '<50k' then 1
-      when '50-59k' then 2
-      when '60-69k' then 3
-      when '70-79k' then 4
-      when '80k+' then 5
-      else 99
-    end as band_order,
-    round(100.0 * movein_count / nullif(moveout_count, 0), 2) as replacement_rate_pct,
-    round(100.0 * (moveout_count - movein_count) / nullif(moveout_count, 0), 2) as net_churn_rate_pct,
-    round(100.0 * moveout_count / nullif(moveout_count + movein_count, 0), 2) as outflow_pressure_pct
-  from snapshot_csv.rent_band_inout_balance
+    segment_value,
+    sum(application_count) as application_count,
+    sum(movein_count) as movein_count
+  from aurora_gold.funnel_application_to_movein_segment_share s
+  join latest_month m
+    on s.period_start = m.period_start
+  where s.period_grain = 'monthly'
+    and s.segment_type = 'municipality'
+    and coalesce(segment_value, '') <> ''
+  group by segment_value
 ),
 totals as (
-  select sum(moveout_count) as total_moveouts
-  from snapshot_csv.rent_band_inout_balance
-),
-enriched as (
   select
-    r.rent_band,
-    r.band_order,
-    round(100.0 - r.replacement_rate_pct, 2) as replacement_gap_pct,
-    r.net_churn_rate_pct,
-    round(
-      100.0 * b.moveout_count / nullif((select total_moveouts from totals), 0),
-      2
-    ) as moveout_share_pct
-  from ratio r
-  join snapshot_csv.rent_band_inout_balance b
-    on b.rent_band = r.rent_band
+    sum(application_count) as total_applications,
+    sum(movein_count) as total_moveins
+  from base
 )
 select
-  rent_band,
-  band_order,
-  metric_label,
-  metric_order,
-  metric_value
-from (
-  select rent_band, band_order, 'Replacement Gap %' as metric_label, 1 as metric_order, replacement_gap_pct as metric_value from enriched
-  union all
-  select rent_band, band_order, 'Net Churn %' as metric_label, 2 as metric_order, net_churn_rate_pct as metric_value from enriched
-  union all
-  select rent_band, band_order, 'Move-out Share %' as metric_label, 3 as metric_order, moveout_share_pct as metric_value from enriched
-) t
-order by metric_order, band_order
+  b.segment_value,
+  b.application_count,
+  b.movein_count,
+  cast(
+    coalesce(100.0 * b.application_count / nullif(t.total_applications, 0), 0)
+    as decimal(12, 2)
+  ) as application_share_pct,
+  cast(
+    coalesce(100.0 * b.movein_count / nullif(t.total_moveins, 0), 0)
+    as decimal(12, 2)
+  ) as movein_share_pct,
+  cast(
+    coalesce(100.0 * b.movein_count / nullif(b.application_count, 0), 0)
+    as decimal(12, 2)
+  ) as conversion_rate_pct
+from base b
+cross join totals t
+order by b.application_count desc, b.segment_value
+limit 12
 ```
 
-```sql occ_rent_band_current
+```sql nationality_pie
+with latest_month as (
+  select max(period_start) as period_start
+  from aurora_gold.funnel_application_to_movein_segment_share
+  where period_grain = 'monthly'
+),
+base as (
+  select
+    segment_value,
+    sum(application_count) as application_count,
+    sum(movein_count) as movein_count
+  from aurora_gold.funnel_application_to_movein_segment_share s
+  join latest_month m
+    on s.period_start = m.period_start
+  where s.period_grain = 'monthly'
+    and s.segment_type = 'nationality'
+    and coalesce(segment_value, '') <> ''
+  group by segment_value
+),
+totals as (
+  select
+    sum(application_count) as total_applications,
+    sum(movein_count) as total_moveins
+  from base
+)
 select
-  feature_value as rent_band,
-  occupied_rooms,
-  total_rooms,
-  round(occupancy_rate * 100, 2) as occupancy_rate_percent
-from snapshot_csv.occupancy_by_room_feature
-where timepoint_label = 'Current'
-  and feature_group = 'rent_band'
-order by case feature_value
-  when '<50k' then 1
-  when '50-59k' then 2
-  when '60-69k' then 3
-  when '70-79k' then 4
-  when '80k+' then 5
-  else 99
-end
+  b.segment_value,
+  b.application_count,
+  b.movein_count,
+  cast(
+    coalesce(100.0 * b.application_count / nullif(t.total_applications, 0), 0)
+    as decimal(12, 2)
+  ) as application_share_pct,
+  cast(
+    coalesce(100.0 * b.movein_count / nullif(t.total_moveins, 0), 0)
+    as decimal(12, 2)
+  ) as movein_share_pct,
+  cast(
+    coalesce(100.0 * b.movein_count / nullif(b.application_count, 0), 0)
+    as decimal(12, 2)
+  ) as conversion_rate_pct
+from base b
+cross join totals t
+order by b.application_count desc, b.segment_value
+limit 12
 ```
 
-```sql occ_floor_current
+```sql conversion_trend_monthly
 select
-  feature_value as room_floor,
-  occupied_rooms,
-  total_rooms,
-  round(occupancy_rate * 100, 2) as occupancy_rate_percent
-from snapshot_csv.occupancy_by_room_feature
-where timepoint_label = 'Current'
-  and feature_group = 'room_floor'
-order by try_cast(feature_value as integer) asc nulls last
+  period_start,
+  tenant_type,
+  sum(application_count) as application_count,
+  sum(movein_count) as movein_count,
+  cast(
+    coalesce(100.0 * sum(movein_count) / nullif(sum(application_count), 0), 0)
+    as decimal(12, 2)
+  ) as conversion_rate_pct
+from aurora_gold.funnel_application_to_movein_periodized
+where period_grain = 'monthly'
+  and period_start >= current_date - interval 730 day
+group by period_start, tenant_type
+order by period_start, tenant_type
 ```
 
-```sql property_risk
+```sql conversion_trend_monthly_total
 select
-  property_norm,
-  municipality,
+  period_start,
+  sum(application_count) as application_count,
+  sum(movein_count) as movein_count,
+  cast(
+    coalesce(100.0 * sum(movein_count) / nullif(sum(application_count), 0), 0)
+    as decimal(12, 2)
+  ) as conversion_rate_pct
+from aurora_gold.funnel_application_to_movein_periodized
+where period_grain = 'monthly'
+  and period_start >= current_date - interval 730 day
+group by period_start
+order by period_start
+```
+
+```sql segment_pressure_ranking
+select
+  concat(segment_type, ': ', segment_value) as segment_label,
+  segment_type,
+  segment_value,
+  sum(application_count) as application_count,
+  sum(movein_count) as movein_count,
+  cast(
+    coalesce(100.0 * sum(movein_count) / nullif(sum(application_count), 0), 0)
+    as decimal(12, 2)
+  ) as conversion_rate_pct
+from aurora_gold.funnel_application_to_movein_segment_share
+where period_grain = 'monthly'
+  and period_start >= current_date - interval 365 day
+  and segment_type in ('municipality', 'nationality')
+  and coalesce(segment_value, '') <> ''
+group by segment_type, segment_value
+having sum(application_count) >= 10
+order by conversion_rate_pct asc, application_count desc
+limit 30
+```
+
+```sql segment_share_detail
+select
+  period_grain,
+  period_start,
+  tenant_type,
+  segment_type,
+  segment_value,
+  application_count,
   movein_count,
-  moveout_count,
-  net_change,
-  avg_movein_rent,
-  avg_moveout_rent,
-  price_gap_avg_rent,
-  risk_score
-from snapshot_csv.property_risk_rank
-order by risk_score desc, moveout_count desc
+  round(application_share * 100, 2) as application_share_pct,
+  round(movein_share * 100, 2) as movein_share_pct,
+  round(application_to_movein_rate * 100, 2) as conversion_rate_pct,
+  segment_rank,
+  updated_at
+from aurora_gold.funnel_application_to_movein_segment_share
+where period_grain in ('weekly', 'monthly')
+  and period_start >= current_date - interval 365 day
+order by period_grain, period_start desc, segment_type, tenant_type, segment_rank
 ```
 
-```sql property_price_gap
-select
-  property_norm,
-  municipality,
-  movein_count,
-  moveout_count,
-  net_change,
-  avg_movein_rent,
-  avg_moveout_rent,
-  price_gap_avg_rent
-from snapshot_csv.property_risk_rank
-where movein_count > 0 or moveout_count > 0
-order by abs(price_gap_avg_rent) desc, risk_score desc
-limit 40
-```
-
-```sql pricing_bullets
-select
-  theme,
-  observation,
-  evidence_metric,
-  recommended_action,
-  priority
-from snapshot_csv.insight_bullets
-where theme in ('Demand Pressure', 'Pricing Risk', 'Property Churn')
-order by priority
-```
-
-<Grid cols={2} gapSize="md">
-  <BigValue data={pricing_ratio_kpis} title="Overall Replacement Rate (%)" value="overall_replacement_rate_percent" fmt="num2" />
-  <BigValue data={pricing_ratio_kpis} title="Overall Churn Pressure (%)" value="overall_churn_pressure_percent" fmt="num2" />
+<Grid cols={3} gapSize="md">
+  <BigValue
+    data={segment_share_kpis}
+    title="Applications (Latest Month)"
+    value="total_applications"
+    fmt="num0"
+  />
+  <BigValue
+    data={segment_share_kpis}
+    title="Move-ins (Latest Month)"
+    value="total_moveins"
+    fmt="num0"
+  />
+  <BigValue
+    data={segment_share_kpis}
+    title="Overall Conversion Rate (%)"
+    value="overall_conversion_rate_pct"
+    fmt="num2"
+  />
 </Grid>
 
 <ul>
   <li>
-    Weakest replacement band: <strong>{pricing_ratio_kpis[0].worst_replacement_band}</strong>
-    ({pricing_ratio_kpis[0].worst_replacement_rate_percent}%).
+    Weakest segment: <strong>{segment_share_kpis[0].weakest_segment}</strong>
+    ({segment_share_kpis[0].weakest_conversion_rate_pct}%).
   </li>
   <li>
-    Largest outflow concentration: <strong>{pricing_ratio_kpis[0].largest_outflow_band}</strong>
-    ({pricing_ratio_kpis[0].largest_outflow_share_percent}% of all move-outs).
+    Largest application segment: <strong>{segment_share_kpis[0].largest_segment}</strong>
+    ({segment_share_kpis[0].largest_segment_applications} applications).
   </li>
 </ul>
 
-## Rent-Band Risk Map (Exposure vs Replacement)
+<Note>
+Time basis: latest monthly `period_start` from `funnel_application_to_movein_segment_share`.
+Freshness: KPI block follows `funnel_application_to_movein_segment_share.updated_at` at source refresh.
+</Note>
+
+## Municipality Segment Parity (Applications vs Move-ins)
 
 <ECharts
-  data={rent_band_ratio_profile}
+  data={municipality_pie}
   config={{
-    title: { text: 'Bubble size = move-out volume; Y axis = replacement rate', left: 'center' },
+    title: [
+      { text: 'Application Share %', left: '25%', top: 0, textAlign: 'center' },
+      { text: 'Move-in Share %', left: '75%', top: 0, textAlign: 'center' }
+    ],
     tooltip: { trigger: 'item' },
-    xAxis: { type: 'value', name: 'Move-out Share (%)', min: 0, max: 40 },
-    yAxis: { type: 'value', name: 'Replacement Rate (%)', min: 0, max: 110 },
+    legend: { type: 'scroll', bottom: 0 },
     series: [
       {
-        type: 'scatter',
-        data: rent_band_ratio_profile.map((d) => ({
-          name: d.rent_band,
-          value: [d.moveout_share_percent, d.replacement_rate_percent, d.bubble_size],
-          itemStyle: {
-            color:
-              d.replacement_rate_percent >= 80
-                ? '#1a9850'
-                : d.replacement_rate_percent >= 60
-                ? '#91cf60'
-                : d.replacement_rate_percent >= 40
-                ? '#fee08b'
-                : d.replacement_rate_percent >= 20
-                ? '#fc8d59'
-                : '#d73027'
-          }
-        })),
-        symbolSize: (v) => v[2],
-        label: { show: true, formatter: '{b}', position: 'top' },
-        markLine: {
-          symbol: 'none',
-          lineStyle: { type: 'dashed', color: '#666' },
-          data: [{ yAxis: 100, name: 'Full replacement' }, { yAxis: 60, name: 'Watchline' }]
-        }
+        type: 'pie',
+        radius: '52%',
+        center: ['25%', '55%'],
+        data: municipality_pie.map((d) => ({ name: d.segment_value, value: d.application_share_pct }))
+      },
+      {
+        type: 'pie',
+        radius: '52%',
+        center: ['75%', '55%'],
+        data: municipality_pie.map((d) => ({ name: d.segment_value, value: d.movein_share_pct }))
       }
     ]
   }}
 />
 
-## Rent-Band Risk Heatmap (Higher = Worse)
+<DataTable data={municipality_pie} downloadable={true} />
+
+<Note>
+Time basis: latest monthly segment shares for `segment_type = municipality`.
+Freshness: municipality parity updates with the newest segment-share `updated_at` records.
+</Note>
+
+## Nationality Segment Parity (Applications vs Move-ins)
 
 <ECharts
-  data={rent_band_risk_heatmap}
+  data={nationality_pie}
   config={{
-    tooltip: { position: 'top' },
-    grid: { top: '15%', left: '10%', right: '6%', height: '60%' },
-    xAxis: {
-      type: 'category',
-      data: rent_band_ratio_profile.map((d) => d.rent_band)
-    },
-    yAxis: {
-      type: 'category',
-      data: ['Replacement Gap %', 'Net Churn %', 'Move-out Share %']
-    },
-    visualMap: {
-      min: 0,
-      max: 100,
-      calculable: true,
-      orient: 'horizontal',
-      left: 'center',
-      bottom: 0,
-      inRange: { color: ['#1a9850', '#fee08b', '#d73027'] }
-    },
+    title: [
+      { text: 'Application Share %', left: '25%', top: 0, textAlign: 'center' },
+      { text: 'Move-in Share %', left: '75%', top: 0, textAlign: 'center' }
+    ],
+    tooltip: { trigger: 'item' },
+    legend: { type: 'scroll', bottom: 0 },
     series: [
       {
-        name: 'Risk',
-        type: 'heatmap',
-        data: rent_band_risk_heatmap.map((d) => [d.rent_band, d.metric_label, d.metric_value]),
-        label: { show: true, formatter: '{c}%' }
+        type: 'pie',
+        radius: '52%',
+        center: ['25%', '55%'],
+        data: nationality_pie.map((d) => ({ name: d.segment_value, value: d.application_share_pct }))
+      },
+      {
+        type: 'pie',
+        radius: '52%',
+        center: ['75%', '55%'],
+        data: nationality_pie.map((d) => ({ name: d.segment_value, value: d.movein_share_pct }))
       }
     ]
   }}
 />
 
-## Portfolio Mix Shift (Move-in Share vs Move-out Share)
+<DataTable data={nationality_pie} downloadable={true} />
 
-<ECharts
-  data={rent_band_ratio_profile}
-  config={{
-    legend: { bottom: 0 },
-    tooltip: {},
-    radar: {
-      indicator: rent_band_ratio_profile.map((d) => ({
-        name: d.rent_band,
-        max: 40
-      })),
-      radius: '62%'
-    },
-    series: [
-      {
-        type: 'radar',
-        data: [
-          {
-            name: 'Move-in Share %',
-            value: rent_band_ratio_profile.map((d) => d.movein_share_percent)
-          },
-          {
-            name: 'Move-out Share %',
-            value: rent_band_ratio_profile.map((d) => d.moveout_share_percent)
-          }
-        ]
-      }
-    ]
-  }}
+<Note>
+Time basis: latest monthly segment shares for `segment_type = nationality`.
+Freshness: nationality parity updates with the newest segment-share `updated_at` records.
+</Note>
+
+## Monthly Conversion Trend
+
+<LineChart
+  data={conversion_trend_monthly_total}
+  x=period_start
+  y=conversion_rate_pct
+  title="Portfolio Conversion Rate (Monthly)"
+  yFmt="num2"
 />
 
-## Rent-Band Ratio Table
+<BarChart
+  data={conversion_trend_monthly}
+  x=period_start
+  y=application_count
+  series=tenant_type
+  type="stacked"
+  title="Monthly Applications by tenant_type"
+/>
 
-<DataTable data={rent_band_ratio_profile} downloadable={true} />
+<LineChart
+  data={conversion_trend_monthly}
+  x=period_start
+  y=conversion_rate_pct
+  series=tenant_type
+  title="Monthly Conversion Rate by tenant_type"
+  yFmt="num2"
+/>
 
-## Current Occupancy by Rent Band (Rooms)
+<Note>
+Time basis: monthly `period_start` rows from `funnel_application_to_movein_periodized`.
+Freshness: trend sections inherit periodized funnel freshness via source `updated_at`.
+</Note>
 
-<DataTable data={occ_rent_band_current} downloadable={true} />
+## Segment Pressure Ranking
 
-## Current Occupancy by Floor (Rooms)
+<BarChart
+  data={segment_pressure_ranking}
+  x=segment_label
+  y=conversion_rate_pct
+  swapXY={true}
+  chartAreaHeight={900}
+  title="Lowest Conversion Segments (12-Month Window)"
+/>
 
-<DataTable data={occ_floor_current} downloadable={true} />
+<DataTable data={segment_pressure_ranking} downloadable={true} />
 
-## Property Risk Ranking
+<Note>
+Time basis: rolling 12-month monthly window from `funnel_application_to_movein_segment_share`.
+Freshness: rankings reflect the latest monthly segment-share refresh.
+</Note>
 
-<DataTable data={property_risk} downloadable={true} />
+## Segment Share Detail
 
-## Price Gap Opportunities
+<DataTable data={segment_share_detail} downloadable={true} />
 
-<DataTable data={property_price_gap} downloadable={true} />
-
-## Recommended Actions
-
-<ul>
-  {#each pricing_bullets as b}
-    <li>
-      <strong>{b.theme}</strong>: {b.observation} ({b.evidence_metric})<br />
-      {b.recommended_action}
-    </li>
-  {/each}
-</ul>
+<Note>
+Time basis: weekly and monthly `period_start` rows from segment-share contract output.
+Freshness: row-level recency is visible in `segment_share_detail.updated_at`.
+</Note>

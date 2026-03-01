@@ -38,6 +38,11 @@ from aurora_gold.occupancy_property_map_latest
   ]}
 />
 
+<Note>
+Time basis: latest property snapshot date from `occupancy_property_map_latest.snapshot_date`.
+Freshness: map points refresh with `aurora_gold.occupancy_property_map_latest` load cadence.
+</Note>
+
 ```sql municipality_churn
 select *
 from aurora_gold.municipality_churn_weekly
@@ -111,6 +116,11 @@ limit 30
   </Tab>
 </Tabs>
 
+<Note>
+Time basis: weekly `week_start` records from `municipality_churn_weekly` over the last 12 weeks.
+Freshness: municipality hotspot bars depend on the newest `aurora_gold.municipality_churn_weekly` rows.
+</Note>
+
 ## Property hotspots (weekly, last 12 weeks)
 
 <Tabs background="true">
@@ -146,10 +156,25 @@ limit 30
   </Tab>
 </Tabs>
 
+<Note>
+Time basis: weekly `week_start` records from `property_churn_weekly` over the last 12 weeks.
+Freshness: property hotspot bars depend on the newest `aurora_gold.property_churn_weekly` rows.
+</Note>
+
 ## Municipality weekly detail
 
-<DataTable data={municipality_churn} />
+<DataTable data={municipality_churn} downloadable={true} />
+
+<Note>
+Time basis: row-level weekly detail from `municipality_churn_weekly.week_start`.
+Freshness: table reflects latest loaded municipality churn rows from `aurora_gold`.
+</Note>
 
 ## Property weekly detail
 
-<DataTable data={property_churn} />
+<DataTable data={property_churn} downloadable={true} />
+
+<Note>
+Time basis: row-level weekly detail from `property_churn_weekly.week_start`.
+Freshness: table reflects latest loaded property churn rows from `aurora_gold`.
+</Note>
