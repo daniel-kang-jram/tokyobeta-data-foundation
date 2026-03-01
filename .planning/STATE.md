@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
 status: completed
-last_updated: "2026-03-01T15:01:41Z"
+last_updated: "2026-03-01T15:39:19Z"
 progress:
   total_phases: 1
   completed_phases: 1
-  total_plans: 4
-  completed_plans: 4
+  total_plans: 5
+  completed_plans: 5
 ---
 
 # Project State
@@ -19,8 +19,8 @@ progress:
 ## Current Phase
 - `1` Evidence Gold KPI-Centric Refresh
 - Status: completed
-- Plan progress: `4/4` completed
-- Last completed plan: `01-04-PLAN.md`
+- Plan progress: `5/5` completed
+- Last completed plan: `01-05-PLAN.md`
 - Next plan: `None (phase complete)`
 
 ## Decisions
@@ -36,6 +36,8 @@ progress:
 - [Phase 01]: Use aurora_gold.funnel_application_to_movein_segment_share as pricing parity contract and remove snapshot_csv dependencies.
 - [Phase 01]: Implement move profile period controls with daily analysis_recent, weekly move_events_weekly, and monthly move_profile sources.
 - [Phase 01]: Require section-level Time basis/Freshness labels and CSV-downloadable drilldown tables on parity pages.
+- [Phase 01]: Define gold.kpi_month_end_metrics as the source-of-truth owner for kpi_definition_version.
+- [Phase 01]: Require deployment verification to confirm gold.kpi_month_end_metrics and gold.kpi_reference_trace expose the same version token.
 
 ## Performance Metrics
 | Phase | Plan | Duration | Tasks | Files |
@@ -44,10 +46,11 @@ progress:
 | 01 | 01 | 11 min | 3 | 7 |
 | 01 | 03 | 9 min | 3 | 8 |
 | 01 | 04 | 9 min | 3 | 5 |
+| 01 | 05 | 3 min | 1 | 1 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-01T15:01:41Z
-- Stopped At: Completed 01-04-PLAN.md
+- Updated: 2026-03-01T15:39:19Z
+- Stopped At: Completed 01-05-PLAN.md
