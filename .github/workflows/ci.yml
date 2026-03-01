@@ -202,7 +202,7 @@ jobs:
         if: steps.evidence_changes.outputs.changed == 'true'
         run: |
           node scripts/evidence/verify_route_contract.mjs --build-dir evidence/build --routes occupancy moveins moveouts geography pricing
-      - name: Run Evidence guardrail tests
+      - name: Run Evidence release guardrail tests
         if: steps.evidence_changes.outputs.changed == 'true'
         run: |
           python3 -m pytest scripts/tests/test_evidence_auth_asset_guard.py scripts/tests/test_evidence_release_guardrails.py -q

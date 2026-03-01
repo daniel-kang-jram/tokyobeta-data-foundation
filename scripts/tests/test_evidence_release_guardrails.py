@@ -15,6 +15,15 @@ def test_ci_runs_evidence_guardrail_tests() -> None:
     ) in source
 
 
+def test_ci_runs_smoke_contract_drift_test() -> None:
+    """CI must keep smoke contract drift checks in the Evidence guardrail flow."""
+    source = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    assert (
+        "python3 -m pytest scripts/tests/test_evidence_authenticated_smoke_contract.py -q"
+    ) in source
+
+
 def test_ci_runs_route_contract_verifier() -> None:
     """CI Evidence job must run route contract checks after build."""
     source = CI_WORKFLOW.read_text(encoding="utf-8")
