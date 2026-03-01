@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
-status: in_progress
-last_updated: "2026-03-01T14:48:57.493Z"
+status: completed
+last_updated: "2026-03-01T15:01:41Z"
 progress:
   total_phases: 1
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
 ---
 
 # Project State
@@ -18,10 +18,10 @@ progress:
 
 ## Current Phase
 - `1` Evidence Gold KPI-Centric Refresh
-- Status: in progress
-- Plan progress: `3/4` completed
-- Last completed plan: `01-03-PLAN.md`
-- Next plan: `01-04-PLAN.md`
+- Status: completed
+- Plan progress: `4/4` completed
+- Last completed plan: `01-04-PLAN.md`
+- Next plan: `None (phase complete)`
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -33,6 +33,9 @@ progress:
 - [Phase 01]: Keep Evidence wrappers as thin single-mart projections with no embedded KPI/funnel formulas.
 - [Phase 01]: Use period_grain-driven daily/weekly/monthly tabs as the user-facing funnel period control contract.
 - [Phase 01]: Require section-level Time basis/Freshness labels tied to trace/funnel freshness fields for operator-facing clarity.
+- [Phase 01]: Use aurora_gold.funnel_application_to_movein_segment_share as pricing parity contract and remove snapshot_csv dependencies.
+- [Phase 01]: Implement move profile period controls with daily analysis_recent, weekly move_events_weekly, and monthly move_profile sources.
+- [Phase 01]: Require section-level Time basis/Freshness labels and CSV-downloadable drilldown tables on parity pages.
 
 ## Performance Metrics
 | Phase | Plan | Duration | Tasks | Files |
@@ -40,10 +43,11 @@ progress:
 | 01 | 02 | 7 min | 3 | 6 |
 | 01 | 01 | 11 min | 3 | 7 |
 | 01 | 03 | 9 min | 3 | 8 |
+| 01 | 04 | 9 min | 3 | 5 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-01T14:48:06Z
-- Stopped At: Completed 01-03-PLAN.md
+- Updated: 2026-03-01T15:01:41Z
+- Stopped At: Completed 01-04-PLAN.md

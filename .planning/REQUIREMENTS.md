@@ -8,7 +8,7 @@
 - [x] `EVD-REFRESH-004` Every KPI/chart/table shows explicit time basis (`as_of_date` or period) and freshness metadata.
 - [x] `EVD-REFRESH-005` Add configurable timespan control (daily/weekly/monthly where available) for major sections.
 - [x] `EVD-REFRESH-006` Extend funnel to include application -> move-in conversion by municipality and nationality profile.
-- [ ] `EVD-REFRESH-007` Support CSV export for core analytical tables where useful for operator workflows.
+- [x] `EVD-REFRESH-007` Support CSV export for core analytical tables where useful for operator workflows.
 - [x] `EVD-REFRESH-008` Add filters for corporate vs individual cohort views where distinction affects funnel interpretation.
 
 ## Data & Metric Integrity
