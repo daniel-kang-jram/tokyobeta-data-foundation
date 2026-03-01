@@ -324,11 +324,16 @@ async function authenticate(page, options) {
   }
 
   const usernameCandidates = [
+    "#u",
     'input[name="username"]',
     "#username",
+    'input[name="user"]',
+    'input[name="userid"]',
+    'input[name="user_id"]',
     'input[name="email"]',
     'input[type="email"]',
     'input[type="text"]',
+    'form input:not([type="password"])',
   ];
 
   let usernameFieldVisible = false;
