@@ -1,6 +1,6 @@
 # Deployment & Security
 
-**Last Updated:** March 1, 2026
+**Last Updated:** March 2, 2026
 
 This document covers deployment procedures, verification checklists, and the security migration roadmap.
 
@@ -145,6 +145,19 @@ NO-GO if ANY blocker is present:
 Sign-off entries are appended to this file for auditability.
 
 ### Sign-off record (latest)
+
+## Evidence Auth Smoke Sign-off
+
+- Date (UTC): 2026-03-01T19:17:27Z
+- Base URL: https://intelligence.jram.jp
+- Artifact Directory: artifacts/evidence-auth-smoke/prod-20260302-041727-after-occupancy-fix
+- Route Matrix Result: PASS (all release routes passed H1 + KPI + time-context markers)
+- Pricing Funnel Result: PASS (all four funnel markers present on `/pricing`)
+- Metadata JSON Result (`application/json` + no `/api//`): PASS (valid metadata URLs for all routes, no malformed API path)
+- Parse Error Check (`Unexpected token '<'`): PASS (no metadata parse failures in summary)
+- Decision: GO
+- Failing Criteria: N/A
+- Approver: automated smoke execution record (pending human release approval)
 
 ## Evidence Auth Smoke Sign-off
 

@@ -26,6 +26,13 @@ REQUIRED_ARTIFACT_MARKERS = (
     "network",
     "summary.json",
 )
+PRIMARY_ROUTE_PAGES = (
+    "evidence/pages/occupancy.md",
+    "evidence/pages/moveins.md",
+    "evidence/pages/moveouts.md",
+    "evidence/pages/geography.md",
+    "evidence/pages/pricing.md",
+)
 
 
 def test_smoke_script_includes_all_release_routes() -> None:
@@ -102,3 +109,13 @@ def test_smoke_script_route_results_include_deterministic_redirect_failure_field
         assert field in source
 
     assert "failed-auth-redirect" in source
+
+
+def test_primary_route_pages_include_time_context_markers_expected_by_smoke() -> None:
+    """Route pages gated by smoke must expose explicit Time basis/Freshness copy."""
+    for relative_path in PRIMARY_ROUTE_PAGES:
+        page_path = REPO_ROOT / relative_path
+        source = page_path.read_text(encoding="utf-8")
+
+        assert "Time basis:" in source, f"missing Time basis marker in {relative_path}"
+        assert "Freshness:" in source, f"missing Freshness marker in {relative_path}"

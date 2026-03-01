@@ -3,12 +3,13 @@
 ## Milestone v1.0: Evidence Gold KPI Refresh
 
 - [x] **Phase 1: Evidence Gold KPI-Centric Refresh**
+- [x] **Phase 2: Evidence dashboard authenticated UAT and release readiness**
 
 ### Phase 1: Evidence Gold KPI-Centric Refresh
 **Goal:** Deliver a production-ready, KPI-centric gold-connected Evidence dashboard that merges critical snapshot analyses and adds trustworthy KPI/funnel visibility for business operations.
 **Requirements**: [EVD-REFRESH-001], [EVD-REFRESH-002], [EVD-REFRESH-003], [EVD-REFRESH-004], [EVD-REFRESH-005], [EVD-REFRESH-006], [EVD-REFRESH-007], [EVD-REFRESH-008], [EVD-DQ-001], [EVD-DQ-002], [EVD-DQ-003], [EVD-NFR-001], [EVD-NFR-002]
 **Depends on:** None
-**Status:** Complete (updated 2002-03-01)
+**Status:** Complete (updated 2026-03-01)
 **Success Criteria:**
 1. Gold dashboard landing experience is KPI-first and usable for executive review.
 2. Snapshot core views are available in gold with documented parity gaps if any.
@@ -30,8 +31,8 @@
 **Goal:** Stabilize authenticated dashboard routing and complete production UAT so KPI-centric pages can be signed off without route or metadata regressions.
 **Requirements**: [EVD-REL-001], [EVD-REL-002], [EVD-REL-003], [EVD-REL-004], [EVD-REL-005]
 **Depends on:** Phase 1
-**Status:** In progress (NO-GO, production deploy pending as of 2026-03-01)
-**Plans:** 4/5 plans complete
+**Status:** Complete (GO sign-off recorded 2026-03-01T19:17:27Z)
+**Plans:** 5/5 plans complete
 
 **Success Criteria:**
 1. Authenticated route navigation works for all primary dashboard pages and shows route-specific content.
@@ -46,4 +47,4 @@
 | 02-02 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-02-SUMMARY.md` |
 | 02-03 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-03-SUMMARY.md` |
 | 02-04 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-04-SUMMARY.md` |
-| 02-05 | Blocked (deploy deferred) | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-05-SUMMARY.md` |
+| 02-05 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-05-SUMMARY.md` |

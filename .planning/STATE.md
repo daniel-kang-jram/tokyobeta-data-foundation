@@ -2,26 +2,25 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
-status: in_progress
-last_updated: "2026-03-01T18:41:17Z"
+status: complete
+last_updated: "2026-03-01T19:20:00Z"
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 10
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
 
 ## Current Milestone
-- `v1.0` in execution
+- `v1.0` complete
 
 ## Current Phase
-- `2` Evidence dashboard authenticated UAT and release readiness
-- Status: in progress (NO-GO, deploy pending)
-- Plan progress: `4/5` completed (`02-05` blocked)
-- Last completed plan: `02-04-PLAN.md` (Phase 2)
-- Next plan: `02-05-PLAN.md` pending production deploy + smoke rerun
+- None (all planned phases complete)
+- Last completed plan: `02-05-PLAN.md` (Phase 2)
+- Release artifact: `artifacts/evidence-auth-smoke/prod-20260302-041727-after-occupancy-fix`
+- Release decision: GO (recorded in `docs/DEPLOYMENT.md`)
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -55,6 +54,9 @@ progress:
 - [Phase 02-05]: Authenticated smoke now emits `auth_redirects`, redirect chains, and deterministic failure kinds for route-level blockers.
 - [Phase 02-05]: Production login automation supports User ID selector variants (including `#u`) used by current login UI.
 - [Phase 02-05]: Plan closed in NO-GO blocked-ready state because production deploy was deferred; do not mark Phase 2 complete yet.
+- [Phase 02-05]: CloudFront viewer-request function now rewrites extensionless Evidence routes to `/<route>/index.html` after auth validation to prevent Home fallback on deep links.
+- [Phase 02-05]: Production smoke artifact `prod-20260302-041727-after-occupancy-fix` passed all gated routes with valid metadata URLs and zero auth redirects.
+- [Phase 02-05]: Occupancy page now explicitly includes `Time basis:` and `Freshness:` markers, aligned with smoke release contracts.
 
 ## Performance Metrics
 | Phase | Plan | Duration | Tasks | Files |
@@ -68,13 +70,11 @@ progress:
 | 02 | 02 | 6 min | 3 | 3 |
 | 02 | 03 | 3 min | 3 | 4 |
 | 02 | 04 | 12 min | 3 | 4 |
+| 02 | 05 | 38 min | 4 | 5 |
 
 ## Blockers
-- Production deployment required before final GO sign-off:
-  - deploy latest Evidence build to production
-  - rerun authenticated smoke and verify all route/metadata checks pass
-  - append GO sign-off entry in `docs/DEPLOYMENT.md`
+- None
 
 ## Session
-- Updated: 2026-03-01T18:41:17Z
-- Stopped At: Blocked on deploy-deferred closure for 02-05-PLAN.md
+- Updated: 2026-03-01T19:20:00Z
+- Stopped At: Milestone complete after production GO sign-off

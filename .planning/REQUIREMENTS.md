@@ -27,8 +27,8 @@
 
 ## Release Readiness & UAT
 
-- [ ] `EVD-REL-001` Authenticated navigation to `/occupancy`, `/moveins`, `/moveouts`, `/geography`, and `/pricing` must render route-specific content (not Home fallback). (Pending production deploy + green smoke rerun)
+- [x] `EVD-REL-001` Authenticated navigation to `/occupancy`, `/moveins`, `/moveouts`, `/geography`, and `/pricing` must render route-specific content (not Home fallback). (Verified by production smoke artifact `artifacts/evidence-auth-smoke/prod-20260302-041727-after-occupancy-fix`)
 - [x] `EVD-REL-002` Client-side route metadata fetches must resolve to valid JSON (`/api/<page>/evidencemeta.json`) with no malformed double-slash API paths.
 - [x] `EVD-REL-003` Production smoke validation must include automated Playwright login + route checks with captured artifacts.
-- [ ] `EVD-REL-004` Post-login dashboard pages must expose the intended KPI/time-context/funnel features before sign-off. (Pending production deploy + green smoke rerun)
+- [x] `EVD-REL-004` Post-login dashboard pages must expose the intended KPI/time-context/funnel features before sign-off. (Verified by production smoke artifact `artifacts/evidence-auth-smoke/prod-20260302-041727-after-occupancy-fix`)
 - [x] `EVD-REL-005` Deployment/runbook docs must include rollback and verification steps for Evidence route integrity and auth behavior.
