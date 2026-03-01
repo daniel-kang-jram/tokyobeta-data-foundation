@@ -25,6 +25,37 @@ The occupancy KPI pipeline is now **fully integrated into the `gold_transformer`
 The dashboard KPI cards now read from `gold.kpi_month_end_metrics` and metadata from
 `gold.kpi_reference_trace`.
 
+### KPI Definition Version Ownership
+- `gold.kpi_month_end_metrics` is the source-of-truth owner of KPI formulas and emits
+  `kpi_definition_version` as the canonical version token.
+- `gold.kpi_reference_trace` carries the same `kpi_definition_version` for dashboard
+  metadata/trace checks (freshness and time-basis visibility).
+- Deployment verification must confirm version alignment across both models before release
+  sign-off:
+
+```sql
+SELECT
+    metrics.kpi_definition_version AS metrics_version,
+    trace.kpi_definition_version AS trace_version,
+    CASE
+        WHEN metrics.kpi_definition_version = trace.kpi_definition_version
+            THEN 'aligned'
+        ELSE 'mismatch'
+    END AS deployment_verification
+FROM (
+    SELECT kpi_definition_version
+    FROM gold.kpi_month_end_metrics
+    ORDER BY as_of_date DESC
+    LIMIT 1
+) metrics
+CROSS JOIN (
+    SELECT kpi_definition_version
+    FROM gold.kpi_reference_trace
+    ORDER BY trace_generated_at DESC
+    LIMIT 1
+) trace;
+```
+
 ### Same-Day Move-Out Policy
 - Policy token: `count_moveout_room_at_0000_exclude_same_day_moveins`
 - 00:00 occupancy (`occupancy_room_count_0000`) excludes same-day move-ins.
