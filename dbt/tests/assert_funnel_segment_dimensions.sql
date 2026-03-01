@@ -1,7 +1,7 @@
 {{ config(severity='error') }}
 
--- Test: Ensure segmented funnel outputs always include required dimensions
--- and expose daily/weekly/monthly grains whenever source inquiries exist.
+-- Test: Ensure segmented funnel outputs include required dimensions and
+-- expose daily/weekly/monthly grains whenever source inquiries exist.
 
 WITH periodized AS (
     SELECT
@@ -11,6 +11,16 @@ WITH periodized AS (
         nationality,
         tenant_type
     FROM {{ ref('funnel_application_to_movein_periodized') }}
+),
+
+segment_share AS (
+    SELECT
+        period_grain,
+        period_start,
+        tenant_type,
+        segment_type,
+        segment_value
+    FROM {{ ref('funnel_application_to_movein_segment_share') }}
 ),
 
 source_activity AS (
@@ -32,6 +42,21 @@ invalid_dimensions AS (
        OR TRIM(municipality) = ''
        OR nationality IS NULL
        OR TRIM(nationality) = ''
+       OR tenant_type NOT IN ('individual', 'corporate', 'unknown')
+),
+
+invalid_segment_dimensions AS (
+    SELECT
+        period_grain,
+        period_start,
+        segment_value AS municipality,
+        segment_type AS nationality,
+        tenant_type,
+        'invalid_segment_dimension' AS failure_reason
+    FROM segment_share
+    WHERE segment_type NOT IN ('municipality', 'nationality')
+       OR segment_value IS NULL
+       OR TRIM(segment_value) = ''
        OR tenant_type NOT IN ('individual', 'corporate', 'unknown')
 ),
 
@@ -61,6 +86,11 @@ missing_grains AS (
 
 SELECT *
 FROM invalid_dimensions
+
+UNION ALL
+
+SELECT *
+FROM invalid_segment_dimensions
 
 UNION ALL
 

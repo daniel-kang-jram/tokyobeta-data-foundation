@@ -100,3 +100,77 @@ models:
       - dbt_utils.expression_is_true:
           expression: "application_to_movein_rate >= 0 AND application_to_movein_rate <= 1"
           severity: error
+
+  - name: funnel_application_to_movein_segment_share
+    description: |
+      Segment-share output for pie/segment visuals by municipality and nationality.
+      Grain: (period_grain, period_start, tenant_type, segment_type, segment_value).
+    config:
+      schema: gold
+    columns:
+      - name: period_grain
+        description: Requested aggregation grain for the periodized view.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['daily', 'weekly', 'monthly']
+      - name: period_start
+        description: Date anchor for the selected period grain.
+        tests:
+          - not_null
+      - name: tenant_type
+        description: Tenant cohort bucket.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['individual', 'corporate', 'unknown']
+      - name: segment_type
+        description: Segment dimension represented in this row.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['municipality', 'nationality']
+      - name: segment_value
+        description: Segment member value within the chosen segment_type.
+        tests:
+          - not_null
+      - name: application_count
+        description: Applications total for this segment member.
+        tests:
+          - not_null
+      - name: movein_count
+        description: Converted move-ins total for this segment member.
+        tests:
+          - not_null
+      - name: application_share
+        description: Share of applications within the segment partition.
+        tests:
+          - not_null
+      - name: movein_share
+        description: Share of move-ins within the segment partition.
+        tests:
+          - not_null
+      - name: application_to_movein_rate
+        description: Conversion rate from applications to move-ins.
+        tests:
+          - not_null
+      - name: segment_rank
+        description: Rank of segment member by application volume.
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            ['period_grain', 'period_start', 'tenant_type', 'segment_type', 'segment_value']
+      - dbt_utils.expression_is_true:
+          expression: "application_count >= 0 AND movein_count >= 0 AND movein_count <= application_count"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "application_share >= 0 AND application_share <= 1"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "movein_share >= 0 AND movein_share <= 1"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "application_to_movein_rate >= 0 AND application_to_movein_rate <= 1"
+          severity: error
