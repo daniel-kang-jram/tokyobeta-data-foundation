@@ -229,6 +229,62 @@ Expected output:
 - `pricing.md`, `moveins.md`, and `moveouts.md` must always return at least one downloadable table each.
 - `geography.md` detail tables should remain exportable for incident triage.
 
+### Authenticated production smoke runbook (release gate)
+
+Use this flow before any GO release decision for `https://intelligence.jram.jp`.
+
+#### 1. Run authenticated production smoke and capture artifacts
+```bash
+cd /Users/danielkang/tokyobeta-data-consolidation
+RUN_ARTIFACT_DIR="artifacts/evidence-auth-smoke/prod-$(date +%Y%m%d-%H%M%S)"
+npm --yes --package=playwright exec -- \
+  node scripts/evidence/evidence_auth_smoke.mjs \
+  --base-url https://intelligence.jram.jp \
+  --username "$EVIDENCE_AUTH_USERNAME" \
+  --password "$EVIDENCE_AUTH_PASSWORD" \
+  --artifact-dir "$RUN_ARTIFACT_DIR"
+```
+
+#### 2. Print deterministic route matrix and verify pricing funnel markers
+```bash
+npm --yes --package=playwright exec -- \
+  node scripts/evidence/evidence_auth_smoke.mjs \
+  --dry-run \
+  --base-url https://intelligence.jram.jp \
+  --artifact-dir "$RUN_ARTIFACT_DIR/dryrun" \
+  --print-route-matrix > "$RUN_ARTIFACT_DIR/route-matrix.json"
+
+jq -e '.routes.pricing.funnel_markers | index("Overall Conversion Rate (%)") and index("Municipality Segment Parity (Applications vs Move-ins)") and index("Nationality Segment Parity (Applications vs Move-ins)") and index("Monthly Conversion Trend")' \
+  "$RUN_ARTIFACT_DIR/route-matrix.json"
+```
+
+#### 3. Review required artifacts and blockers
+```bash
+test -f "$RUN_ARTIFACT_DIR/summary.json"
+test -f "$RUN_ARTIFACT_DIR/console_logs.json"
+test -f "$RUN_ARTIFACT_DIR/network_logs.json"
+ls "$RUN_ARTIFACT_DIR/screenshots" | wc -l
+```
+
+Block release and trigger rollback if any blocker is present:
+- route marker mismatch (H1, KPI marker, time-context marker, or pricing funnel marker)
+- `KPI Landing (Gold)` appears on non-home routes
+- metadata response is not `application/json` or any `/api//` request appears
+- console/network includes `Unexpected token '<'` metadata parse errors
+- artifact set is incomplete (`summary.json`, console/network logs, per-route screenshots)
+
+#### 4. Rollback trigger procedure (NO-GO only)
+1. Mark decision as `NO-GO` in `docs/DEPLOYMENT.md` sign-off record with failing criteria.
+2. Trigger the last-known-good Evidence refresh pipeline execution.
+3. Re-run authenticated smoke and confirm all blockers are cleared before any new GO decision.
+
+Pipeline trigger template:
+```bash
+aws codepipeline start-pipeline-execution \
+  --name "<last-known-good-evidence-refresh-pipeline>" \
+  --profile gghouse
+```
+
 ### Security & Access
 - Use a dedicated read-only DB user limited to `gold.*`.
 - Keep Aurora credentials in `.env` (not committed).
