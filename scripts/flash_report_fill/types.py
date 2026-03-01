@@ -66,3 +66,12 @@ class RunContext:
     feb_end_jst: datetime
     mar_start_jst: datetime
     mar_end_jst: datetime
+
+
+@dataclass(frozen=True)
+class FlashReportQueryConfig:
+    """Runtime options controlling flash-report query behavior."""
+
+    d5_mode: str = "fact_aligned"
+    movein_prediction_date_column: str = "original_movein_date"
+    moveout_prediction_date_column: str = "moveout_date"

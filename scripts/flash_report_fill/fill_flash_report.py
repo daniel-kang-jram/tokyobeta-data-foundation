@@ -6,11 +6,12 @@ import csv
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 from zoneinfo import ZoneInfo
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
+from openpyxl import load_workbook
 import pymysql
 
 if __package__ in (None, ""):  # pragma: no cover
@@ -20,11 +21,13 @@ if __package__ in (None, ""):  # pragma: no cover
 
 from scripts.flash_report_fill.checks import run_anomaly_checks
 from scripts.flash_report_fill.excel_writer import (
-    FORMULA_PROTECTED_CELLS,
+    UPDATED_SHEET_NAMES,
     get_formula_cells,
+    get_formula_protected_cells,
     write_flash_report_cells,
 )
 from scripts.flash_report_fill.reconciliation import (
+    build_d5_discrepancy_records,
     build_reconciliation_records,
     metrics_records_to_csv_rows,
     reconciliation_records_to_csv_rows,
@@ -33,12 +36,18 @@ from scripts.flash_report_fill.sql import (
     ACTIVE_OCCUPANCY_STATUSES,
     COMPLETED_MOVEIN_STATUSES,
     COMPLETED_MOVEOUT_STATUSES,
+    DEFAULT_MOVEIN_PREDICTION_COLUMN,
+    DEFAULT_MOVEOUT_PREDICTION_COLUMN,
+    D5_MODE_FACT_ALIGNED,
     INDIVIDUAL_CODES,
     PLANNED_MOVEIN_STATUSES,
     PLANNED_MOVEOUT_STATUSES,
+    SUPPORTED_D5_MODES,
+    SUPPORTED_MOVEIN_PREDICTION_COLUMNS,
+    SUPPORTED_MOVEOUT_PREDICTION_COLUMNS,
     build_metric_queries,
 )
-from scripts.flash_report_fill.types import MetricRecord, QuerySpec, WarningRecord
+from scripts.flash_report_fill.types import FlashReportQueryConfig, MetricRecord, QuerySpec, WarningRecord
 
 
 JST = ZoneInfo("Asia/Tokyo")
@@ -48,8 +57,10 @@ DEFAULT_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-1:343881458651:secret:
 DEFAULT_DB_HOST = "127.0.0.1"
 DEFAULT_DB_PORT = 3306
 DEFAULT_DB_NAME = "tokyobeta"
+DEFAULT_D5_BENCHMARK = 11271
+DEFAULT_D5_TOLERANCE = 10
 
-METRIC_TO_CELLS = {
+LEGACY_METRIC_TO_CELLS = {
     "d5_occupied_rooms": [("D5", "all", "2026-02")],
     "feb_completed_moveins": [("D11", "individual", "2026-02"), ("E11", "corporate", "2026-02")],
     "feb_planned_moveins": [("D12", "individual", "2026-02"), ("E12", "corporate", "2026-02")],
@@ -60,6 +71,11 @@ METRIC_TO_CELLS = {
     "mar_planned_moveouts": [("D17", "individual", "2026-03"), ("E17", "corporate", "2026-03")],
 }
 
+UPDATED_METRIC_TO_CELLS = {
+    **LEGACY_METRIC_TO_CELLS,
+    "mar_planned_moveins": [],
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fill February Occupancy Flash Report from Aurora")
@@ -67,10 +83,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sheet-name", default="Flash Report（2月）", help="Target sheet name")
     parser.add_argument("--output-dir", default=None, help="Output directory")
     parser.add_argument("--snapshot-start-jst", default="2026-02-01 00:00:00 JST")
-    parser.add_argument("--snapshot-asof-jst", default="2026-02-26 05:00:00 JST")
+    parser.add_argument("--snapshot-asof-jst", default="2026-02-28 05:00:00 JST")
     parser.add_argument("--feb-end-jst", default="2026-02-28 23:59:59 JST")
     parser.add_argument("--mar-start-jst", default="2026-03-01 00:00:00 JST")
     parser.add_argument("--mar-end-jst", default="2026-03-31 23:59:59 JST")
+    parser.add_argument("--d5-mode", default=D5_MODE_FACT_ALIGNED, choices=SUPPORTED_D5_MODES)
+    parser.add_argument(
+        "--movein-prediction-date-column",
+        default=DEFAULT_MOVEIN_PREDICTION_COLUMN,
+        choices=SUPPORTED_MOVEIN_PREDICTION_COLUMNS,
+    )
+    parser.add_argument(
+        "--moveout-prediction-date-column",
+        default=DEFAULT_MOVEOUT_PREDICTION_COLUMN,
+        choices=SUPPORTED_MOVEOUT_PREDICTION_COLUMNS,
+    )
+    parser.add_argument("--d5-benchmark", type=int, default=DEFAULT_D5_BENCHMARK)
+    parser.add_argument("--d5-tolerance", type=int, default=DEFAULT_D5_TOLERANCE)
     parser.add_argument("--aws-profile", default="gghouse")
     parser.add_argument("--aws-region", default="ap-northeast-1")
     parser.add_argument("--db-host", default=DEFAULT_DB_HOST)
@@ -165,13 +194,14 @@ def write_csv(path: Path, rows: List[Dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
-def print_schema_mapping() -> None:
+def print_schema_mapping(query_config: FlashReportQueryConfig, sheet_name: str) -> None:
     print("=== SCHEMA MAPPING ===")
     print("source tables: staging.movings, staging.tenants, staging.rooms, staging.apartments")
     print("contract type: staging.movings.moving_agreement_type")
-    print("move-in date: staging.movings.movein_date")
+    print("move-in date (completed): staging.movings.movein_date")
+    print(f"move-in date (prediction): staging.movings.{query_config.movein_prediction_date_column}")
     print("completed move-out date: staging.movings.moveout_plans_date (actual)")
-    print("planned move-out date: staging.movings.moveout_date (scheduled/final rent date)")
+    print(f"planned move-out date: staging.movings.{query_config.moveout_prediction_date_column}")
     print(
         "status sets: "
         f"active={ACTIVE_OCCUPANCY_STATUSES}, "
@@ -180,6 +210,8 @@ def print_schema_mapping() -> None:
         f"completed_moveout={COMPLETED_MOVEOUT_STATUSES}, "
         f"planned_moveout={PLANNED_MOVEOUT_STATUSES}"
     )
+    print(f"d5 mode: {query_config.d5_mode} (join=movings.tenant_id -> tenants.id)")
+    print(f"target sheet: {sheet_name}")
     print(f"contract split: individual={INDIVIDUAL_CODES}, corporate=(2, 3), unknown=excluded")
     print("======================")
 
@@ -196,6 +228,26 @@ def _fetch_total_rooms(cursor) -> int:
     cursor.execute("SELECT COUNT(*) AS total_rooms FROM staging.rooms")
     row = cursor.fetchone() or {}
     return int(row.get("total_rooms", 0))
+
+
+def _resolve_sheet_name(template_path: Path, requested_sheet_name: str) -> str:
+    workbook = load_workbook(template_path, read_only=True, data_only=False)
+    try:
+        if requested_sheet_name in workbook.sheetnames:
+            return requested_sheet_name
+        if requested_sheet_name == "Flash Report（2月）":
+            for candidate in ("Flash Report（2月28日）", "Flash Report（3月～）"):
+                if candidate in workbook.sheetnames:
+                    return candidate
+    finally:
+        workbook.close()
+    raise ValueError(f"Sheet not found in template: {requested_sheet_name}")
+
+
+def _metric_to_cells_for_sheet(sheet_name: str) -> Dict[str, List[Tuple[str, str, str]]]:
+    if sheet_name in UPDATED_SHEET_NAMES:
+        return UPDATED_METRIC_TO_CELLS
+    return LEGACY_METRIC_TO_CELLS
 
 
 def main() -> int:
@@ -226,7 +278,14 @@ def main() -> int:
     metrics_csv = output_dir / f"flash_metrics_{ts_tag}.csv"
     recon_csv = output_dir / f"flash_reconciliation_{ts_tag}.csv"
 
-    print_schema_mapping()
+    sheet_name = _resolve_sheet_name(template_path, args.sheet_name)
+    query_config = FlashReportQueryConfig(
+        d5_mode=args.d5_mode,
+        movein_prediction_date_column=args.movein_prediction_date_column,
+        moveout_prediction_date_column=args.moveout_prediction_date_column,
+    )
+
+    print_schema_mapping(query_config, sheet_name)
     print(f"template_path={template_path}")
     print(f"db_host={args.db_host}:{args.db_port}")
     print(f"snapshot_start={params['snapshot_start']}")
@@ -237,23 +296,27 @@ def main() -> int:
     metric_records: List[MetricRecord] = []
     warnings: List[WarningRecord] = []
     cell_values: Dict[str, int] = {}
+    metric_to_cells = _metric_to_cells_for_sheet(sheet_name)
 
     with open_connection(args, username, password) as connection:
         cursor = connection.cursor()
 
-        queries = build_metric_queries()
+        queries = build_metric_queries(query_config)
         for metric_id, spec in queries.items():
-            result = execute_metric_query(cursor, spec, params)
+            target_cells = metric_to_cells.get(metric_id, [])
+            if not target_cells:
+                continue
 
+            result = execute_metric_query(cursor, spec, params)
             if spec.result_mode == "scalar":
                 scalar_value = int(result)
-                for cell, tenant_type, month in METRIC_TO_CELLS[metric_id]:
+                for cell, tenant_type, month in target_cells:
                     cell_values[cell] = scalar_value
                     window_start, window_end = _window_for_metric(metric_id, params)
                     metric_records.append(
                         MetricRecord(
                             metric_id=metric_id,
-                            sheet=args.sheet_name,
+                            sheet=sheet_name,
                             cell=cell,
                             value=scalar_value,
                             month=month,
@@ -279,14 +342,14 @@ def main() -> int:
                     )
                 )
 
-            for cell, tenant_type, month in METRIC_TO_CELLS[metric_id]:
+            for cell, tenant_type, month in target_cells:
                 value = int(split_result.get(tenant_type, 0))
                 cell_values[cell] = value
                 window_start, window_end = _window_for_metric(metric_id, params)
                 metric_records.append(
                     MetricRecord(
                         metric_id=metric_id,
-                        sheet=args.sheet_name,
+                        sheet=sheet_name,
                         cell=cell,
                         value=value,
                         month=month,
@@ -326,6 +389,15 @@ def main() -> int:
             mar_start_date=mar_start.date(),
             mar_end_date=mar_end.date(),
         )
+        d5_recon_records, d5_warnings = build_d5_discrepancy_records(
+            cursor=cursor,
+            snapshot_start_ts=params["snapshot_start"],
+            snapshot_start_date=snapshot_start.date(),
+            benchmark_value=args.d5_benchmark,
+            tolerance=args.d5_tolerance,
+        )
+        recon_records.extend(d5_recon_records)
+        warnings.extend(d5_warnings)
 
     metrics_rows = metrics_records_to_csv_rows(metric_records)
     write_csv(metrics_csv, metrics_rows)
@@ -340,14 +412,15 @@ def main() -> int:
             print(f"wrote {flags_csv}")
 
     if not args.check_only:
-        before_formulas = get_formula_cells(template_path, args.sheet_name, FORMULA_PROTECTED_CELLS)
+        formula_protected_cells = get_formula_protected_cells(sheet_name)
+        before_formulas = get_formula_cells(template_path, sheet_name, sorted(formula_protected_cells))
         write_flash_report_cells(
             template_path=template_path,
             output_path=output_xlsx,
-            sheet_name=args.sheet_name,
+            sheet_name=sheet_name,
             values=cell_values,
         )
-        after_formulas = get_formula_cells(output_xlsx, args.sheet_name, FORMULA_PROTECTED_CELLS)
+        after_formulas = get_formula_cells(output_xlsx, sheet_name, sorted(formula_protected_cells))
         if before_formulas != after_formulas:
             raise RuntimeError("Formula-protected cells changed unexpectedly.")
         print(f"wrote {output_xlsx}")

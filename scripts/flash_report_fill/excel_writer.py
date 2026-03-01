@@ -6,7 +6,7 @@ from typing import Dict, Iterable
 from openpyxl import load_workbook
 
 
-ALLOWED_INPUT_CELLS = {
+LEGACY_ALLOWED_INPUT_CELLS = {
     "D5",
     "D11",
     "E11",
@@ -24,7 +24,7 @@ ALLOWED_INPUT_CELLS = {
     "E17",
 }
 
-FORMULA_PROTECTED_CELLS = {
+LEGACY_FORMULA_PROTECTED_CELLS = {
     "E5",
     "H9",
     "H10",
@@ -41,6 +41,43 @@ FORMULA_PROTECTED_CELLS = {
     "E29",
 }
 
+UPDATED_FORMULA_PROTECTED_CELLS = {
+    "E5",
+    "I9",
+    "I10",
+    "I11",
+    "I12",
+    "I13",
+    "I14",
+    "I15",
+    "D21",
+    "E21",
+    "D25",
+    "E25",
+    "D29",
+    "E29",
+}
+
+UPDATED_SHEET_NAMES = {"Flash Report（2月28日）", "Flash Report（3月～）"}
+
+# Backward-compatible defaults for callers/tests that still import these names.
+ALLOWED_INPUT_CELLS = LEGACY_ALLOWED_INPUT_CELLS
+FORMULA_PROTECTED_CELLS = LEGACY_FORMULA_PROTECTED_CELLS
+
+
+def get_formula_protected_cells(sheet_name: str) -> set[str]:
+    """Return formula-protected cells for the selected workbook sheet profile."""
+    if sheet_name in UPDATED_SHEET_NAMES:
+        return set(UPDATED_FORMULA_PROTECTED_CELLS)
+    return set(LEGACY_FORMULA_PROTECTED_CELLS)
+
+
+def get_allowed_input_cells(sheet_name: str) -> set[str]:
+    """Return editable input cells for the selected workbook sheet profile."""
+    if sheet_name in UPDATED_SHEET_NAMES:
+        return set(LEGACY_ALLOWED_INPUT_CELLS)
+    return set(LEGACY_ALLOWED_INPUT_CELLS)
+
 
 def write_flash_report_cells(
     template_path: Path,
@@ -49,11 +86,14 @@ def write_flash_report_cells(
     values: Dict[str, int],
 ) -> None:
     """Write report input cells only, preserving formula-protected cells."""
-    disallowed = sorted(set(values) - ALLOWED_INPUT_CELLS)
+    allowed_input_cells = get_allowed_input_cells(sheet_name)
+    formula_protected_cells = get_formula_protected_cells(sheet_name)
+
+    disallowed = sorted(set(values) - allowed_input_cells)
     if disallowed:
         raise ValueError(f"Attempted to write non-input cells: {', '.join(disallowed)}")
 
-    protected_overwrites = sorted(set(values) & FORMULA_PROTECTED_CELLS)
+    protected_overwrites = sorted(set(values) & formula_protected_cells)
     if protected_overwrites:
         raise ValueError(f"Attempted to overwrite formula cells: {', '.join(protected_overwrites)}")
 
