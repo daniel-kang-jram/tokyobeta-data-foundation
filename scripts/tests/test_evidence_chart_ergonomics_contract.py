@@ -11,7 +11,7 @@ PRICING_PAGE = REPO_ROOT / "evidence/pages/pricing.md"
 MOVEINS_PAGE = REPO_ROOT / "evidence/pages/moveins.md"
 MOVEOUTS_PAGE = REPO_ROOT / "evidence/pages/moveouts.md"
 
-ERGONOMIC_MAX_HEIGHT = 420
+ERGONOMIC_MAX_HEIGHT = 320
 PRICING_MAX_HEIGHT = 520
 
 REQUIRED_ROUTE_MARKERS = (
