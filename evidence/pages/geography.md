@@ -134,7 +134,7 @@ from aurora_gold.property_churn_weekly
       x=municipality
       y=net_change
       swapXY={true}
-      chartAreaHeight={520}
+      chartAreaHeight={320}
       title="Municipality Net Change (Top Absolute)"
     />
   </Tab>
@@ -144,7 +144,7 @@ from aurora_gold.property_churn_weekly
       x=municipality
       y=movein_count
       swapXY={true}
-      chartAreaHeight={520}
+      chartAreaHeight={320}
       title="Municipality Move-ins (Top)"
     />
   </Tab>
@@ -154,7 +154,7 @@ from aurora_gold.property_churn_weekly
       x=municipality
       y=moveout_count
       swapXY={true}
-      chartAreaHeight={520}
+      chartAreaHeight={320}
       title="Municipality Move-outs (Top)"
     />
   </Tab>
@@ -175,7 +175,7 @@ Freshness: {municipality_hotspot_coverage[0].freshness_week_start}.
       x=apartment_name
       y=net_change
       swapXY={true}
-      chartAreaHeight={520}
+      chartAreaHeight={320}
       title="Property Net Change (Top Absolute)"
     />
   </Tab>
@@ -185,7 +185,7 @@ Freshness: {municipality_hotspot_coverage[0].freshness_week_start}.
       x=apartment_name
       y=movein_count
       swapXY={true}
-      chartAreaHeight={520}
+      chartAreaHeight={320}
       title="Property Move-ins (Top)"
     />
   </Tab>
@@ -195,7 +195,7 @@ Freshness: {municipality_hotspot_coverage[0].freshness_week_start}.
       x=apartment_name
       y=moveout_count
       swapXY={true}
-      chartAreaHeight={520}
+      chartAreaHeight={320}
       title="Property Move-outs (Top)"
     />
   </Tab>

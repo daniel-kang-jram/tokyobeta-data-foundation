@@ -8,8 +8,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GEOGRAPHY_PAGE = REPO_ROOT / "evidence/pages/geography.md"
 PRICING_PAGE = REPO_ROOT / "evidence/pages/pricing.md"
+MOVEINS_PAGE = REPO_ROOT / "evidence/pages/moveins.md"
+MOVEOUTS_PAGE = REPO_ROOT / "evidence/pages/moveouts.md"
 
-ERGONOMIC_MAX_HEIGHT = 560
+ERGONOMIC_MAX_HEIGHT = 320
+PRICING_MAX_HEIGHT = 520
 
 REQUIRED_ROUTE_MARKERS = (
     (GEOGRAPHY_PAGE, "Tokyo Occupancy Map (Latest Snapshot)"),
@@ -76,4 +79,18 @@ def test_pricing_segment_pressure_ranking_height_is_compact() -> None:
 
     assert heights, "missing chartAreaHeight in Segment Pressure Ranking section"
     assert 900 not in heights
-    assert max(heights) <= ERGONOMIC_MAX_HEIGHT
+    assert max(heights) <= PRICING_MAX_HEIGHT
+
+
+def test_move_profile_segment_bar_heights_are_compact() -> None:
+    """Move-ins/move-outs cohort segment bars should use tighter vertical footprint."""
+    section_heading = "Cohort and Segment View (Last 12 Months)"
+
+    for page in (MOVEINS_PAGE, MOVEOUTS_PAGE):
+        source = _read(page)
+        section = _section_text(source, section_heading)
+        heights = _all_chart_heights(section)
+
+        assert heights, f"missing chartAreaHeight values in {page.name} segment section"
+        assert 900 not in heights
+        assert max(heights) <= ERGONOMIC_MAX_HEIGHT

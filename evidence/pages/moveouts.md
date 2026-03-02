@@ -284,7 +284,7 @@ Freshness: charts use the latest rows from the daily/weekly/monthly move-out mar
   x=nationality
   y=moveout_count
   swapXY={true}
-  chartAreaHeight={700}
+  chartAreaHeight={320}
   title="Top Nationalities (Move-outs)"
 />
 
@@ -293,7 +293,7 @@ Freshness: charts use the latest rows from the daily/weekly/monthly move-out mar
   x=municipality
   y=moveout_count
   swapXY={true}
-  chartAreaHeight={900}
+  chartAreaHeight={320}
   title="Top Municipalities (Move-outs)"
 />
 
@@ -302,7 +302,7 @@ Freshness: charts use the latest rows from the daily/weekly/monthly move-out mar
   x=apartment_name
   y=moveout_count
   swapXY={true}
-  chartAreaHeight={900}
+  chartAreaHeight={320}
   title="Top Properties (Move-outs)"
 />
 
@@ -311,7 +311,7 @@ Freshness: charts use the latest rows from the daily/weekly/monthly move-out mar
   x=moveout_reason_en
   y=moveout_count
   swapXY={true}
-  chartAreaHeight={700}
+  chartAreaHeight={320}
   title="Top Move-out Reasons (Last 12 Months)"
 />
 

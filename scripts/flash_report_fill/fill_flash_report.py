@@ -5,6 +5,7 @@ import argparse
 import csv
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 from zoneinfo import ZoneInfo
@@ -51,7 +52,7 @@ from scripts.flash_report_fill.types import FlashReportQueryConfig, MetricRecord
 JST = ZoneInfo("Asia/Tokyo")
 DEFAULT_TEMPLATE_PATH = "/Users/danielkang/Downloads/February Occupancy Flash Report_Template_GG追記20260224.xlsx"
 DEFAULT_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-1:343881458651:secret:tokyobeta/prod/aurora/credentials-tlWiUd"
-DEFAULT_DB_HOST = "127.0.0.1"
+DEFAULT_DB_HOST = "tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com"
 DEFAULT_DB_PORT = 3306
 DEFAULT_DB_NAME = "tokyobeta"
 DEFAULT_D5_BENCHMARK = 11271
@@ -82,6 +83,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=None, help="Output directory")
     parser.add_argument("--snapshot-start-jst", default="2026-02-01 00:00:00 JST")
     parser.add_argument("--snapshot-asof-jst", default="2026-02-28 05:00:00 JST")
+    parser.add_argument(
+        "--silver-pinpoint-asof-jst",
+        default=None,
+        help="Optional as-of timestamp for silver snapshot diagnostics; defaults to snapshot-asof date",
+    )
     parser.add_argument("--feb-end-jst", default="2026-02-28 23:59:59 JST")
     parser.add_argument("--mar-start-jst", default="2026-03-01 00:00:00 JST")
     parser.add_argument("--mar-end-jst", default="2026-03-31 23:59:59 JST")
@@ -99,7 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--d5-tolerance", type=int, default=DEFAULT_D5_TOLERANCE)
     parser.add_argument("--aws-profile", default="gghouse")
     parser.add_argument("--aws-region", default="ap-northeast-1")
-    parser.add_argument("--db-host", default=DEFAULT_DB_HOST)
+    parser.add_argument("--db-host", default=os.getenv("DB_HOST", DEFAULT_DB_HOST))
     parser.add_argument("--db-port", type=int, default=DEFAULT_DB_PORT)
     parser.add_argument("--db-name", default=DEFAULT_DB_NAME)
     parser.add_argument("--secret-arn", default=DEFAULT_SECRET_ARN)
@@ -247,6 +253,11 @@ def main() -> int:
 
     snapshot_start = parse_jst_timestamp(args.snapshot_start_jst)
     snapshot_asof = parse_jst_timestamp(args.snapshot_asof_jst)
+    silver_pinpoint_asof = (
+        parse_jst_timestamp(args.silver_pinpoint_asof_jst)
+        if getattr(args, "silver_pinpoint_asof_jst", None)
+        else snapshot_asof
+    )
     feb_end = parse_jst_timestamp(args.feb_end_jst)
     mar_start = parse_jst_timestamp(args.mar_start_jst)
     mar_end = parse_jst_timestamp(args.mar_end_jst)
@@ -281,6 +292,7 @@ def main() -> int:
     print(f"db_host={args.db_host}:{args.db_port}")
     print(f"snapshot_start={params['snapshot_start']}")
     print(f"snapshot_asof={params['snapshot_asof']}")
+    print(f"silver_pinpoint_asof_date={silver_pinpoint_asof.date().isoformat()}")
 
     username, password = resolve_db_credentials(args)
 
@@ -371,6 +383,12 @@ def main() -> int:
             feb_end_date=feb_end.date(),
             mar_start_date=mar_start.date(),
             mar_end_date=mar_end.date(),
+            reconciliation_asof_date=silver_pinpoint_asof.date(),
+            mar_planned_movein_cells=[
+                metric_to_cells["mar_planned_moveins"][0][0],
+                metric_to_cells["mar_planned_moveins"][1][0],
+            ],
+            movein_prediction_date_column=query_config.movein_prediction_date_column,
         )
         d5_recon_records, d5_warnings = build_d5_discrepancy_records(
             cursor=cursor,

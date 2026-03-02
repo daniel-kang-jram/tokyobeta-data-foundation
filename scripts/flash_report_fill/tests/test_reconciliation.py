@@ -86,6 +86,8 @@ class _ReconCursor:
         sql = self.last_sql
         if "is_room_primary = TRUE" in sql:
             return {"occupied_rooms": 111}
+        if "silver_asof_mar_planned_moveins" in sql:
+            return {"planned_moveins_total": 293}
         if "SUM(new_moveins)" in sql:
             return {"moveins": 200, "moveouts": 150}
         if "d5_fact_aligned_count" in sql:
@@ -96,6 +98,15 @@ class _ReconCursor:
                 "fact_multi_tenant_collision_rooms": 77,
             }
         return {"occupied_rooms": 111}
+
+    def fetchall(self):
+        sql = self.last_sql
+        if "silver_asof_mar_planned_moveins_split" in sql:
+            return [
+                {"tenant_type": "individual", "cnt": 212},
+                {"tenant_type": "corporate", "cnt": 81},
+            ]
+        return []
 
 
 class _SilverFallbackCursor:
@@ -165,13 +176,69 @@ def test_build_reconciliation_records_returns_expected_rows() -> None:
         feb_end_date=date(2026, 2, 28),
         mar_start_date=date(2026, 3, 1),
         mar_end_date=date(2026, 3, 31),
+        reconciliation_asof_date=date(2026, 2, 28),
+        mar_planned_movein_cells=["D13", "E13"],
     )
 
-    assert len(rows) == 5
+    assert len(rows) == 8
     assert rows[0].reconciliation_id == "silver_occupied_rooms"
     assert rows[0].asof_date == "2026-02-01"
     assert "snapshot_start date" in rows[0].note
+    assert any(r.reconciliation_id == "silver_asof_mar_planned_moveins_total" for r in rows)
+    assert any(r.reconciliation_id == "silver_asof_mar_planned_moveins_individual" for r in rows)
+    assert any(r.reconciliation_id == "silver_asof_mar_planned_moveins_corporate" for r in rows)
     assert any("snapshot_date = %s" in sql and params == (date(2026, 2, 1),) for sql, params in cursor.calls)
+    assert any(
+        "silver_asof_mar_planned_moveins_split" in sql
+        and params == (date(2026, 2, 28), date(2026, 2, 28), date(2026, 3, 31))
+        for sql, params in cursor.calls
+    )
+
+
+def test_build_reconciliation_records_uses_selected_movein_prediction_date_column() -> None:
+    cursor = _ReconCursor()
+    rows = build_reconciliation_records(
+        cursor=cursor,
+        cell_values={"D5": 110, "D13": 11, "E13": 4},
+        snapshot_start_date=date(2026, 2, 1),
+        snapshot_asof_date=date(2026, 2, 26),
+        feb_start_date=date(2026, 2, 1),
+        feb_end_date=date(2026, 2, 28),
+        mar_start_date=date(2026, 3, 1),
+        mar_end_date=date(2026, 3, 31),
+        reconciliation_asof_date=date(2026, 2, 28),
+        mar_planned_movein_cells=["D13", "E13"],
+        movein_prediction_date_column="movein_decided_date",
+    )
+
+    matching_sql = [
+        sql for sql, _params in cursor.calls if "silver_asof_mar_planned_moveins_split" in sql
+    ]
+    assert len(matching_sql) == 1
+    assert "m.movein_decided_date > %s" in matching_sql[0]
+    assert "m.movein_decided_date <= %s" in matching_sql[0]
+    assert "m.original_movein_date > %s" not in matching_sql[0]
+
+    total_row = next(r for r in rows if r.reconciliation_id == "silver_asof_mar_planned_moveins_total")
+    assert "movein_decided_date" in total_row.note
+
+
+def test_build_reconciliation_records_rejects_unsupported_movein_prediction_date_column() -> None:
+    cursor = _ReconCursor()
+    with pytest.raises(ValueError, match="Unsupported move-in prediction column"):
+        build_reconciliation_records(
+            cursor=cursor,
+            cell_values={"D5": 110, "D13": 11, "E13": 4},
+            snapshot_start_date=date(2026, 2, 1),
+            snapshot_asof_date=date(2026, 2, 26),
+            feb_start_date=date(2026, 2, 1),
+            feb_end_date=date(2026, 2, 28),
+            mar_start_date=date(2026, 3, 1),
+            mar_end_date=date(2026, 3, 31),
+            reconciliation_asof_date=date(2026, 2, 28),
+            mar_planned_movein_cells=["D13", "E13"],
+            movein_prediction_date_column="movein_planned_at",
+        )
 
 
 def test_silver_occupied_rooms_uses_fallback_only_for_missing_is_room_primary_column() -> None:

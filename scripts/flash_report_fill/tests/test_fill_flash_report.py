@@ -81,8 +81,23 @@ def test_parse_args_defaults(monkeypatch) -> None:
     assert args.db_port == fill_flash_report.DEFAULT_DB_PORT
     assert args.sheet_name == "Flash Report（2月）"
     assert args.snapshot_asof_jst == "2026-02-28 05:00:00 JST"
+    assert args.silver_pinpoint_asof_jst is None
     assert args.movein_prediction_date_column == "original_movein_date"
     assert args.moveout_prediction_date_column == "moveout_date"
+
+
+def test_parse_args_uses_db_host_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("DB_HOST", "env-host.example.com")
+    monkeypatch.setattr("sys.argv", ["fill_flash_report.py"])
+    args = fill_flash_report.parse_args()
+    assert args.db_host == "env-host.example.com"
+
+
+def test_parse_args_defaults_to_public_aurora_host_when_env_not_set(monkeypatch) -> None:
+    monkeypatch.delenv("DB_HOST", raising=False)
+    monkeypatch.setattr("sys.argv", ["fill_flash_report.py"])
+    args = fill_flash_report.parse_args()
+    assert args.db_host == "tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com"
 
 
 def test_resolve_db_credentials_uses_cli_override() -> None:
@@ -529,3 +544,71 @@ def test_main_raises_if_formula_cells_change(tmp_path: Path, monkeypatch) -> Non
 
     with pytest.raises(RuntimeError):
         fill_flash_report.main()
+
+
+def test_main_passes_movein_prediction_date_column_to_reconciliation(tmp_path: Path, monkeypatch) -> None:
+    template = tmp_path / "template.xlsx"
+    _create_template(template)
+
+    args = Namespace(
+        template_path=str(template),
+        sheet_name="Flash Report（2月）",
+        output_dir=str(tmp_path),
+        snapshot_start_jst="2026-02-01 00:00:00 JST",
+        snapshot_asof_jst="2026-02-28 05:00:00 JST",
+        feb_end_jst="2026-02-28 23:59:59 JST",
+        mar_start_jst="2026-03-01 00:00:00 JST",
+        mar_end_jst="2026-03-31 23:59:59 JST",
+        movein_prediction_date_column="movein_decided_date",
+        moveout_prediction_date_column="moveout_date",
+        d5_benchmark=11271,
+        d5_tolerance=10,
+        aws_profile="gghouse",
+        aws_region="ap-northeast-1",
+        db_host="127.0.0.1",
+        db_port=3306,
+        db_name="tokyobeta",
+        secret_arn="arn:test",
+        db_user="user1",
+        db_password="pw1",
+        emit_flags_csv=False,
+        check_only=True,
+        flags_limit=10,
+        daily_sheet_name=None,
+        disable_daily_sheet_copy=False,
+    )
+
+    captured = {}
+
+    def _fake_build_reconciliation_records(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(fill_flash_report, "parse_args", lambda: args)
+    monkeypatch.setattr(fill_flash_report, "resolve_db_credentials", lambda _: ("u", "p"))
+    monkeypatch.setattr(fill_flash_report, "open_connection", lambda *_args, **_kwargs: _DummyConnection())
+    monkeypatch.setattr(
+        fill_flash_report,
+        "execute_metric_query",
+        lambda cursor, spec, params: 1
+        if spec.result_mode == "scalar"
+        else {"individual": 1, "corporate": 1, "unknown": 0},
+    )
+    monkeypatch.setattr(
+        fill_flash_report,
+        "run_anomaly_checks",
+        lambda cursor, params, limit: (
+            {"double_active_rooms": [], "tenant_switch_gaps": [], "same_tenant_multi_status": []},
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        fill_flash_report,
+        "build_reconciliation_records",
+        _fake_build_reconciliation_records,
+    )
+    monkeypatch.setattr(fill_flash_report, "build_d5_discrepancy_records", lambda **kwargs: ([], []))
+
+    rc = fill_flash_report.main()
+    assert rc == 0
+    assert captured["movein_prediction_date_column"] == "movein_decided_date"
