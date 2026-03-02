@@ -100,6 +100,12 @@ npm --yes --package=playwright exec -- \
   --base-url https://intelligence.jram.jp \
   --artifact-dir "$RUN_ARTIFACT_DIR/dryrun" \
   --print-route-matrix > "$RUN_ARTIFACT_DIR/route-matrix.json"
+
+jq -e '.routes.pricing.funnel_markers | index("Overall Conversion Rate (%)") and index("Municipality Segment Parity (Applications vs Move-ins)") and index("Nationality Segment Parity (Applications vs Move-ins)") and index("Monthly Conversion Trend")' \
+  "$RUN_ARTIFACT_DIR/route-matrix.json"
+jq -e '.routes.occupancy.coverage_markers | index("Coverage:")' "$RUN_ARTIFACT_DIR/route-matrix.json"
+jq -e '.routes.moveins.coverage_markers | index("Coverage:")' "$RUN_ARTIFACT_DIR/route-matrix.json"
+jq -e '.routes.moveouts.coverage_markers | index("Coverage:")' "$RUN_ARTIFACT_DIR/route-matrix.json"
 ```
 
 Release evidence workflow reference: `.github/workflows/evidence-auth-smoke.yml` (`evidence-auth-smoke`).
@@ -107,7 +113,7 @@ Release evidence workflow reference: `.github/workflows/evidence-auth-smoke.yml`
 ### Deterministic GO/NO-GO matrix
 
 GO only if ALL checks pass:
-1. Route matrix H1 + KPI markers + time-context markers pass for `/occupancy`, `/moveins`, `/moveouts`, `/geography`, and `/pricing`.
+1. Route matrix H1 + KPI markers + time-context markers + coverage markers pass for `/occupancy`, `/moveins`, `/moveouts`, `/geography`, and `/pricing`.
 2. `/pricing` includes all required funnel markers:
    - `Overall Conversion Rate (%)`
    - `Municipality Segment Parity (Applications vs Move-ins)`
@@ -119,7 +125,7 @@ GO only if ALL checks pass:
 6. Artifact set is complete: per-route screenshots, `console_logs.json`, `network_logs.json`, and `summary.json`.
 
 NO-GO if ANY blocker is present:
-1. Any route marker mismatch (H1, KPI marker, time-context marker, or pricing funnel marker).
+1. Any route marker mismatch (H1, KPI marker, time-context marker, coverage marker, or pricing funnel marker).
 2. Home fallback marker `KPI Landing (Gold)` appears on a non-home route.
 3. Any metadata response is non-JSON, any malformed `/api//` request appears, or JSON parsing fails.
 4. Any `Unexpected token '<'` metadata parse error appears in console/network logs.
@@ -134,6 +140,7 @@ NO-GO if ANY blocker is present:
 - Base URL: https://intelligence.jram.jp
 - Artifact Directory: artifacts/evidence-auth-smoke/prod-YYYYMMDD-HHMMSS
 - Route Matrix Result: PASS | FAIL
+- Coverage Marker Result: PASS | FAIL
 - Pricing Funnel Result: PASS | FAIL
 - Metadata JSON Result (`application/json` + no `/api//`): PASS | FAIL
 - Parse Error Check (`Unexpected token '<'`): PASS | FAIL

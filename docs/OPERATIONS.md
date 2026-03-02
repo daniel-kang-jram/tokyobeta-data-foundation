@@ -1,6 +1,6 @@
 # Operations & Runbooks
 
-**Last Updated:** March 1, 2026
+**Last Updated:** March 2, 2026
 
 This document consolidates all operational procedures, setup guides, and troubleshooting runbooks for the TokyoBeta Data Consolidation project.
 
@@ -206,16 +206,16 @@ Expected output:
 | `moveins.md` | `aurora_gold.movein_profile_monthly`, `aurora_gold.move_events_weekly` |
 | `moveouts.md` | `aurora_gold.moveout_profile_monthly`, `aurora_gold.move_events_weekly` |
 
-#### 3. Timestamp and freshness label validation
+#### 3. Timestamp, coverage, and freshness label validation
 ```bash
 cd /Users/danielkang/tokyobeta-data-consolidation/evidence
-rg -n "Time basis:|Freshness:" \
+rg -n "Time basis:|Coverage:|Freshness:" \
   pages/index.md pages/funnel.md pages/geography.md pages/pricing.md pages/moveins.md pages/moveouts.md
 ```
 
 Expected output:
-- Every listed page returns both `Time basis:` and `Freshness:` labels.
-- If either label is missing for any page, treat release as parity-incomplete and block deployment.
+- Every listed page returns `Time basis:`, `Coverage:`, and `Freshness:` labels.
+- If any label is missing for a page, treat release as parity-incomplete and block deployment.
 
 #### 4. Operator CSV export checks
 ```bash
@@ -245,7 +245,7 @@ npm --yes --package=playwright exec -- \
   --artifact-dir "$RUN_ARTIFACT_DIR"
 ```
 
-#### 2. Print deterministic route matrix and verify pricing funnel markers
+#### 2. Print deterministic route matrix and verify pricing funnel + coverage markers
 ```bash
 npm --yes --package=playwright exec -- \
   node scripts/evidence/evidence_auth_smoke.mjs \
@@ -255,6 +255,15 @@ npm --yes --package=playwright exec -- \
   --print-route-matrix > "$RUN_ARTIFACT_DIR/route-matrix.json"
 
 jq -e '.routes.pricing.funnel_markers | index("Overall Conversion Rate (%)") and index("Municipality Segment Parity (Applications vs Move-ins)") and index("Nationality Segment Parity (Applications vs Move-ins)") and index("Monthly Conversion Trend")' \
+  "$RUN_ARTIFACT_DIR/route-matrix.json"
+
+jq -e '.routes.occupancy.coverage_markers | index("Coverage:")' \
+  "$RUN_ARTIFACT_DIR/route-matrix.json"
+
+jq -e '.routes.moveins.coverage_markers | index("Coverage:")' \
+  "$RUN_ARTIFACT_DIR/route-matrix.json"
+
+jq -e '.routes.moveouts.coverage_markers | index("Coverage:")' \
   "$RUN_ARTIFACT_DIR/route-matrix.json"
 ```
 
@@ -267,7 +276,7 @@ ls "$RUN_ARTIFACT_DIR/screenshots" | wc -l
 ```
 
 Block release and trigger rollback if any blocker is present:
-- route marker mismatch (H1, KPI marker, time-context marker, or pricing funnel marker)
+- route marker mismatch (H1, KPI marker, time-context marker, coverage marker, or pricing funnel marker)
 - `KPI Landing (Gold)` appears on non-home routes
 - metadata response is not `application/json` or any `/api//` request appears
 - console/network includes `Unexpected token '<'` metadata parse errors

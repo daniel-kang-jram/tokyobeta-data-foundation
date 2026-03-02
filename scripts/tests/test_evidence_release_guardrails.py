@@ -5,6 +5,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
 SMOKE_SCRIPT = REPO_ROOT / "scripts/evidence/evidence_auth_smoke.mjs"
+OPERATIONS_DOC = REPO_ROOT / "docs/OPERATIONS.md"
+DEPLOYMENT_DOC = REPO_ROOT / "docs/DEPLOYMENT.md"
 
 
 def test_ci_runs_evidence_guardrail_tests() -> None:
@@ -56,3 +58,23 @@ def test_release_contract_requires_coverage_marker_checks_in_smoke_matrix() -> N
 
     assert "coverage_markers" in source
     assert "Coverage:" in source
+
+
+def test_operations_runbook_includes_coverage_marker_verification_steps() -> None:
+    """Operations runbook must include deterministic coverage-marker validation commands."""
+    source = OPERATIONS_DOC.read_text(encoding="utf-8")
+
+    assert 'rg -n "Time basis:|Coverage:|Freshness:"' in source
+    assert '.routes.occupancy.coverage_markers | index("Coverage:")' in source
+    assert '.routes.moveins.coverage_markers | index("Coverage:")' in source
+    assert '.routes.moveouts.coverage_markers | index("Coverage:")' in source
+
+
+def test_deployment_go_no_go_matrix_mentions_coverage_marker_blockers() -> None:
+    """Deployment sign-off matrix must treat coverage marker failures as explicit blockers."""
+    source = DEPLOYMENT_DOC.read_text(encoding="utf-8")
+
+    assert "GO only if ALL checks pass:" in source
+    assert "NO-GO if ANY blocker is present:" in source
+    assert "coverage markers" in source
+    assert "Coverage Marker Result: PASS | FAIL" in source
