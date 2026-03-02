@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
 status: in_progress
-last_updated: "2026-03-02T05:45:57.879Z"
+last_updated: "2026-03-02T05:55:51.301Z"
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 17
-  completed_plans: 15
+  completed_plans: 16
 ---
 
 # Project State
@@ -18,9 +18,9 @@ progress:
 
 ## Current Phase
 - `04-improve-evidence-ux-readability-and-chart-ergonomics`
-- Last completed plan: `04-01-PLAN.md` (Phase 4)
-- Next plan: `04-02-PLAN.md`
-- Phase progress: 1/3 plans complete
+- Last completed plan: `04-02-PLAN.md` (Phase 4)
+- Next plan: `04-03-PLAN.md`
+- Phase progress: 2/3 plans complete
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -72,6 +72,9 @@ progress:
 - [Phase 04]: Remove low-signal municipality/nationality/trend breakdown charts from funnel while retaining pricing route parity markers.
 - [Phase 04]: Model replacement flow links from aurora_gold moveout/movein sources grouped by municipality, nationality, tenant_type, and rent_band.
 - [Phase 04]: Keep Time basis/Coverage/Freshness prefixes but emit compact YYYY-MM-DD values for funnel notes.
+- [Phase 04]: Set geography hotspot and pricing segment-pressure chartAreaHeight guardrail to <=560 for reduced scrolling and readable labels.
+- [Phase 04]: Preserve deterministic Time basis/Coverage/Freshness prefixes while simplifying note prose to operator-facing language.
+- [Phase 04]: Render coverage and freshness values as compact YYYY-MM-DD strings in geography/pricing helper queries.
 
 ## Accumulated Context
 ### Roadmap Evolution
@@ -96,10 +99,11 @@ progress:
 | 03 | 03 | 3 min | 3 | 3 |
 | 03 | 04 | 5 min | 3 | 8 |
 | 04 | 01 | 6 min | 3 | 2 |
+| 04 | 02 | 5 min | 3 | 4 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-02T05:44:37Z
-- Stopped At: Completed 04-01-PLAN.md
+- Updated: 2026-03-02T05:55:51Z
+- Stopped At: Completed 04-02-PLAN.md
