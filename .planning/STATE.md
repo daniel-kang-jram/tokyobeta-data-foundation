@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
-status: complete
-last_updated: "2026-03-01T19:20:00Z"
+status: active
+last_updated: "2026-03-02T02:27:25.932Z"
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
-  total_plans: 10
-  completed_plans: 10
+  total_plans: 14
+  completed_plans: 11
 ---
 
 # Project State
@@ -17,10 +17,10 @@ progress:
 - `v1.0` complete
 
 ## Current Phase
-- None (all planned phases complete)
-- Last completed plan: `02-05-PLAN.md` (Phase 2)
-- Release artifact: `artifacts/evidence-auth-smoke/prod-20260302-041727-after-occupancy-fix`
-- Release decision: GO (recorded in `docs/DEPLOYMENT.md`)
+- `03-fix-evidence-dashboard-parity-and-timestamp-clarity`
+- Last completed plan: `03-01-PLAN.md` (Phase 3)
+- Next plan: `03-02-PLAN.md`
+- Phase progress: 1/4 plans complete
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -57,6 +57,13 @@ progress:
 - [Phase 02-05]: CloudFront viewer-request function now rewrites extensionless Evidence routes to `/<route>/index.html` after auth validation to prevent Home fallback on deep links.
 - [Phase 02-05]: Production smoke artifact `prod-20260302-041727-after-occupancy-fix` passed all gated routes with valid metadata URLs and zero auth redirects.
 - [Phase 02-05]: Occupancy page now explicitly includes `Time basis:` and `Freshness:` markers, aligned with smoke release contracts.
+- [Phase 03]: Anchor lookback windows to dataset max dates instead of current_date for stale-data robustness.
+- [Phase 03]: Implement moveout->move-in parity directly on funnel page from aurora_gold moveout/movein sources.
+- [Phase 03]: Require Coverage/Freshness markers to be query-backed expressions in contract tests.
+
+## Accumulated Context
+### Roadmap Evolution
+- Phase 3 added: Fix evidence dashboard parity and timestamp clarity (funnel chart fixes, snapshot moveout-to-movein analysis parity, geography occupancy physical-room filter and red-to-green colormap parity, remove Auth Test nav item, tighten Home KPI y-axis ranges, and clarify timestamp windows across charts).
 
 ## Performance Metrics
 | Phase | Plan | Duration | Tasks | Files |
@@ -71,10 +78,11 @@ progress:
 | 02 | 03 | 3 min | 3 | 4 |
 | 02 | 04 | 12 min | 3 | 4 |
 | 02 | 05 | 38 min | 4 | 5 |
+| 03 | 01 | 11 min | 3 | 6 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-01T19:20:00Z
-- Stopped At: Milestone complete after production GO sign-off
+- Updated: 2026-03-02T02:27:25Z
+- Stopped At: Completed 03-01-PLAN.md

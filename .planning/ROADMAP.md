@@ -48,3 +48,19 @@
 | 02-03 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-03-SUMMARY.md` |
 | 02-04 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-04-SUMMARY.md` |
 | 02-05 | Complete | `.planning/phases/02-evidence-dashboard-authenticated-uat-and-release-readiness/02-05-SUMMARY.md` |
+
+### Phase 3: Fix evidence dashboard parity and timestamp clarity
+
+**Goal:** Restore Evidence parity and timestamp clarity by fixing fragile funnel/pricing windows and preserving deterministic route marker contracts.
+**Requirements**: [EVD-REFRESH-002], [EVD-REFRESH-006], [EVD-REFRESH-008]
+**Depends on:** Phase 2
+**Status:** In Progress (updated 2026-03-02)
+**Plans:** 1/4 plans complete
+
+**Plan Progress**
+| Plan | Status | Summary |
+| --- | --- | --- |
+| 03-01 | Complete | `.planning/phases/03-fix-evidence-dashboard-parity-and-timestamp-clarity/03-01-SUMMARY.md` |
+| 03-02 | Planned | - |
+| 03-03 | Planned | - |
+| 03-04 | Planned | - |
