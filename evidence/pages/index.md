@@ -35,7 +35,14 @@ order by as_of_date
 ```
 
 ```sql kpi_trace
-select *
+select
+  as_of_date,
+  freshness_lag_days,
+  kpi_definition_version,
+  same_day_moveout_policy,
+  substr(cast(kpi_model_generated_at as varchar), 1, 10) as kpi_model_generated_date,
+  substr(cast(trace_generated_at as varchar), 1, 10) as trace_generated_date,
+  substr(cast(gold_occupancy_max_updated_at as varchar), 1, 10) as gold_occupancy_refresh_date
 from aurora_gold.kpi_reference_trace
 ```
 
@@ -47,8 +54,8 @@ select
   ceil(max(greatest(rent_jpy, revpar_jpy)) * 1.05) as rent_revpar_y_max,
   floor(min(recpar_cash_jpy) * 0.95) as recpar_y_min,
   ceil(max(recpar_cash_jpy) * 1.05) as recpar_y_max,
-  min(as_of_date) as coverage_from,
-  max(as_of_date) as coverage_to
+  substr(cast(min(as_of_date) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(as_of_date) as varchar), 1, 10) as coverage_to
 from aurora_gold.kpi_month_end_metrics
 where is_month_end = 1
   and as_of_date >= current_date - interval 365 day
@@ -64,8 +71,8 @@ where is_month_end = 1
 </Grid>
 
 <Note>
-Time basis: `kpi_month_end_metrics.as_of_date` (latest month-end record).
-Freshness: `kpi_reference_trace.freshness_lag_days` and `kpi_reference_trace.kpi_model_generated_at`.
+Time basis: latest month-end KPI snapshot date.
+Freshness: KPI trace refreshed on {kpi_trace[0].kpi_model_generated_date} (YYYY-MM-DD).
 </Note>
 
 ## Operating Totals
@@ -78,8 +85,8 @@ Freshness: `kpi_reference_trace.freshness_lag_days` and `kpi_reference_trace.kpi
 </Grid>
 
 <Note>
-Time basis: room totals are aligned to `kpi_month_end_metrics.as_of_date`.
-Freshness: trace context is read from `kpi_reference_trace.gold_occupancy_max_updated_at`.
+Time basis: room totals align to the latest month-end snapshot date.
+Freshness: occupancy source refreshed on {kpi_trace[0].gold_occupancy_refresh_date} (YYYY-MM-DD).
 </Note>
 
 ## KPI Trends (Month-end)
@@ -115,9 +122,9 @@ Freshness: trace context is read from `kpi_reference_trace.gold_occupancy_max_up
 />
 
 <Note>
-Time basis: month-end timeline from `kpi_month_end_metrics.as_of_date`.
-Coverage: {kpi_history_bounds[0].coverage_from} to {kpi_history_bounds[0].coverage_to}.
-Freshness: {kpi_trace[0].freshness_lag_days} day lag; generated at {kpi_trace[0].kpi_model_generated_at}.
+Time basis: month-end KPI trend dates (YYYY-MM-DD).
+Coverage: {kpi_history_bounds[0].coverage_from} to {kpi_history_bounds[0].coverage_to} (YYYY-MM-DD).
+Freshness: {kpi_trace[0].freshness_lag_days} day lag; model refreshed on {kpi_trace[0].kpi_model_generated_date} (YYYY-MM-DD).
 </Note>
 
 ## KPI Governance & Trace
@@ -129,8 +136,8 @@ Freshness: {kpi_trace[0].freshness_lag_days} day lag; generated at {kpi_trace[0]
 </Grid>
 
 <Note>
-Time basis: metadata rows are keyed by `kpi_reference_trace.as_of_date`.
-Freshness: `kpi_reference_trace.trace_generated_at` and source max-updated fields indicate recency.
+Time basis: KPI trace row is keyed by snapshot date.
+Freshness: trace generated on {kpi_trace[0].trace_generated_date} (YYYY-MM-DD).
 </Note>
 
 ```sql kpi_definition_trace

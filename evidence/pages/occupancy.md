@@ -8,9 +8,9 @@ order by snapshot_date
 
 ```sql occupancy_coverage
 select
-  min(snapshot_date) as coverage_from,
-  max(snapshot_date) as coverage_to,
-  max(as_of_snapshot_date) as freshness_snapshot_date
+  substr(cast(min(snapshot_date) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(snapshot_date) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(as_of_snapshot_date) as varchar), 1, 10) as freshness_snapshot_date
 from aurora_gold.occupancy_drivers_daily
 ```
 
@@ -31,11 +31,9 @@ from aurora_gold.occupancy_drivers_daily
 <DataTable data={occupancy_daily} />
 
 <Note>
-Time basis: `occupancy_daily.snapshot_date` for each row, with `as_of_snapshot_date` indicating the
-latest authoritative snapshot in the current model run.
-Coverage: {occupancy_coverage[0].coverage_from} to {occupancy_coverage[0].coverage_to}.
-Freshness: this page updates when `gold.occupancy_daily_metrics` and `gold.occupancy_kpi_meta`
-refresh; latest snapshot date is {occupancy_coverage[0].freshness_snapshot_date}.
+Time basis: daily occupancy snapshot dates (YYYY-MM-DD).
+Coverage: {occupancy_coverage[0].coverage_from} to {occupancy_coverage[0].coverage_to} (YYYY-MM-DD).
+Freshness: latest available snapshot date is {occupancy_coverage[0].freshness_snapshot_date} (YYYY-MM-DD).
 </Note>
 
 <Note>
