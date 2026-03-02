@@ -363,7 +363,12 @@ from combined
           target: d.target,
           value: d.value,
           lineStyle: {
-            color: d.link_type === 'out' ? '#dc2626' : '#16a34a'
+            color:
+              d.link_type === 'out'
+                ? '#dc2626'
+                : d.link_type === 'in'
+                  ? '#16a34a'
+                  : '#64748b'
           }
         }))
       }
