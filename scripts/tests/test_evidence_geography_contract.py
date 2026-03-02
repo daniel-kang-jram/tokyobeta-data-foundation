@@ -67,8 +67,25 @@ def test_geography_page_keeps_route_heading_markers() -> None:
 def test_geography_hotspot_heights_remain_within_ergonomic_bounds() -> None:
     """Geography hotspot bar charts should avoid oversized vertical footprints."""
     source = _read(GEOGRAPHY_PAGE)
-    heights = [int(match) for match in re.findall(r"chartAreaHeight=\{(\d+)\}", source)]
+    hotspot_headings = re.findall(
+        r"^## (.*hotspots \(weekly, last 12 weeks\))$",
+        source,
+        flags=re.MULTILINE,
+    )
+    heights: list[int] = []
+    for heading in hotspot_headings:
+        pattern = re.compile(
+            rf"^## {re.escape(heading)}\n(?P<section>.*?)(?=^## |\Z)",
+            re.MULTILINE | re.DOTALL,
+        )
+        match = pattern.search(source)
+        assert match is not None, f"missing section heading: {heading}"
+        heights.extend(
+            int(found)
+            for found in re.findall(r"chartAreaHeight=\{(\d+)\}", match.group("section"))
+        )
 
-    assert heights, "expected chartAreaHeight declarations on geography page"
+    assert hotspot_headings, "expected hotspot headings on geography page"
+    assert heights, "expected chartAreaHeight declarations in hotspot sections"
     assert 900 not in heights
     assert max(heights) <= ERGONOMIC_MAX_HEIGHT

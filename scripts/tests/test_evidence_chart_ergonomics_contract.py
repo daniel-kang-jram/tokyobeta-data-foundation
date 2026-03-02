@@ -52,9 +52,18 @@ def test_geography_and_pricing_keep_route_markers_and_time_context_prefixes() ->
 def test_geography_hotspot_chart_heights_are_compact() -> None:
     """Geography hotspot bars should not exceed the ergonomics height cap."""
     source = _read(GEOGRAPHY_PAGE)
-    heights = _all_chart_heights(source)
+    hotspot_headings = re.findall(
+        r"^## (.*hotspots \(weekly, last 12 weeks\))$",
+        source,
+        flags=re.MULTILINE,
+    )
+    heights: list[int] = []
+    for heading in hotspot_headings:
+        section = _section_text(source, heading)
+        heights.extend(_all_chart_heights(section))
 
-    assert heights, "no chartAreaHeight values found in geography page"
+    assert hotspot_headings, "no geography hotspot sections found"
+    assert heights, "no chartAreaHeight values found in geography hotspot sections"
     assert 900 not in heights
     assert max(heights) <= ERGONOMIC_MAX_HEIGHT
 
