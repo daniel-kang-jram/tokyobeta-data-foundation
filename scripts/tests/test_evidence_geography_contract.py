@@ -1,5 +1,6 @@
 """Contract tests for geography occupancy parity and timestamp clarity."""
 
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -16,6 +17,7 @@ REQUIRED_ROUTE_HEADINGS = (
     "Municipality hotspots (weekly, last 12 weeks)",
     "Property hotspots (weekly, last 12 weeks)",
 )
+ERGONOMIC_MAX_HEIGHT = 560
 
 
 def _read(path: Path) -> str:
@@ -60,3 +62,13 @@ def test_geography_page_keeps_route_heading_markers() -> None:
 
     for heading in REQUIRED_ROUTE_HEADINGS:
         assert heading in source
+
+
+def test_geography_hotspot_heights_remain_within_ergonomic_bounds() -> None:
+    """Geography hotspot bar charts should avoid oversized vertical footprints."""
+    source = _read(GEOGRAPHY_PAGE)
+    heights = [int(match) for match in re.findall(r"chartAreaHeight=\{(\d+)\}", source)]
+
+    assert heights, "expected chartAreaHeight declarations on geography page"
+    assert 900 not in heights
+    assert max(heights) <= ERGONOMIC_MAX_HEIGHT
