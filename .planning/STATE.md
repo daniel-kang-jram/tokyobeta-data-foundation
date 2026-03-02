@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
-status: active
-last_updated: "2026-03-02T03:27:01Z"
+status: complete
+last_updated: "2026-03-02T03:37:14Z"
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 14
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
@@ -18,9 +18,9 @@ progress:
 
 ## Current Phase
 - `03-fix-evidence-dashboard-parity-and-timestamp-clarity`
-- Last completed plan: `03-03-PLAN.md` (Phase 3)
-- Next plan: `03-04-PLAN.md`
-- Phase progress: 3/4 plans complete
+- Last completed plan: `03-04-PLAN.md` (Phase 3)
+- Next plan: `None`
+- Phase progress: 4/4 plans complete
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -66,6 +66,9 @@ progress:
 - [Phase 03]: Use SQL-derived kpi_history_bounds for explicit Home chart y-axis limits.
 - [Phase 03]: Require Home KPI trends to show query-backed Time basis/Coverage/Freshness labels.
 - [Phase 03]: Remove auth-test.md to guarantee the Auth Test route is absent from Evidence page manifests.
+- [Phase 03]: Require coverage_markers as a first-class smoke route-matrix field and assert it per gated route.
+- [Phase 03]: Back Coverage labels with explicit SQL coverage queries on each remaining parity page section.
+- [Phase 03]: Tie GO/NO-GO runbook checks to jq-verified route-matrix coverage markers.
 
 ## Accumulated Context
 ### Roadmap Evolution
@@ -87,10 +90,11 @@ progress:
 | 03 | 01 | 11 min | 3 | 6 |
 | 03 | 02 | 45 min | 3 | 6 |
 | 03 | 03 | 3 min | 3 | 3 |
+| 03 | 04 | 5 min | 3 | 8 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-02T03:27:01Z
-- Stopped At: Completed 03-03-PLAN.md
+- Updated: 2026-03-02T03:37:14Z
+- Stopped At: Completed 03-04-PLAN.md
