@@ -1,16 +1,27 @@
-# Move-in Profiling (Weekly)
+# Move-in Profiling (Daily / Weekly / Monthly)
 
-```sql movein_weekly_total
+```sql movein_daily_total
 select
-  week_start,
-  sum(event_count) as movein_count
-from aurora_gold.move_events_weekly
-where event_type = 'movein'
-group by week_start
-order by week_start
+  contract_start_date as activity_date,
+  tenant_type,
+  count(*) as movein_count
+from aurora_gold.movein_analysis_recent
+where contract_start_date >= current_date - interval 180 day
+group by contract_start_date, tenant_type
+order by contract_start_date, tenant_type
 ```
 
-```sql movein_weekly_by_tenant_type
+```sql movein_daily_total_all
+select
+  contract_start_date as activity_date,
+  count(*) as movein_count
+from aurora_gold.movein_analysis_recent
+where contract_start_date >= current_date - interval 180 day
+group by contract_start_date
+order by contract_start_date
+```
+
+```sql movein_weekly_total
 select
   week_start,
   tenant_type,
@@ -21,156 +32,201 @@ group by week_start, tenant_type
 order by week_start, tenant_type
 ```
 
-```sql movein_rent_age
+```sql movein_weekly_total_all
 select
-  rent_range,
-  rent_range_order,
-  age_group,
-  case age_group
-    when 'Under 25' then 1
-    when '25-34' then 2
-    when '35-44' then 3
-    when '45-54' then 4
-    when '55+' then 5
-    else 6
-  end as age_group_order,
+  week_start,
   sum(event_count) as movein_count
 from aurora_gold.move_events_weekly
 where event_type = 'movein'
-  and week_start >= CURRENT_DATE - INTERVAL 365 DAY
-group by rent_range, rent_range_order, age_group, age_group_order
-order by rent_range_order, age_group_order
+group by week_start
+order by week_start
 ```
 
-```sql movein_top_nationality
+```sql movein_monthly_total
 select
-  coalesce(nationality, 'Unknown') as nationality,
-  count(*) as movein_count
-from aurora_gold.movein_analysis_recent
-group by coalesce(nationality, 'Unknown')
+  month_start,
+  tenant_type,
+  sum(movein_count) as movein_count
+from aurora_gold.movein_profile_monthly
+group by month_start, tenant_type
+order by month_start, tenant_type
+```
+
+```sql movein_monthly_total_all
+select
+  month_start,
+  sum(movein_count) as movein_count
+from aurora_gold.movein_profile_monthly
+group by month_start
+order by month_start
+```
+
+```sql movein_monthly_nationality
+select
+  nationality,
+  sum(movein_count) as movein_count
+from aurora_gold.movein_profile_monthly
+where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
+group by nationality
 order by movein_count desc
 limit 20
 ```
 
-```sql movein_lead_time_bucket
-select
-  lead_time_bucket,
-  count(*) as movein_count
-from aurora_gold.movein_analysis_recent
-group by lead_time_bucket
-order by movein_count desc
-```
-
-```sql movein_rent_raw
-select monthly_rent
-from aurora_gold.movein_analysis_recent
-where monthly_rent is not null
-```
-
-```sql movein_top_municipality
+```sql movein_monthly_municipality
 select
   municipality,
   sum(movein_count) as movein_count
-from aurora_gold.municipality_churn_weekly
-where week_start >= CURRENT_DATE - INTERVAL 12 WEEK
+from aurora_gold.movein_profile_monthly
+where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
 group by municipality
 order by movein_count desc
 limit 30
 ```
 
-```sql movein_top_property
+```sql movein_monthly_property
 select
   apartment_name,
   sum(movein_count) as movein_count
-from aurora_gold.property_churn_weekly
-where week_start >= CURRENT_DATE - INTERVAL 12 WEEK
+from aurora_gold.movein_profile_monthly
+where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
 group by apartment_name
 order by movein_count desc
 limit 30
 ```
 
-```sql movein_recent
-select *
-from aurora_gold.movein_analysis_recent
-order by contract_start_date desc
+```sql movein_profile_detail
+select
+  month_start,
+  tenant_type,
+  nationality,
+  municipality,
+  apartment_name,
+  movein_count
+from aurora_gold.movein_profile_monthly
+where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
+order by month_start desc, movein_count desc, tenant_type
 ```
 
+```sql movein_recent_detail
+select
+  contract_start_date,
+  tenant_type,
+  nationality,
+  municipality,
+  apartment_name,
+  monthly_rent,
+  lead_time_bucket
+from aurora_gold.movein_analysis_recent
+where contract_start_date >= current_date - interval 120 day
+order by contract_start_date desc, apartment_name
+```
+
+## Period Controls
+
 <Tabs background="true">
-  <Tab label="Pulse" id="pulse">
-    <LineChart data={movein_weekly_total} x=week_start y=movein_count title="Move-ins (Weekly)" />
+  <Tab label="Daily" id="daily">
+    <LineChart
+      data={movein_daily_total_all}
+      x=activity_date
+      y=movein_count
+      title="Move-ins (Daily)"
+    />
     <BarChart
-      data={movein_weekly_by_tenant_type}
-      x=week_start
+      data={movein_daily_total}
+      x=activity_date
       y=movein_count
       series=tenant_type
       type="stacked"
-      title="Move-ins by Tenant Type (Weekly)"
+      title="Move-ins by tenant_type (Daily)"
       echartsOptions={{ xAxis: { axisLabel: { rotate: 45 } } }}
     />
   </Tab>
 
-  <Tab label="Who" id="who">
-    <Heatmap
-      data={movein_rent_age}
-      x=age_group
-      y=rent_range
-      value=movein_count
-      valueFmt="num0"
-      xSort=age_group_order
-      xSortOrder="asc"
-      ySort=rent_range_order
-      ySortOrder="asc"
-      title="Move-ins: Rent Range x Age Group (Last 52 Weeks)"
-      cellHeight={26}
-    />
-
-    <BarChart
-      data={movein_top_nationality}
-      x=nationality
+  <Tab label="Weekly" id="weekly">
+    <LineChart
+      data={movein_weekly_total_all}
+      x=week_start
       y=movein_count
-      swapXY={true}
-      chartAreaHeight={700}
-      title="Top Nationalities (Move-ins, Last 52 Weeks)"
+      title="Move-ins (Weekly)"
+    />
+    <BarChart
+      data={movein_weekly_total}
+      x=week_start
+      y=movein_count
+      series=tenant_type
+      type="stacked"
+      title="Move-ins by tenant_type (Weekly)"
+      echartsOptions={{ xAxis: { axisLabel: { rotate: 45 } } }}
     />
   </Tab>
 
-  <Tab label="Money & Lead" id="money">
-    <Histogram
-      data={movein_rent_raw}
-      x="monthly_rent"
-      xFmt="num0"
-      title="Monthly Rent Distribution (Move-ins, Last 52 Weeks)"
-    />
-
-    <BarChart
-      data={movein_lead_time_bucket}
-      x=lead_time_bucket
+  <Tab label="Monthly" id="monthly">
+    <LineChart
+      data={movein_monthly_total_all}
+      x=month_start
       y=movein_count
-      title="Lead Time Bucket (Contract to Move-in Start)"
+      title="Move-ins (Monthly)"
     />
-  </Tab>
-
-  <Tab label="Where" id="where">
     <BarChart
-      data={movein_top_municipality}
-      x=municipality
+      data={movein_monthly_total}
+      x=month_start
       y=movein_count
-      swapXY={true}
-      chartAreaHeight={900}
-      title="Top Municipalities (Move-ins, Last 12 Weeks)"
+      series=tenant_type
+      type="stacked"
+      title="Move-ins by tenant_type (Monthly)"
+      echartsOptions={{ xAxis: { axisLabel: { rotate: 45 } } }}
     />
-
-    <BarChart
-      data={movein_top_property}
-      x=apartment_name
-      y=movein_count
-      swapXY={true}
-      chartAreaHeight={900}
-      title="Top Properties (Move-ins, Last 12 Weeks)"
-    />
-  </Tab>
-
-  <Tab label="Drilldown" id="drilldown">
-    <DataTable data={movein_recent} />
   </Tab>
 </Tabs>
+
+<Note>
+Time basis: period tabs map to `contract_start_date` (daily), `week_start` (weekly), and
+`month_start` (monthly).
+Freshness: series reflect latest rows from `aurora_gold.movein_analysis_recent`,
+`aurora_gold.move_events_weekly`, and `aurora_gold.movein_profile_monthly`.
+</Note>
+
+## Cohort and Segment View (Last 12 Months)
+
+<BarChart
+  data={movein_monthly_nationality}
+  x=nationality
+  y=movein_count
+  swapXY={true}
+  chartAreaHeight={700}
+  title="Top Nationalities (Move-ins)"
+/>
+
+<BarChart
+  data={movein_monthly_municipality}
+  x=municipality
+  y=movein_count
+  swapXY={true}
+  chartAreaHeight={900}
+  title="Top Municipalities (Move-ins)"
+/>
+
+<BarChart
+  data={movein_monthly_property}
+  x=apartment_name
+  y=movein_count
+  swapXY={true}
+  chartAreaHeight={900}
+  title="Top Properties (Move-ins)"
+/>
+
+<Note>
+Time basis: segment charts aggregate monthly `movein_profile_monthly.month_start` rows.
+Freshness: cohort/segment totals update with each refresh of `aurora_gold.movein_profile_monthly`.
+</Note>
+
+## Operator Drilldown Tables
+
+<DataTable data={movein_profile_detail} downloadable={true} />
+
+<DataTable data={movein_recent_detail} downloadable={true} />
+
+<Note>
+Time basis: monthly profile detail uses `month_start`; recent contracts use `contract_start_date`.
+Freshness: tables expose the latest available move-in profile and contract rows at query runtime.
+</Note>

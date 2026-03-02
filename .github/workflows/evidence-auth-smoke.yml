@@ -1,0 +1,54 @@
+name: Evidence Authenticated Smoke
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # 08:30 JST (23:30 UTC previous day), after expected daily refresh window.
+    - cron: "30 23 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  evidence_auth_smoke:
+    name: Evidence Authenticated Smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      EVIDENCE_APP_URL: https://intelligence.jram.jp
+      EVIDENCE_AUTH_USERNAME: ${{ secrets.EVIDENCE_AUTH_USERNAME }}
+      EVIDENCE_AUTH_PASSWORD: ${{ secrets.EVIDENCE_AUTH_PASSWORD }}
+      EVIDENCE_ARTIFACT_DIR: evidence-auth-smoke-artifacts
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Evidence dependencies
+        run: npm --prefix evidence ci
+
+      - name: Install Playwright smoke runtime dependency
+        run: npm install --no-save playwright@1.52.0
+
+      - name: Install Chromium browser runtime
+        run: npx playwright install --with-deps chromium
+
+      - name: Run authenticated smoke
+        run: |
+          node scripts/evidence/evidence_auth_smoke.mjs \
+            --base-url "${EVIDENCE_APP_URL}" \
+            --artifact-dir "${EVIDENCE_ARTIFACT_DIR}"
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-auth-smoke
+          path: evidence-auth-smoke-artifacts
+          if-no-files-found: error

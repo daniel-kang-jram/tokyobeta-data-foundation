@@ -1,5 +1,7 @@
 # Occupancy KPI Pipeline - Deployment Guide
 
+**Last Updated:** March 1, 2026
+
 ## Overview
 
 **INTEGRATED ARCHITECTURE (as of Feb 2026):**
@@ -17,6 +19,60 @@ The occupancy KPI pipeline is now **fully integrated into the `gold_transformer`
 - Future projections (today + 90 days) based on scheduled move-ins/move-outs
 - **Single job execution**: dbt gold models → occupancy KPIs → dbt tests
 - Runtime: ~10 minutes (includes all gold models + KPIs + tests)
+
+## Canonical KPI Contract (March 2026 Refresh)
+
+The dashboard KPI cards now read from `gold.kpi_month_end_metrics` and metadata from
+`gold.kpi_reference_trace`.
+
+### KPI Definition Version Ownership
+- `gold.kpi_month_end_metrics` is the source-of-truth owner of KPI formulas and emits
+  `kpi_definition_version` as the canonical version token.
+- `gold.kpi_reference_trace` carries the same `kpi_definition_version` for dashboard
+  metadata/trace checks (freshness and time-basis visibility).
+- Deployment verification must confirm version alignment across both models before release
+  sign-off:
+
+```sql
+SELECT
+    metrics.kpi_definition_version AS metrics_version,
+    trace.kpi_definition_version AS trace_version,
+    CASE
+        WHEN metrics.kpi_definition_version = trace.kpi_definition_version
+            THEN 'aligned'
+        ELSE 'mismatch'
+    END AS deployment_verification
+FROM (
+    SELECT kpi_definition_version
+    FROM gold.kpi_month_end_metrics
+    ORDER BY as_of_date DESC
+    LIMIT 1
+) metrics
+CROSS JOIN (
+    SELECT kpi_definition_version
+    FROM gold.kpi_reference_trace
+    ORDER BY trace_generated_at DESC
+    LIMIT 1
+) trace;
+```
+
+### Same-Day Move-Out Policy
+- Policy token: `count_moveout_room_at_0000_exclude_same_day_moveins`
+- 00:00 occupancy (`occupancy_room_count_0000`) excludes same-day move-ins.
+- Same-day move-out rooms remain counted at 00:00 and are removed through daily move-out flow.
+- End-of-day identity is enforced in dbt tests:
+  `occupancy_room_count_eod = occupancy_room_count_0000 + same_day_moveins - same_day_moveouts`.
+
+### Benchmark Interpretation Notes
+- Benchmark checks are automated via:
+  - `dbt/tests/assert_kpi_reference_feb2026.sql`
+  - `dbt/tests/assert_occupancy_same_day_moveout_policy.sql`
+- Feb 2026 references are treated as guardrails with explicit tolerances:
+  - 2026-01-31 occupancy rate reference `70.7%`
+  - 2026-01 KPI references `RENT 56,195 / RevPAR 39,757 / RecPAR(Cash) 37,826`
+  - 2026-02-01 00:00 occupancy rooms reference `11,271`
+- Tolerance-based assertions are intentional to keep tests deterministic across
+  upstream snapshot revisions while still alerting on meaningful regressions.
 
 ## Deployment Steps
 

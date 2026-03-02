@@ -1,6 +1,6 @@
 # Operations & Runbooks
 
-**Last Updated:** February 28, 2026
+**Last Updated:** March 1, 2026
 
 This document consolidates all operational procedures, setup guides, and troubleshooting runbooks for the TokyoBeta Data Consolidation project.
 
@@ -175,6 +175,114 @@ cp .env.example .env
 # Fill EVIDENCE_SOURCE__aurora_gold__* values with read-only Aurora credentials
 npm run dev
 npm run sources
+```
+
+### Evidence gold refresh verification
+
+Use this acceptance flow after any page-source update or incident response.
+
+#### 1. Build and page contract smoke check
+```bash
+cd /Users/danielkang/tokyobeta-data-consolidation/evidence
+npm run build
+rg -n "from aurora_gold\\.(kpi_month_end_metrics|kpi_reference_trace|funnel_application_to_movein_periodized|funnel_application_to_movein_segment_share|movein_profile_monthly|moveout_profile_monthly|municipality_churn_weekly|property_churn_weekly)" \
+  pages/index.md pages/funnel.md pages/geography.md pages/pricing.md pages/moveins.md pages/moveouts.md
+```
+
+Expected output:
+- `pages/index.md` includes `kpi_month_end_metrics` and `kpi_reference_trace`.
+- `pages/funnel.md` includes `funnel_application_to_movein_periodized`.
+- `pages/pricing.md` includes `funnel_application_to_movein_segment_share`.
+- `pages/geography.md`, `pages/moveins.md`, and `pages/moveouts.md` point only to aurora_gold-backed marts.
+
+#### 2. Parity-critical page-to-source mapping
+
+| Page | Required source contracts |
+| --- | --- |
+| `index.md` | `aurora_gold.kpi_month_end_metrics`, `aurora_gold.kpi_reference_trace` |
+| `funnel.md` | `aurora_gold.funnel_application_to_movein_periodized`, `aurora_gold.funnel_application_to_movein_daily` |
+| `geography.md` | `aurora_gold.municipality_churn_weekly`, `aurora_gold.property_churn_weekly` |
+| `pricing.md` | `aurora_gold.funnel_application_to_movein_segment_share`, `aurora_gold.funnel_application_to_movein_periodized` |
+| `moveins.md` | `aurora_gold.movein_profile_monthly`, `aurora_gold.move_events_weekly` |
+| `moveouts.md` | `aurora_gold.moveout_profile_monthly`, `aurora_gold.move_events_weekly` |
+
+#### 3. Timestamp and freshness label validation
+```bash
+cd /Users/danielkang/tokyobeta-data-consolidation/evidence
+rg -n "Time basis:|Freshness:" \
+  pages/index.md pages/funnel.md pages/geography.md pages/pricing.md pages/moveins.md pages/moveouts.md
+```
+
+Expected output:
+- Every listed page returns both `Time basis:` and `Freshness:` labels.
+- If either label is missing for any page, treat release as parity-incomplete and block deployment.
+
+#### 4. Operator CSV export checks
+```bash
+cd /Users/danielkang/tokyobeta-data-consolidation/evidence
+rg -n "downloadable=\\{true\\}" \
+  pages/funnel.md pages/pricing.md pages/moveins.md pages/moveouts.md pages/geography.md
+```
+
+Expected output:
+- Core operational detail tables are CSV-exportable on parity pages.
+- `pricing.md`, `moveins.md`, and `moveouts.md` must always return at least one downloadable table each.
+- `geography.md` detail tables should remain exportable for incident triage.
+
+### Authenticated production smoke runbook (release gate)
+
+Use this flow before any GO release decision for `https://intelligence.jram.jp`.
+
+#### 1. Run authenticated production smoke and capture artifacts
+```bash
+cd /Users/danielkang/tokyobeta-data-consolidation
+RUN_ARTIFACT_DIR="artifacts/evidence-auth-smoke/prod-$(date +%Y%m%d-%H%M%S)"
+npm --yes --package=playwright exec -- \
+  node scripts/evidence/evidence_auth_smoke.mjs \
+  --base-url https://intelligence.jram.jp \
+  --username "$EVIDENCE_AUTH_USERNAME" \
+  --password "$EVIDENCE_AUTH_PASSWORD" \
+  --artifact-dir "$RUN_ARTIFACT_DIR"
+```
+
+#### 2. Print deterministic route matrix and verify pricing funnel markers
+```bash
+npm --yes --package=playwright exec -- \
+  node scripts/evidence/evidence_auth_smoke.mjs \
+  --dry-run \
+  --base-url https://intelligence.jram.jp \
+  --artifact-dir "$RUN_ARTIFACT_DIR/dryrun" \
+  --print-route-matrix > "$RUN_ARTIFACT_DIR/route-matrix.json"
+
+jq -e '.routes.pricing.funnel_markers | index("Overall Conversion Rate (%)") and index("Municipality Segment Parity (Applications vs Move-ins)") and index("Nationality Segment Parity (Applications vs Move-ins)") and index("Monthly Conversion Trend")' \
+  "$RUN_ARTIFACT_DIR/route-matrix.json"
+```
+
+#### 3. Review required artifacts and blockers
+```bash
+test -f "$RUN_ARTIFACT_DIR/summary.json"
+test -f "$RUN_ARTIFACT_DIR/console_logs.json"
+test -f "$RUN_ARTIFACT_DIR/network_logs.json"
+ls "$RUN_ARTIFACT_DIR/screenshots" | wc -l
+```
+
+Block release and trigger rollback if any blocker is present:
+- route marker mismatch (H1, KPI marker, time-context marker, or pricing funnel marker)
+- `KPI Landing (Gold)` appears on non-home routes
+- metadata response is not `application/json` or any `/api//` request appears
+- console/network includes `Unexpected token '<'` metadata parse errors
+- artifact set is incomplete (`summary.json`, console/network logs, per-route screenshots)
+
+#### 4. Rollback trigger procedure (NO-GO only)
+1. Mark decision as `NO-GO` in `docs/DEPLOYMENT.md` sign-off record with failing criteria.
+2. Trigger the last-known-good Evidence refresh pipeline execution.
+3. Re-run authenticated smoke and confirm all blockers are cleared before any new GO decision.
+
+Pipeline trigger template:
+```bash
+aws codepipeline start-pipeline-execution \
+  --name "<last-known-good-evidence-refresh-pipeline>" \
+  --profile gghouse
 ```
 
 ### Security & Access

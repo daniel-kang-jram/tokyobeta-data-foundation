@@ -84,3 +84,9 @@ terraform/modules/evidence_hosting/.build/
 
 # Terraform monitoring local layer artifact
 terraform/modules/monitoring/pymysql_layer.zip
+
+# Planning artifacts
+# Keep only high-level planning docs in-repo
+.planning/config.json
+.planning/STATE.md
+.planning/phases/

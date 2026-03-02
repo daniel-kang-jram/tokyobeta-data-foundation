@@ -19,8 +19,19 @@ if(!ok){
 var cur=uri+(qraw?"?"+qraw:"");
 return red("/__auth/login?return_to="+encodeURIComponent(cur));
 }
+return rw(r);
+}
+function rw(r){
+var u=r.uri||"/";
+if(u==="/"||u===""){r.uri="/index.html";return r;}
+if(sw(u,"/__auth")||sw(u,"/api")||sw(u,"/_app")||sw(u,"/data")){return r;}
+if(u==="/fix-tprotocol-service-worker.js"){return r;}
+if(u.charAt(u.length-1)==="/"){r.uri=u+"index.html";return r;}
+if(u.indexOf(".")>=0){return r;}
+r.uri=u+"/index.html";
 return r;
 }
+function sw(u,p){return u===p||u.indexOf(p+"/")===0;}
 function b401(){return{statusCode:401,statusDescription:"Unauthorized",headers:{"www-authenticate":{value:"Basic realm=\"Evidence Dashboard\""},"cache-control":{value:"no-store, no-cache, max-age=0"}}};}
 function red(loc,c){var x={statusCode:302,statusDescription:"Found",headers:{location:{value:loc},"cache-control":{value:"no-store, no-cache, max-age=0"}}};if(c){x.cookies={};x.cookies[c.name]={value:c.value,attributes:c.attributes};}return x;}
 function page(rt,err,lang,st){return{statusCode:st,statusDescription:st===401?"Unauthorized":"OK",headers:{"content-type":{value:"text/html; charset=utf-8"},"cache-control":{value:"no-store, no-cache, max-age=0"},pragma:{value:"no-cache"}},body:html(norm(rt),err,lang)};}

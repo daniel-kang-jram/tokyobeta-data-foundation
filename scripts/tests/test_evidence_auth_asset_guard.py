@@ -21,6 +21,21 @@ def test_gold_buildspec_uploads_auth_video_explicitly() -> None:
     )
 
 
+def test_gold_buildspec_runs_route_contract_guard_before_sync() -> None:
+    """Gold deploy must verify route contract before uploading build assets."""
+    source = EVIDENCE_BUILDSPEC.read_text(encoding="utf-8")
+
+    verify_contract_cmd = (
+        "node ../scripts/evidence/verify_route_contract.mjs "
+        "--build-dir build --routes occupancy moveins moveouts geography pricing"
+    )
+    sync_cmd = 'aws s3 sync build/ "s3://$EVIDENCE_S3_BUCKET/"'
+
+    assert verify_contract_cmd in source
+    assert sync_cmd in source
+    assert source.index(verify_contract_cmd) < source.index(sync_cmd)
+
+
 def test_snapshot_buildspec_uploads_auth_video_explicitly() -> None:
     """Snapshot deploy must always publish auth video."""
     source = SNAPSHOT_BUILDSPEC.read_text(encoding="utf-8")
