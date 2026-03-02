@@ -253,7 +253,8 @@ models:
 
   - name: occupancy_property_daily
     description: |
-      Daily property-level occupancy derived from silver.tenant_room_snapshot_daily.
+      Daily property-level occupancy derived from silver.tenant_room_snapshot_daily
+      using physical-room primary semantics (`is_room_primary = true`).
       Grain: (snapshot_date, asset_id_hj).
     config:
       schema: gold
@@ -282,7 +283,8 @@ models:
 
   - name: occupancy_property_map_latest
     description: |
-      Latest-snapshot property occupancy table for mapping, including 7-day deltas.
+      Latest-snapshot property occupancy table for mapping, including 7-day deltas,
+      sourced from physical-room occupancy logic in occupancy_property_daily.
       Grain: 1 row per asset_id_hj for the latest snapshot_date.
     config:
       schema: gold
@@ -303,6 +305,9 @@ models:
     tests:
       - dbt_utils.expression_is_true:
           expression: "latitude BETWEEN 35.0 AND 36.0 AND longitude BETWEEN 139.0 AND 140.5"
+          severity: error
+      - dbt_utils.expression_is_true:
+          expression: "occupancy_rate >= 0 AND occupancy_rate <= 1"
           severity: error
 
   - name: movein_analysis

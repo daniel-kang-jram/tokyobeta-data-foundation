@@ -7,6 +7,14 @@ select
 from aurora_gold.occupancy_property_map_latest
 ```
 
+```sql occupancy_map_coverage
+select
+  min(snapshot_date) as coverage_from,
+  max(snapshot_date) as coverage_to,
+  max(snapshot_date) as freshness_snapshot_date
+from aurora_gold.occupancy_property_map_latest
+```
+
 ## Tokyo Occupancy Map (Latest Snapshot)
 
 <BubbleMap
@@ -36,11 +44,13 @@ from aurora_gold.occupancy_property_map_latest
     { id: "occupancy_rate_pct", fmt: "pct" },
     { id: "occupancy_rate_delta_7d_pp", fmt: "num2" }
   ]}
+  colorPalette={['#b91c1c', '#f59e0b', '#22c55e']}
 />
 
 <Note>
 Time basis: latest property snapshot date from `occupancy_property_map_latest.snapshot_date`.
-Freshness: map points refresh with `aurora_gold.occupancy_property_map_latest` load cadence.
+Coverage: {occupancy_map_coverage[0].coverage_from} to {occupancy_map_coverage[0].coverage_to}.
+Freshness: {occupancy_map_coverage[0].freshness_snapshot_date}.
 </Note>
 
 ```sql municipality_churn
@@ -81,6 +91,40 @@ order by abs(sum(net_change)) desc
 limit 30
 ```
 
+```sql municipality_hotspot_coverage
+select
+  min(week_start) as coverage_from,
+  max(week_start) as coverage_to,
+  max(week_start) as freshness_week_start
+from aurora_gold.municipality_churn_weekly
+where week_start >= CURRENT_DATE - INTERVAL 12 WEEK
+```
+
+```sql property_hotspot_coverage
+select
+  min(week_start) as coverage_from,
+  max(week_start) as coverage_to,
+  max(week_start) as freshness_week_start
+from aurora_gold.property_churn_weekly
+where week_start >= CURRENT_DATE - INTERVAL 12 WEEK
+```
+
+```sql municipality_detail_coverage
+select
+  min(week_start) as coverage_from,
+  max(week_start) as coverage_to,
+  max(week_start) as freshness_week_start
+from aurora_gold.municipality_churn_weekly
+```
+
+```sql property_detail_coverage
+select
+  min(week_start) as coverage_from,
+  max(week_start) as coverage_to,
+  max(week_start) as freshness_week_start
+from aurora_gold.property_churn_weekly
+```
+
 ## Municipality hotspots (weekly, last 12 weeks)
 
 <Tabs background="true">
@@ -118,7 +162,8 @@ limit 30
 
 <Note>
 Time basis: weekly `week_start` records from `municipality_churn_weekly` over the last 12 weeks.
-Freshness: municipality hotspot bars depend on the newest `aurora_gold.municipality_churn_weekly` rows.
+Coverage: {municipality_hotspot_coverage[0].coverage_from} to {municipality_hotspot_coverage[0].coverage_to}.
+Freshness: {municipality_hotspot_coverage[0].freshness_week_start}.
 </Note>
 
 ## Property hotspots (weekly, last 12 weeks)
@@ -158,7 +203,8 @@ Freshness: municipality hotspot bars depend on the newest `aurora_gold.municipal
 
 <Note>
 Time basis: weekly `week_start` records from `property_churn_weekly` over the last 12 weeks.
-Freshness: property hotspot bars depend on the newest `aurora_gold.property_churn_weekly` rows.
+Coverage: {property_hotspot_coverage[0].coverage_from} to {property_hotspot_coverage[0].coverage_to}.
+Freshness: {property_hotspot_coverage[0].freshness_week_start}.
 </Note>
 
 ## Municipality weekly detail
@@ -167,7 +213,8 @@ Freshness: property hotspot bars depend on the newest `aurora_gold.property_chur
 
 <Note>
 Time basis: row-level weekly detail from `municipality_churn_weekly.week_start`.
-Freshness: table reflects latest loaded municipality churn rows from `aurora_gold`.
+Coverage: {municipality_detail_coverage[0].coverage_from} to {municipality_detail_coverage[0].coverage_to}.
+Freshness: {municipality_detail_coverage[0].freshness_week_start}.
 </Note>
 
 ## Property weekly detail
@@ -176,5 +223,6 @@ Freshness: table reflects latest loaded municipality churn rows from `aurora_gol
 
 <Note>
 Time basis: row-level weekly detail from `property_churn_weekly.week_start`.
-Freshness: table reflects latest loaded property churn rows from `aurora_gold`.
+Coverage: {property_detail_coverage[0].coverage_from} to {property_detail_coverage[0].coverage_to}.
+Freshness: {property_detail_coverage[0].freshness_week_start}.
 </Note>

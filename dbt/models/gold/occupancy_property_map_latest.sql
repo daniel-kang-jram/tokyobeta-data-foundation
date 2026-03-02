@@ -12,6 +12,7 @@
 
 -- Gold Layer: Property Occupancy Map (Latest Snapshot + 7D Delta)
 -- Grain: 1 row per property for the latest available snapshot_date.
+-- Source occupancy semantics follow occupancy_property_daily physical-room primary logic.
 
 WITH latest AS (
     SELECT MAX(snapshot_date) AS latest_snapshot_date
