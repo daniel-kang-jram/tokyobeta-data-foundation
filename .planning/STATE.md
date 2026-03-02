@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
-status: complete
-last_updated: "2026-03-02T03:44:13.295Z"
+status: in_progress
+last_updated: "2026-03-02T05:45:57.879Z"
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
-  total_plans: 14
-  completed_plans: 14
+  total_plans: 17
+  completed_plans: 15
 ---
 
 # Project State
@@ -17,10 +17,10 @@ progress:
 - `v1.0` complete
 
 ## Current Phase
-- `03-fix-evidence-dashboard-parity-and-timestamp-clarity`
-- Last completed plan: `03-04-PLAN.md` (Phase 3)
-- Next plan: `None`
-- Phase progress: 4/4 plans complete
+- `04-improve-evidence-ux-readability-and-chart-ergonomics`
+- Last completed plan: `04-01-PLAN.md` (Phase 4)
+- Next plan: `04-02-PLAN.md`
+- Phase progress: 1/3 plans complete
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -69,6 +69,9 @@ progress:
 - [Phase 03]: Require coverage_markers as a first-class smoke route-matrix field and assert it per gated route.
 - [Phase 03]: Back Coverage labels with explicit SQL coverage queries on each remaining parity page section.
 - [Phase 03]: Tie GO/NO-GO runbook checks to jq-verified route-matrix coverage markers.
+- [Phase 04]: Remove low-signal municipality/nationality/trend breakdown charts from funnel while retaining pricing route parity markers.
+- [Phase 04]: Model replacement flow links from aurora_gold moveout/movein sources grouped by municipality, nationality, tenant_type, and rent_band.
+- [Phase 04]: Keep Time basis/Coverage/Freshness prefixes but emit compact YYYY-MM-DD values for funnel notes.
 
 ## Accumulated Context
 ### Roadmap Evolution
@@ -92,10 +95,11 @@ progress:
 | 03 | 02 | 45 min | 3 | 6 |
 | 03 | 03 | 3 min | 3 | 3 |
 | 03 | 04 | 5 min | 3 | 8 |
+| 04 | 01 | 6 min | 3 | 2 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-02T03:37:14Z
-- Stopped At: Completed 03-04-PLAN.md
+- Updated: 2026-03-02T05:44:37Z
+- Stopped At: Completed 04-01-PLAN.md

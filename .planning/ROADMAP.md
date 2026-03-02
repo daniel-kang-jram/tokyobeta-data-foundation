@@ -70,12 +70,12 @@
 **Goal:** Improve Evidence readability and chart ergonomics by converting verbose timestamp notes to concise compact-date labels (`YYYY-MM-DD` style), replacing funnel breakdowns with a snapshot-style replacement-failure flow, removing low-signal funnel breakdown charts while preserving cohort/nationality dimensions, tightening geography municipality/nationality hotspot and pricing chart heights, and removing the left-bottom `Built with Evidence` link.
 **Requirements**: [EVD-REFRESH-002], [EVD-REFRESH-004], [EVD-REFRESH-006], [EVD-REFRESH-008], [EVD-NFR-001], [EVD-NFR-002]
 **Depends on:** Phase 3
-**Status:** Planned
-**Plans:** 3 plans
+**Status:** In Progress (updated 2026-03-02)
+**Plans:** 1/3 plans complete
 
 **Plan Progress**
 | Plan | Status | Summary |
 | --- | --- | --- |
-| 04-01 | Planned | `.planning/phases/04-improve-evidence-ux-readability-and-chart-ergonomics/04-01-PLAN.md` |
+| 04-01 | Complete | `.planning/phases/04-improve-evidence-ux-readability-and-chart-ergonomics/04-01-SUMMARY.md` |
 | 04-02 | Planned | `.planning/phases/04-improve-evidence-ux-readability-and-chart-ergonomics/04-02-PLAN.md` |
 | 04-03 | Planned | `.planning/phases/04-improve-evidence-ux-readability-and-chart-ergonomics/04-03-PLAN.md` |
