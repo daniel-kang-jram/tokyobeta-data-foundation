@@ -55,12 +55,12 @@
 **Requirements**: [EVD-REFRESH-002], [EVD-REFRESH-006], [EVD-REFRESH-008]
 **Depends on:** Phase 2
 **Status:** In Progress (updated 2026-03-02)
-**Plans:** 1/4 plans complete
+**Plans:** 2/4 plans complete
 
 **Plan Progress**
 | Plan | Status | Summary |
 | --- | --- | --- |
 | 03-01 | Complete | `.planning/phases/03-fix-evidence-dashboard-parity-and-timestamp-clarity/03-01-SUMMARY.md` |
-| 03-02 | Planned | - |
+| 03-02 | Complete | `.planning/phases/03-fix-evidence-dashboard-parity-and-timestamp-clarity/03-02-SUMMARY.md` |
 | 03-03 | Planned | - |
 | 03-04 | Planned | - |
