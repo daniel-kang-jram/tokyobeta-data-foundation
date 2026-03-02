@@ -31,6 +31,13 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _assert_compact_date_contract(source: str, page_label: str) -> None:
+    """Assert compact-date wording and absence of verbose timezone tokens."""
+    assert "YYYY-MM-DD" in source, f"missing compact date wording in {page_label}"
+    for marker in VERBOSE_TIMEZONE_MARKERS:
+        assert marker not in source, f"found verbose timezone token '{marker}' in {page_label}"
+
+
 def test_home_kpi_line_charts_use_explicit_y_axis_bounds() -> None:
     """Home KPI trend charts should declare bounded y-axis ranges."""
     source = _read(HOME_PAGE)
@@ -82,9 +89,7 @@ def test_refresh_routes_use_compact_date_wording_without_timezone_tokens() -> No
     for page_path in PLAN_REFRESH_ROUTE_PAGES:
         source = _read(page_path)
 
-        assert "YYYY-MM-DD" in source, f"missing compact date wording in {page_path.name}"
-        for marker in VERBOSE_TIMEZONE_MARKERS:
-            assert marker not in source, f"found verbose timezone token '{marker}' in {page_path.name}"
+        _assert_compact_date_contract(source, page_path.name)
 
 
 def test_auth_test_route_source_is_removed_from_pages_contract() -> None:

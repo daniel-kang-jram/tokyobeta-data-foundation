@@ -63,6 +63,13 @@ def load_route_matrix() -> dict[str, dict[str, object]]:
     return routes
 
 
+def assert_compact_date_contract(source: str, relative_path: str) -> None:
+    """Assert compact-date wording and absence of verbose timezone tokens."""
+    assert "YYYY-MM-DD" in source, f"missing compact date wording in {relative_path}"
+    for marker in VERBOSE_TIMEZONE_MARKERS:
+        assert marker not in source, f"found verbose timezone token '{marker}' in {relative_path}"
+
+
 def test_smoke_script_includes_all_release_routes() -> None:
     """Smoke contract must include all release-gated routes."""
     assert SMOKE_SCRIPT.exists(), "expected smoke script at scripts/evidence/evidence_auth_smoke.mjs"
@@ -168,6 +175,4 @@ def test_readability_refresh_routes_require_compact_date_wording() -> None:
         page_path = REPO_ROOT / relative_path
         source = page_path.read_text(encoding="utf-8")
 
-        assert "YYYY-MM-DD" in source, f"missing compact date wording in {relative_path}"
-        for marker in VERBOSE_TIMEZONE_MARKERS:
-            assert marker not in source, f"found verbose timezone token '{marker}' in {relative_path}"
+        assert_compact_date_contract(source, relative_path)
