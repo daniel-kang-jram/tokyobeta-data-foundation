@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
 status: active
-last_updated: "2026-03-02T03:18:06Z"
+last_updated: "2026-03-02T03:27:01Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 14
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
@@ -18,9 +18,9 @@ progress:
 
 ## Current Phase
 - `03-fix-evidence-dashboard-parity-and-timestamp-clarity`
-- Last completed plan: `03-02-PLAN.md` (Phase 3)
-- Next plan: `03-03-PLAN.md`
-- Phase progress: 2/4 plans complete
+- Last completed plan: `03-03-PLAN.md` (Phase 3)
+- Next plan: `03-04-PLAN.md`
+- Phase progress: 3/4 plans complete
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -63,6 +63,9 @@ progress:
 - [Phase 03]: Use is_room_primary occupancy with staging.rooms-backed room capacity to keep geography occupancy <=100%.
 - [Phase 03]: Geography route requires query-backed Time basis/Coverage/Freshness markers and deterministic red->green map palette contracts.
 - [Phase 03]: Incremental occupancy rebuilds trigger earliest-bad-date backfill when occupancy_rate>1, otherwise fall back to a 2-day recompute window.
+- [Phase 03]: Use SQL-derived kpi_history_bounds for explicit Home chart y-axis limits.
+- [Phase 03]: Require Home KPI trends to show query-backed Time basis/Coverage/Freshness labels.
+- [Phase 03]: Remove auth-test.md to guarantee the Auth Test route is absent from Evidence page manifests.
 
 ## Accumulated Context
 ### Roadmap Evolution
@@ -83,10 +86,11 @@ progress:
 | 02 | 05 | 38 min | 4 | 5 |
 | 03 | 01 | 11 min | 3 | 6 |
 | 03 | 02 | 45 min | 3 | 6 |
+| 03 | 03 | 3 min | 3 | 3 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-02T03:18:06Z
-- Stopped At: Completed 03-02-PLAN.md
+- Updated: 2026-03-02T03:27:01Z
+- Stopped At: Completed 03-03-PLAN.md
