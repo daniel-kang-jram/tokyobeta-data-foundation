@@ -9,9 +9,9 @@ from aurora_gold.occupancy_property_map_latest
 
 ```sql occupancy_map_coverage
 select
-  min(snapshot_date) as coverage_from,
-  max(snapshot_date) as coverage_to,
-  max(snapshot_date) as freshness_snapshot_date
+  substr(cast(min(snapshot_date) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(snapshot_date) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(snapshot_date) as varchar), 1, 10) as freshness_snapshot_date
 from aurora_gold.occupancy_property_map_latest
 ```
 
@@ -48,7 +48,7 @@ from aurora_gold.occupancy_property_map_latest
 />
 
 <Note>
-Time basis: latest property snapshot date from `occupancy_property_map_latest.snapshot_date`.
+Time basis: latest property snapshot.
 Coverage: {occupancy_map_coverage[0].coverage_from} to {occupancy_map_coverage[0].coverage_to}.
 Freshness: {occupancy_map_coverage[0].freshness_snapshot_date}.
 </Note>
@@ -93,35 +93,35 @@ limit 30
 
 ```sql municipality_hotspot_coverage
 select
-  min(week_start) as coverage_from,
-  max(week_start) as coverage_to,
-  max(week_start) as freshness_week_start
+  substr(cast(min(week_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(week_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(week_start) as varchar), 1, 10) as freshness_week_start
 from aurora_gold.municipality_churn_weekly
 where week_start >= CURRENT_DATE - INTERVAL 12 WEEK
 ```
 
 ```sql property_hotspot_coverage
 select
-  min(week_start) as coverage_from,
-  max(week_start) as coverage_to,
-  max(week_start) as freshness_week_start
+  substr(cast(min(week_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(week_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(week_start) as varchar), 1, 10) as freshness_week_start
 from aurora_gold.property_churn_weekly
 where week_start >= CURRENT_DATE - INTERVAL 12 WEEK
 ```
 
 ```sql municipality_detail_coverage
 select
-  min(week_start) as coverage_from,
-  max(week_start) as coverage_to,
-  max(week_start) as freshness_week_start
+  substr(cast(min(week_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(week_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(week_start) as varchar), 1, 10) as freshness_week_start
 from aurora_gold.municipality_churn_weekly
 ```
 
 ```sql property_detail_coverage
 select
-  min(week_start) as coverage_from,
-  max(week_start) as coverage_to,
-  max(week_start) as freshness_week_start
+  substr(cast(min(week_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(week_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(week_start) as varchar), 1, 10) as freshness_week_start
 from aurora_gold.property_churn_weekly
 ```
 
@@ -134,7 +134,7 @@ from aurora_gold.property_churn_weekly
       x=municipality
       y=net_change
       swapXY={true}
-      chartAreaHeight={900}
+      chartAreaHeight={520}
       title="Municipality Net Change (Top Absolute)"
     />
   </Tab>
@@ -144,7 +144,7 @@ from aurora_gold.property_churn_weekly
       x=municipality
       y=movein_count
       swapXY={true}
-      chartAreaHeight={900}
+      chartAreaHeight={520}
       title="Municipality Move-ins (Top)"
     />
   </Tab>
@@ -154,14 +154,14 @@ from aurora_gold.property_churn_weekly
       x=municipality
       y=moveout_count
       swapXY={true}
-      chartAreaHeight={900}
+      chartAreaHeight={520}
       title="Municipality Move-outs (Top)"
     />
   </Tab>
 </Tabs>
 
 <Note>
-Time basis: weekly `week_start` records from `municipality_churn_weekly` over the last 12 weeks.
+Time basis: weekly municipality hotspot totals (last 12 weeks).
 Coverage: {municipality_hotspot_coverage[0].coverage_from} to {municipality_hotspot_coverage[0].coverage_to}.
 Freshness: {municipality_hotspot_coverage[0].freshness_week_start}.
 </Note>
@@ -175,7 +175,7 @@ Freshness: {municipality_hotspot_coverage[0].freshness_week_start}.
       x=apartment_name
       y=net_change
       swapXY={true}
-      chartAreaHeight={900}
+      chartAreaHeight={520}
       title="Property Net Change (Top Absolute)"
     />
   </Tab>
@@ -185,7 +185,7 @@ Freshness: {municipality_hotspot_coverage[0].freshness_week_start}.
       x=apartment_name
       y=movein_count
       swapXY={true}
-      chartAreaHeight={900}
+      chartAreaHeight={520}
       title="Property Move-ins (Top)"
     />
   </Tab>
@@ -195,14 +195,14 @@ Freshness: {municipality_hotspot_coverage[0].freshness_week_start}.
       x=apartment_name
       y=moveout_count
       swapXY={true}
-      chartAreaHeight={900}
+      chartAreaHeight={520}
       title="Property Move-outs (Top)"
     />
   </Tab>
 </Tabs>
 
 <Note>
-Time basis: weekly `week_start` records from `property_churn_weekly` over the last 12 weeks.
+Time basis: weekly property hotspot totals (last 12 weeks).
 Coverage: {property_hotspot_coverage[0].coverage_from} to {property_hotspot_coverage[0].coverage_to}.
 Freshness: {property_hotspot_coverage[0].freshness_week_start}.
 </Note>
@@ -212,7 +212,7 @@ Freshness: {property_hotspot_coverage[0].freshness_week_start}.
 <DataTable data={municipality_churn} downloadable={true} />
 
 <Note>
-Time basis: row-level weekly detail from `municipality_churn_weekly.week_start`.
+Time basis: weekly municipality detail rows.
 Coverage: {municipality_detail_coverage[0].coverage_from} to {municipality_detail_coverage[0].coverage_to}.
 Freshness: {municipality_detail_coverage[0].freshness_week_start}.
 </Note>
@@ -222,7 +222,7 @@ Freshness: {municipality_detail_coverage[0].freshness_week_start}.
 <DataTable data={property_churn} downloadable={true} />
 
 <Note>
-Time basis: row-level weekly detail from `property_churn_weekly.week_start`.
+Time basis: weekly property detail rows.
 Coverage: {property_detail_coverage[0].coverage_from} to {property_detail_coverage[0].coverage_to}.
 Freshness: {property_detail_coverage[0].freshness_week_start}.
 </Note>

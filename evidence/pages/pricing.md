@@ -264,27 +264,27 @@ order by s.period_grain, s.period_start desc, s.segment_type, s.tenant_type, s.s
 
 ```sql pricing_segment_monthly_coverage
 select
-  min(period_start) as coverage_from,
-  max(period_start) as coverage_to,
-  max(updated_at) as freshness_updated_at
+  substr(cast(min(period_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(period_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(updated_at) as varchar), 1, 10) as freshness_updated_at
 from aurora_gold.funnel_application_to_movein_segment_share
 where period_grain = 'monthly'
 ```
 
 ```sql pricing_segment_weekly_coverage
 select
-  min(period_start) as coverage_from,
-  max(period_start) as coverage_to,
-  max(updated_at) as freshness_updated_at
+  substr(cast(min(period_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(period_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(updated_at) as varchar), 1, 10) as freshness_updated_at
 from aurora_gold.funnel_application_to_movein_segment_share
 where period_grain = 'weekly'
 ```
 
 ```sql pricing_monthly_trend_coverage
 select
-  min(period_start) as coverage_from,
-  max(period_start) as coverage_to,
-  max(updated_at) as freshness_updated_at
+  substr(cast(min(period_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(period_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(updated_at) as varchar), 1, 10) as freshness_updated_at
 from aurora_gold.funnel_application_to_movein_periodized
 where period_grain = 'monthly'
 ```
@@ -322,7 +322,7 @@ where period_grain = 'monthly'
 </ul>
 
 <Note>
-Time basis: latest monthly `period_start` from `funnel_application_to_movein_segment_share`.
+Time basis: latest monthly segment snapshot.
 Coverage: {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
 Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>
@@ -358,7 +358,7 @@ Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 <DataTable data={municipality_pie} downloadable={true} />
 
 <Note>
-Time basis: latest monthly segment shares for `segment_type = municipality`.
+Time basis: latest monthly municipality segment shares.
 Coverage: {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
 Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>
@@ -394,7 +394,7 @@ Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 <DataTable data={nationality_pie} downloadable={true} />
 
 <Note>
-Time basis: latest monthly segment shares for `segment_type = nationality`.
+Time basis: latest monthly nationality segment shares.
 Coverage: {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
 Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>
@@ -428,7 +428,7 @@ Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 />
 
 <Note>
-Time basis: monthly `period_start` rows from `funnel_application_to_movein_periodized`.
+Time basis: monthly conversion trend by `period_start`.
 Coverage: {pricing_monthly_trend_coverage[0].coverage_from} to {pricing_monthly_trend_coverage[0].coverage_to}.
 Freshness: {pricing_monthly_trend_coverage[0].freshness_updated_at}.
 </Note>
@@ -440,14 +440,14 @@ Freshness: {pricing_monthly_trend_coverage[0].freshness_updated_at}.
   x=segment_label
   y=conversion_rate_pct
   swapXY={true}
-  chartAreaHeight={900}
+  chartAreaHeight={520}
   title="Lowest Conversion Segments (12-Month Window)"
 />
 
 <DataTable data={segment_pressure_ranking} downloadable={true} />
 
 <Note>
-Time basis: rolling 12-month monthly window from `funnel_application_to_movein_segment_share`.
+Time basis: rolling 12-month monthly segment ranking.
 Coverage: {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
 Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>
@@ -457,7 +457,7 @@ Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 <DataTable data={segment_share_detail} downloadable={true} />
 
 <Note>
-Time basis: weekly and monthly `period_start` rows from segment-share contract output.
+Time basis: weekly and monthly segment-share detail by `period_start`.
 Coverage: Weekly {pricing_segment_weekly_coverage[0].coverage_from} to {pricing_segment_weekly_coverage[0].coverage_to}; Monthly {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
 Freshness: Weekly {pricing_segment_weekly_coverage[0].freshness_updated_at}; Monthly {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>
