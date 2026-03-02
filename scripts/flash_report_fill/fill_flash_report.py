@@ -388,6 +388,7 @@ def main() -> int:
                 metric_to_cells["mar_planned_moveins"][0][0],
                 metric_to_cells["mar_planned_moveins"][1][0],
             ],
+            movein_prediction_date_column=query_config.movein_prediction_date_column,
         )
         d5_recon_records, d5_warnings = build_d5_discrepancy_records(
             cursor=cursor,

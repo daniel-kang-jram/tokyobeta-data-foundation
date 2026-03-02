@@ -195,6 +195,52 @@ def test_build_reconciliation_records_returns_expected_rows() -> None:
     )
 
 
+def test_build_reconciliation_records_uses_selected_movein_prediction_date_column() -> None:
+    cursor = _ReconCursor()
+    rows = build_reconciliation_records(
+        cursor=cursor,
+        cell_values={"D5": 110, "D13": 11, "E13": 4},
+        snapshot_start_date=date(2026, 2, 1),
+        snapshot_asof_date=date(2026, 2, 26),
+        feb_start_date=date(2026, 2, 1),
+        feb_end_date=date(2026, 2, 28),
+        mar_start_date=date(2026, 3, 1),
+        mar_end_date=date(2026, 3, 31),
+        reconciliation_asof_date=date(2026, 2, 28),
+        mar_planned_movein_cells=["D13", "E13"],
+        movein_prediction_date_column="movein_decided_date",
+    )
+
+    matching_sql = [
+        sql for sql, _params in cursor.calls if "silver_asof_mar_planned_moveins_split" in sql
+    ]
+    assert len(matching_sql) == 1
+    assert "m.movein_decided_date > %s" in matching_sql[0]
+    assert "m.movein_decided_date <= %s" in matching_sql[0]
+    assert "m.original_movein_date > %s" not in matching_sql[0]
+
+    total_row = next(r for r in rows if r.reconciliation_id == "silver_asof_mar_planned_moveins_total")
+    assert "movein_decided_date" in total_row.note
+
+
+def test_build_reconciliation_records_rejects_unsupported_movein_prediction_date_column() -> None:
+    cursor = _ReconCursor()
+    with pytest.raises(ValueError, match="Unsupported move-in prediction column"):
+        build_reconciliation_records(
+            cursor=cursor,
+            cell_values={"D5": 110, "D13": 11, "E13": 4},
+            snapshot_start_date=date(2026, 2, 1),
+            snapshot_asof_date=date(2026, 2, 26),
+            feb_start_date=date(2026, 2, 1),
+            feb_end_date=date(2026, 2, 28),
+            mar_start_date=date(2026, 3, 1),
+            mar_end_date=date(2026, 3, 31),
+            reconciliation_asof_date=date(2026, 2, 28),
+            mar_planned_movein_cells=["D13", "E13"],
+            movein_prediction_date_column="movein_planned_at",
+        )
+
+
 def test_silver_occupied_rooms_uses_fallback_only_for_missing_is_room_primary_column() -> None:
     cursor = _SilverFallbackCursor()
     value = _silver_occupied_rooms(cursor, date(2026, 2, 1))
