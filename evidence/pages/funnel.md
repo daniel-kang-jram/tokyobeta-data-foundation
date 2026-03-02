@@ -111,37 +111,29 @@ group by p.period_start
 order by p.period_start
 ```
 
-```sql funnel_daily_coverage
-select
-  min(activity_date) as coverage_from,
-  max(activity_date) as coverage_to,
-  max(updated_at) as freshness_updated_at
-from aurora_gold.funnel_application_to_movein_daily
-```
-
 ```sql funnel_daily_period_coverage
 select
-  min(period_start) as coverage_from,
-  max(period_start) as coverage_to,
-  max(updated_at) as freshness_updated_at
+  substr(cast(min(period_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(period_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(updated_at) as varchar), 1, 10) as freshness_updated_at
 from aurora_gold.funnel_application_to_movein_periodized
 where period_grain = 'daily'
 ```
 
 ```sql funnel_weekly_period_coverage
 select
-  min(period_start) as coverage_from,
-  max(period_start) as coverage_to,
-  max(updated_at) as freshness_updated_at
+  substr(cast(min(period_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(period_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(updated_at) as varchar), 1, 10) as freshness_updated_at
 from aurora_gold.funnel_application_to_movein_periodized
 where period_grain = 'weekly'
 ```
 
 ```sql funnel_monthly_period_coverage
 select
-  min(period_start) as coverage_from,
-  max(period_start) as coverage_to,
-  max(updated_at) as freshness_updated_at
+  substr(cast(min(period_start) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(period_start) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(updated_at) as varchar), 1, 10) as freshness_updated_at
 from aurora_gold.funnel_application_to_movein_periodized
 where period_grain = 'monthly'
 ```
@@ -155,7 +147,7 @@ where period_grain = 'monthly'
 </Grid>
 
 <Note>
-Time basis: latest monthly `period_start` from `funnel_application_to_movein_periodized`.
+Time basis: latest monthly `period_start` snapshot.
 Coverage: {funnel_monthly_period_coverage[0].coverage_from} to {funnel_monthly_period_coverage[0].coverage_to}.
 Freshness: {funnel_monthly_period_coverage[0].freshness_updated_at}.
 </Note>
@@ -180,220 +172,213 @@ Freshness: {funnel_monthly_period_coverage[0].freshness_updated_at}.
 </Tabs>
 
 <Note>
-Time basis: period controls switch `period_grain` and `period_start` in `funnel_application_to_movein_periodized`.
+Time basis: tabs switch `period_grain` and `period_start`.
 Coverage: Daily {funnel_daily_period_coverage[0].coverage_from} to {funnel_daily_period_coverage[0].coverage_to}; Weekly {funnel_weekly_period_coverage[0].coverage_from} to {funnel_weekly_period_coverage[0].coverage_to}; Monthly {funnel_monthly_period_coverage[0].coverage_from} to {funnel_monthly_period_coverage[0].coverage_to}.
 Freshness: Daily {funnel_daily_period_coverage[0].freshness_updated_at}; Weekly {funnel_weekly_period_coverage[0].freshness_updated_at}; Monthly {funnel_monthly_period_coverage[0].freshness_updated_at}.
 </Note>
 
-```sql funnel_top_municipality
-with data_max as (
-  select max(activity_date) as max_activity_date
-  from aurora_gold.funnel_application_to_movein_daily
-)
-select
-  d.municipality,
-  sum(d.application_count) as application_count,
-  sum(d.movein_count) as movein_count,
-  cast(
-    coalesce(sum(d.movein_count) / nullif(sum(d.application_count), 0), 0)
-    as decimal(12, 4)
-  ) as application_to_movein_rate
-from aurora_gold.funnel_application_to_movein_daily d
-cross join data_max m
-where d.activity_date >= m.max_activity_date - interval 180 day
-group by d.municipality
-order by application_count desc
-limit 25
-```
-
-```sql funnel_top_nationality
-with data_max as (
-  select max(activity_date) as max_activity_date
-  from aurora_gold.funnel_application_to_movein_daily
-)
-select
-  d.nationality,
-  sum(d.application_count) as application_count,
-  sum(d.movein_count) as movein_count,
-  cast(
-    coalesce(sum(d.movein_count) / nullif(sum(d.application_count), 0), 0)
-    as decimal(12, 4)
-  ) as application_to_movein_rate
-from aurora_gold.funnel_application_to_movein_daily d
-cross join data_max m
-where d.activity_date >= m.max_activity_date - interval 180 day
-group by d.nationality
-order by application_count desc
-limit 25
-```
-
-## Municipality Segment Parity (Applications vs Move-ins)
-
-<BarChart data={funnel_top_municipality} x=municipality y=application_to_movein_rate yFmt="pct" title="Top Municipalities by Conversion Rate" />
-
-<Note>
-Time basis: municipality parity uses `funnel_application_to_movein_daily.activity_date`.
-Coverage: {funnel_daily_coverage[0].coverage_from} to {funnel_daily_coverage[0].coverage_to}.
-Freshness: {funnel_daily_coverage[0].freshness_updated_at}.
-</Note>
-
-## Nationality Segment Parity (Applications vs Move-ins)
-
-<BarChart data={funnel_top_nationality} x=nationality y=application_to_movein_rate yFmt="pct" title="Top Nationalities by Conversion Rate" />
-
-<Note>
-Time basis: nationality parity uses `funnel_application_to_movein_daily.activity_date`.
-Coverage: {funnel_daily_coverage[0].coverage_from} to {funnel_daily_coverage[0].coverage_to}.
-Freshness: {funnel_daily_coverage[0].freshness_updated_at}.
-</Note>
-
-```sql funnel_tenant_type_monthly
-with data_max as (
-  select max(period_start) as max_period_start
-  from aurora_gold.funnel_application_to_movein_periodized
-  where period_grain = 'monthly'
-)
-select
-  p.period_start,
-  p.tenant_type,
-  sum(p.application_count) as application_count,
-  sum(p.movein_count) as movein_count,
-  cast(
-    coalesce(sum(p.movein_count) / nullif(sum(p.application_count), 0), 0)
-    as decimal(12, 4)
-  ) as application_to_movein_rate
-from aurora_gold.funnel_application_to_movein_periodized p
-cross join data_max m
-where p.period_grain = 'monthly'
-  and p.period_start >= m.max_period_start - interval 730 day
-group by p.period_start, p.tenant_type
-order by p.period_start, p.tenant_type
-```
-
-## Monthly Conversion Trend
-
-<LineChart
-  data={funnel_tenant_type_monthly}
-  x=period_start
-  y=application_to_movein_rate
-  series=tenant_type
-  yFmt="pct"
-  title="Monthly Conversion by tenant_type"
-/>
-
-<BarChart
-  data={funnel_tenant_type_monthly}
-  x=period_start
-  y=application_count
-  series=tenant_type
-  type="stacked"
-  title="Monthly Applications by tenant_type"
-/>
-
-<Note>
-Time basis: cohort trends are monthly `period_start` by `tenant_type`.
-Coverage: {funnel_monthly_period_coverage[0].coverage_from} to {funnel_monthly_period_coverage[0].coverage_to}.
-Freshness: {funnel_monthly_period_coverage[0].freshness_updated_at}.
-</Note>
-
-```sql moveout_movein_monthly_parity
-with moveout_monthly as (
+```sql replacement_flow_sankey
+with moveout_seg as (
   select
-    cast(date_trunc('month', moveout_date) as date) as period_start,
+    coalesce(nullif(trim(municipality), ''), 'unknown') as municipality,
+    coalesce(nullif(trim(nationality), ''), 'unknown') as nationality,
+    case
+      when tenant_type in ('individual', 'corporate') then tenant_type
+      else 'unknown'
+    end as tenant_type,
+    coalesce(nullif(trim(rent_range), ''), 'unknown') as rent_band,
     count(*) as moveout_count
   from aurora_gold.moveout_analysis_recent
-  group by cast(date_trunc('month', moveout_date) as date)
+  where moveout_date >= current_date - interval 180 day
+  group by municipality, nationality, tenant_type, rent_band
 ),
-movein_monthly as (
+movein_seg as (
   select
-    cast(date_trunc('month', contract_start_date) as date) as period_start,
+    coalesce(nullif(trim(municipality), ''), 'unknown') as municipality,
+    coalesce(nullif(trim(nationality), ''), 'unknown') as nationality,
+    case
+      when tenant_type in ('individual', 'corporate') then tenant_type
+      else 'unknown'
+    end as tenant_type,
+    coalesce(nullif(trim(rent_range), ''), 'unknown') as rent_band,
     count(*) as movein_count
   from aurora_gold.movein_analysis_recent
-  group by cast(date_trunc('month', contract_start_date) as date)
+  where contract_start_date >= current_date - interval 180 day
+  group by municipality, nationality, tenant_type, rent_band
 ),
-combined_periods as (
-  select period_start from moveout_monthly
-  union
-  select period_start from movein_monthly
-),
-parity as (
+seg as (
   select
-    p.period_start,
+    coalesce(o.municipality, i.municipality) as municipality,
+    coalesce(o.nationality, i.nationality) as nationality,
+    coalesce(o.tenant_type, i.tenant_type) as tenant_type,
+    coalesce(o.rent_band, i.rent_band) as rent_band,
     coalesce(o.moveout_count, 0) as moveout_count,
     coalesce(i.movein_count, 0) as movein_count
-  from combined_periods p
-  left join moveout_monthly o on p.period_start = o.period_start
-  left join movein_monthly i on p.period_start = i.period_start
+  from moveout_seg o
+  full join movein_seg i
+    on o.municipality = i.municipality
+   and o.nationality = i.nationality
+   and o.tenant_type = i.tenant_type
+   and o.rent_band = i.rent_band
 ),
-data_max as (
-  select max(period_start) as max_period_start
-  from parity
+focus as (
+  select
+    municipality,
+    nationality,
+    tenant_type,
+    rent_band,
+    municipality || ' | ' || nationality || ' | ' || tenant_type || ' | ' || rent_band as segment_key,
+    moveout_count,
+    movein_count
+  from seg
+  where moveout_count > 0 or movein_count > 0
+  order by abs(moveout_count - movein_count) desc, moveout_count desc, movein_count desc
+  limit 18
+),
+links as (
+  select
+    'Move-out planned' as source,
+    segment_key as target,
+    moveout_count as value,
+    'out' as link_type
+  from focus
+
+  union all
+
+  select
+    segment_key as source,
+    'Move-in planned' as target,
+    movein_count as value,
+    'in' as link_type
+  from focus
 )
 select
-  parity.period_start,
-  parity.moveout_count,
-  parity.movein_count,
-  cast(
-    coalesce(100.0 * parity.movein_count / nullif(parity.moveout_count, 0), 0)
-    as decimal(12, 2)
-  ) as moveout_to_movein_rate_pct
-from parity
-cross join data_max
-where parity.period_start >= data_max.max_period_start - interval 12 month
-order by parity.period_start
+  source,
+  target,
+  value,
+  link_type
+from links
+where value > 0
+order by value desc
 ```
 
-```sql moveout_movein_parity_coverage
-with moveout_monthly as (
-  select cast(date_trunc('month', moveout_date) as date) as period_start
+```sql replacement_flow_summary
+with moveout_seg as (
+  select
+    coalesce(nullif(trim(municipality), ''), 'unknown') as municipality,
+    coalesce(nullif(trim(nationality), ''), 'unknown') as nationality,
+    case
+      when tenant_type in ('individual', 'corporate') then tenant_type
+      else 'unknown'
+    end as tenant_type,
+    coalesce(nullif(trim(rent_range), ''), 'unknown') as rent_band,
+    count(*) as moveout_count
   from aurora_gold.moveout_analysis_recent
+  where moveout_date >= current_date - interval 180 day
+  group by municipality, nationality, tenant_type, rent_band
 ),
-movein_monthly as (
-  select cast(date_trunc('month', contract_start_date) as date) as period_start
+movein_seg as (
+  select
+    coalesce(nullif(trim(municipality), ''), 'unknown') as municipality,
+    coalesce(nullif(trim(nationality), ''), 'unknown') as nationality,
+    case
+      when tenant_type in ('individual', 'corporate') then tenant_type
+      else 'unknown'
+    end as tenant_type,
+    coalesce(nullif(trim(rent_range), ''), 'unknown') as rent_band,
+    count(*) as movein_count
   from aurora_gold.movein_analysis_recent
+  where contract_start_date >= current_date - interval 180 day
+  group by municipality, nationality, tenant_type, rent_band
 ),
-combined_periods as (
-  select period_start from moveout_monthly
-  union
-  select period_start from movein_monthly
+seg as (
+  select
+    coalesce(o.municipality, i.municipality) as municipality,
+    coalesce(o.nationality, i.nationality) as nationality,
+    coalesce(o.tenant_type, i.tenant_type) as tenant_type,
+    coalesce(o.rent_band, i.rent_band) as rent_band,
+    coalesce(o.moveout_count, 0) as moveout_count,
+    coalesce(i.movein_count, 0) as movein_count
+  from moveout_seg o
+  full join movein_seg i
+    on o.municipality = i.municipality
+   and o.nationality = i.nationality
+   and o.tenant_type = i.tenant_type
+   and o.rent_band = i.rent_band
 ),
-data_max as (
-  select max(period_start) as max_period_start
-  from combined_periods
+focus as (
+  select *
+  from seg
+  where moveout_count > 0 or movein_count > 0
 )
 select
-  min(period_start) as coverage_from,
-  max(period_start) as coverage_to,
-  max(data_max.max_period_start) as freshness_period
-from combined_periods
-cross join data_max
-where period_start >= data_max.max_period_start - interval 12 month
+  sum(moveout_count) as focus_moveout,
+  sum(movein_count) as focus_movein,
+  sum(movein_count) - sum(moveout_count) as focus_net,
+  cast(coalesce(sum(movein_count) / nullif(sum(moveout_count), 0), 0) as decimal(12, 3)) as focus_replacement_ratio
+from focus
 ```
 
-## Moveout -> Move-in Snapshot Parity
+```sql replacement_flow_coverage
+with combined as (
+  select moveout_date as event_date, updated_at
+  from aurora_gold.moveout_analysis_recent
+  where moveout_date >= current_date - interval 180 day
 
-<BarChart
-  data={moveout_movein_monthly_parity}
-  x=period_start
-  y=moveout_count
-  y2=movein_count
-  title="Monthly Moveout vs Move-in Counts"
+  union all
+
+  select contract_start_date as event_date, updated_at
+  from aurora_gold.movein_analysis_recent
+  where contract_start_date >= current_date - interval 180 day
+)
+select
+  substr(cast(min(event_date) as varchar), 1, 10) as coverage_from,
+  substr(cast(max(event_date) as varchar), 1, 10) as coverage_to,
+  substr(cast(max(updated_at) as varchar), 1, 10) as freshness_updated_at
+from combined
+```
+
+## Killer Chart: Replacement Failure Flow
+
+<Grid cols={4} gapSize="md">
+  <BigValue data={replacement_flow_summary} title="Planned Move-outs (180d)" value="focus_moveout" fmt="num0" />
+  <BigValue data={replacement_flow_summary} title="Planned Move-ins (180d)" value="focus_movein" fmt="num0" />
+  <BigValue data={replacement_flow_summary} title="Net Replacement (180d)" value="focus_net" fmt="num0" />
+  <BigValue data={replacement_flow_summary} title="Replacement Ratio" value="focus_replacement_ratio" fmt="num2" />
+</Grid>
+
+<ECharts
+  data={replacement_flow_sankey}
+  config={{
+    tooltip: { trigger: 'item' },
+    series: [
+      {
+        type: 'sankey',
+        nodeAlign: 'justify',
+        lineStyle: { curveness: 0.5, opacity: 0.55 },
+        emphasis: { focus: 'adjacency' },
+        data: [...new Set(replacement_flow_sankey.flatMap((d) => [d.source, d.target]))].map((name) => ({ name })),
+        links: replacement_flow_sankey.map((d) => ({
+          source: d.source,
+          target: d.target,
+          value: d.value,
+          lineStyle: {
+            color: d.link_type === 'out' ? '#dc2626' : '#16a34a'
+          }
+        }))
+      }
+    ]
+  }}
 />
 
-<LineChart
-  data={moveout_movein_monthly_parity}
-  x=period_start
-  y=moveout_to_movein_rate_pct
-  yFmt="num2"
-  title="Moveout -> Move-in Parity Rate (%)"
-/>
-
-<DataTable data={moveout_movein_monthly_parity} downloadable={true} />
+<DataTable data={replacement_flow_sankey} downloadable={true} />
 
 <Note>
-Time basis: monthly period snapshots using `moveout_analysis_recent.moveout_date` and `movein_analysis_recent.contract_start_date`.
-Coverage: {moveout_movein_parity_coverage[0].coverage_from} to {moveout_movein_parity_coverage[0].coverage_to}.
-Freshness: latest parity period is {moveout_movein_parity_coverage[0].freshness_period}.
+Time basis: latest 180-day replacement snapshot by municipality, nationality, tenant_type, and rent_band.
+Coverage: {replacement_flow_coverage[0].coverage_from} to {replacement_flow_coverage[0].coverage_to}.
+Freshness: {replacement_flow_coverage[0].freshness_updated_at}.
+Move-out planned flow (red): segment links track planned move-out volume.
+Move-in planned flow (green): segment links track planned move-in replacements.
 </Note>
 
 ## Detailed Funnel Tables
