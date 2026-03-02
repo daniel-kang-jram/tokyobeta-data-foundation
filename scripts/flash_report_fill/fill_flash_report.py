@@ -82,6 +82,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=None, help="Output directory")
     parser.add_argument("--snapshot-start-jst", default="2026-02-01 00:00:00 JST")
     parser.add_argument("--snapshot-asof-jst", default="2026-02-28 05:00:00 JST")
+    parser.add_argument(
+        "--silver-pinpoint-asof-jst",
+        default=None,
+        help="Optional as-of timestamp for silver snapshot diagnostics; defaults to snapshot-asof date",
+    )
     parser.add_argument("--feb-end-jst", default="2026-02-28 23:59:59 JST")
     parser.add_argument("--mar-start-jst", default="2026-03-01 00:00:00 JST")
     parser.add_argument("--mar-end-jst", default="2026-03-31 23:59:59 JST")
@@ -247,6 +252,11 @@ def main() -> int:
 
     snapshot_start = parse_jst_timestamp(args.snapshot_start_jst)
     snapshot_asof = parse_jst_timestamp(args.snapshot_asof_jst)
+    silver_pinpoint_asof = (
+        parse_jst_timestamp(args.silver_pinpoint_asof_jst)
+        if getattr(args, "silver_pinpoint_asof_jst", None)
+        else snapshot_asof
+    )
     feb_end = parse_jst_timestamp(args.feb_end_jst)
     mar_start = parse_jst_timestamp(args.mar_start_jst)
     mar_end = parse_jst_timestamp(args.mar_end_jst)
@@ -281,6 +291,7 @@ def main() -> int:
     print(f"db_host={args.db_host}:{args.db_port}")
     print(f"snapshot_start={params['snapshot_start']}")
     print(f"snapshot_asof={params['snapshot_asof']}")
+    print(f"silver_pinpoint_asof_date={silver_pinpoint_asof.date().isoformat()}")
 
     username, password = resolve_db_credentials(args)
 
@@ -371,6 +382,11 @@ def main() -> int:
             feb_end_date=feb_end.date(),
             mar_start_date=mar_start.date(),
             mar_end_date=mar_end.date(),
+            reconciliation_asof_date=silver_pinpoint_asof.date(),
+            mar_planned_movein_cells=[
+                metric_to_cells["mar_planned_moveins"][0][0],
+                metric_to_cells["mar_planned_moveins"][1][0],
+            ],
         )
         d5_recon_records, d5_warnings = build_d5_discrepancy_records(
             cursor=cursor,

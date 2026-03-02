@@ -5,6 +5,7 @@ from typing import Dict, Iterable, List, Tuple
 
 from scripts.flash_report_fill.sql import (
     ACTIVE_OCCUPANCY_STATUSES,
+    PLANNED_MOVEIN_STATUSES,
     build_metric_queries,
 )
 from scripts.flash_report_fill.types import FlashReportQueryConfig, MetricRecord, ReconciliationRecord, WarningRecord
@@ -62,6 +63,8 @@ def build_reconciliation_records(
     feb_end_date: date,
     mar_start_date: date,
     mar_end_date: date,
+    reconciliation_asof_date: date,
+    mar_planned_movein_cells: List[str],
 ) -> List[ReconciliationRecord]:
     """Build staging-vs-silver-vs-gold reconciliation rows."""
     records: List[ReconciliationRecord] = []
@@ -77,6 +80,55 @@ def build_reconciliation_records(
             reference_source="silver.tenant_room_snapshot_daily",
             note="Compared D5 against silver snapshot at snapshot_start date.",
             asof_date=str(snapshot_start_date),
+        )
+    )
+
+    expected_mar_planned_moveins = sum(int(cell_values.get(cell, 0)) for cell in mar_planned_movein_cells)
+    silver_mar_planned_split = _silver_asof_mar_planned_moveins_split(
+        cursor=cursor,
+        snapshot_date=reconciliation_asof_date,
+        asof_date=reconciliation_asof_date,
+        mar_end_date=mar_end_date,
+    )
+    silver_mar_planned_total = (
+        silver_mar_planned_split["individual"] + silver_mar_planned_split["corporate"]
+    )
+    records.append(
+        ReconciliationRecord(
+            reconciliation_id="silver_asof_mar_planned_moveins_total",
+            expected_value=expected_mar_planned_moveins,
+            reference_value=silver_mar_planned_total,
+            delta=expected_mar_planned_moveins - silver_mar_planned_total,
+            reference_source="silver.tenant_room_snapshot_daily",
+            note=(
+                "Compared March planned move-ins from Excel cells against silver snapshot-anchored "
+                "counts using original_movein_date."
+            ),
+            asof_date=str(reconciliation_asof_date),
+        )
+    )
+    records.append(
+        ReconciliationRecord(
+            reconciliation_id="silver_asof_mar_planned_moveins_individual",
+            expected_value=int(cell_values.get(mar_planned_movein_cells[0], 0)),
+            reference_value=silver_mar_planned_split["individual"],
+            delta=int(cell_values.get(mar_planned_movein_cells[0], 0))
+            - silver_mar_planned_split["individual"],
+            reference_source="silver.tenant_room_snapshot_daily",
+            note="Individual split for March planned move-ins at silver as-of snapshot.",
+            asof_date=str(reconciliation_asof_date),
+        )
+    )
+    records.append(
+        ReconciliationRecord(
+            reconciliation_id="silver_asof_mar_planned_moveins_corporate",
+            expected_value=int(cell_values.get(mar_planned_movein_cells[1], 0)),
+            reference_value=silver_mar_planned_split["corporate"],
+            delta=int(cell_values.get(mar_planned_movein_cells[1], 0))
+            - silver_mar_planned_split["corporate"],
+            reference_source="silver.tenant_room_snapshot_daily",
+            note="Corporate split for March planned move-ins at silver as-of snapshot.",
+            asof_date=str(reconciliation_asof_date),
         )
     )
 
@@ -261,6 +313,43 @@ def _gold_month_totals(cursor, month_start: date, month_end: date) -> Dict[str, 
     if isinstance(row, dict):
         return {"moveins": int(row["moveins"] or 0), "moveouts": int(row["moveouts"] or 0)}
     return {"moveins": int(row[0] or 0), "moveouts": int(row[1] or 0)}
+
+
+def _silver_asof_mar_planned_moveins_split(
+    cursor,
+    snapshot_date: date,
+    asof_date: date,
+    mar_end_date: date,
+) -> Dict[str, int]:
+    cursor.execute(
+        f"""
+/* silver_asof_mar_planned_moveins_split */
+SELECT
+    CASE
+        WHEN m.moving_agreement_type IN (2, 3) THEN 'corporate'
+        WHEN m.moving_agreement_type IN (1, 6, 7, 9) THEN 'individual'
+        ELSE 'unknown'
+    END AS tenant_type,
+    COUNT(DISTINCT CONCAT(s.apartment_id, '-', s.room_id)) AS cnt
+FROM silver.tenant_room_snapshot_daily s
+INNER JOIN staging.movings m
+    ON s.moving_id = m.id
+WHERE s.snapshot_date = %s
+  AND COALESCE(m.cancel_flag, 0) = 0
+  AND COALESCE(m.move_renew_flag, 0) = 0
+  AND s.management_status_code IN {PLANNED_MOVEIN_STATUSES}
+  AND m.original_movein_date > %s
+  AND m.original_movein_date <= %s
+GROUP BY tenant_type
+""",
+        (snapshot_date, asof_date, mar_end_date),
+    )
+    rows = cursor.fetchall() or []
+    split = {"individual": 0, "corporate": 0, "unknown": 0}
+    for row in rows:
+        tenant_type = str(row.get("tenant_type", "unknown"))
+        split[tenant_type] = int(row.get("cnt", 0) or 0)
+    return split
 
 
 D5_DISCREPANCY_BASE_CTE = """

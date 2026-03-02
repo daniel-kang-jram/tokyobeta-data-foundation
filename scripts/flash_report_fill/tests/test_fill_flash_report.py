@@ -81,6 +81,7 @@ def test_parse_args_defaults(monkeypatch) -> None:
     assert args.db_port == fill_flash_report.DEFAULT_DB_PORT
     assert args.sheet_name == "Flash Report（2月）"
     assert args.snapshot_asof_jst == "2026-02-28 05:00:00 JST"
+    assert args.silver_pinpoint_asof_jst is None
     assert args.movein_prediction_date_column == "original_movein_date"
     assert args.moveout_prediction_date_column == "moveout_date"
 
