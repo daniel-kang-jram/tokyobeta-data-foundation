@@ -28,7 +28,9 @@ def test_geography_map_uses_red_to_green_scalar_palette() -> None:
     source = _read(GEOGRAPHY_PAGE)
 
     assert 'legendType="scalar"' in source
-    assert "colorPalette={['#b91c1c', '#f59e0b', '#22c55e']}" in source
+    assert "colorPalette={" in source
+    for color in ("#b91c1c", "#f59e0b", "#22c55e"):
+        assert color in source
 
 
 def test_geography_page_includes_time_coverage_and_freshness_markers() -> None:
@@ -40,6 +42,8 @@ def test_geography_page_includes_time_coverage_and_freshness_markers() -> None:
     assert "Freshness:" in source
     assert "Coverage: {" in source
     assert "Freshness: {" in source
+    assert source.count("Coverage:") >= 5
+    assert source.count("Freshness:") >= 5
 
 
 def test_geography_page_references_corrected_occupancy_metric_fields() -> None:

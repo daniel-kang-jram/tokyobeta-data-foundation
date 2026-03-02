@@ -10,3 +10,4 @@ SELECT
     occupancy_rate
 FROM {{ ref('occupancy_property_daily') }}
 WHERE occupancy_rate > 1.0
+   OR occupied_rooms > total_rooms
