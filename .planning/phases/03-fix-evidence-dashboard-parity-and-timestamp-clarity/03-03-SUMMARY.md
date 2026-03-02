@@ -81,10 +81,18 @@ Each task was committed atomically:
 - **Verification:** `gsd-tools init execute-phase 03` returned expected phase metadata.
 - **Committed in:** N/A
 
+**2. [Rule 3 - Blocking] Applied manual STATE/ROADMAP progress updates after helper parse mismatch**
+- **Found during:** Post-task workflow metadata updates
+- **Issue:** `state advance-plan`/`state update-progress`/`state record-session` could not parse this repo's STATE template, and `roadmap update-plan-progress` did not update the Phase 03 plan table row.
+- **Fix:** Updated `.planning/STATE.md` and `.planning/ROADMAP.md` directly to set plan progress, next plan pointer, session marker, and metrics row.
+- **Files modified:** `.planning/STATE.md`, `.planning/ROADMAP.md`.
+- **Verification:** File checks confirm `03-03` marked complete in roadmap and `STATE.md` points to `03-04-PLAN.md`.
+- **Committed in:** `47fd4ce`
+
 ---
 
-**Total deviations:** 1 auto-fixed (1 rule-3 blocking fix)
-**Impact on plan:** No scope change; execution metadata commands proceeded normally after path correction.
+**Total deviations:** 2 auto-fixed (2 rule-3 blocking fixes)
+**Impact on plan:** No product-scope change; deviations were execution-environment/workflow compatibility fixes only.
 
 ## Issues Encountered
 None.
