@@ -7,6 +7,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HOME_PAGE = REPO_ROOT / "evidence/pages/index.md"
 AUTH_TEST_PAGE = REPO_ROOT / "evidence/pages/auth-test.md"
 PAGES_DIR = REPO_ROOT / "evidence/pages"
+REQUIRED_PRIMARY_ROUTES = (
+    "index",
+    "funnel",
+    "occupancy",
+    "moveins",
+    "moveouts",
+    "geography",
+    "pricing",
+)
 
 
 def _read(path: Path) -> str:
@@ -49,3 +58,5 @@ def test_auth_test_route_source_is_removed_from_pages_contract() -> None:
 
     assert not AUTH_TEST_PAGE.exists()
     assert "auth-test" not in page_stems
+    for route_stem in REQUIRED_PRIMARY_ROUTES:
+        assert route_stem in page_stems

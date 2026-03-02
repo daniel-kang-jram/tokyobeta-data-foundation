@@ -117,7 +117,7 @@ Freshness: trace context is read from `kpi_reference_trace.gold_occupancy_max_up
 <Note>
 Time basis: month-end timeline from `kpi_month_end_metrics.as_of_date`.
 Coverage: {kpi_history_bounds[0].coverage_from} to {kpi_history_bounds[0].coverage_to}.
-Freshness: {kpi_trace[0].kpi_model_generated_at}.
+Freshness: {kpi_trace[0].freshness_lag_days} day lag; generated at {kpi_trace[0].kpi_model_generated_at}.
 </Note>
 
 ## KPI Governance & Trace
