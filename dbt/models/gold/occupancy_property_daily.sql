@@ -25,7 +25,7 @@ WITH snapshots_to_process AS (
         (
             SELECT COALESCE(
                 MIN(CASE WHEN occupancy_rate > 1 THEN snapshot_date END),
-                DATE_SUB(MAX(snapshot_date), INTERVAL 30 DAY)
+                DATE_SUB(MAX(snapshot_date), INTERVAL 2 DAY)
             )
             FROM {{ this }}
         ),
