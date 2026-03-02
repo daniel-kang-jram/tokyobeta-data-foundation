@@ -59,6 +59,8 @@ def test_funnel_and_pricing_pages_include_timestamp_clarity_markers() -> None:
         assert "Time basis:" in source, f"missing Time basis marker in {page_path}"
         assert "Coverage:" in source, f"missing Coverage marker in {page_path}"
         assert "Freshness:" in source, f"missing Freshness marker in {page_path}"
+        assert "Coverage: {" in source, f"Coverage must be query-backed in {page_path}"
+        assert "Freshness: {" in source, f"Freshness must be query-backed in {page_path}"
 
 
 def test_funnel_and_pricing_pages_keep_required_funnel_parity_markers() -> None:
