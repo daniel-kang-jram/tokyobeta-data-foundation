@@ -163,78 +163,130 @@ limit 12
 ```
 
 ```sql conversion_trend_monthly
+with data_max as (
+  select max(period_start) as max_period_start
+  from aurora_gold.funnel_application_to_movein_periodized
+  where period_grain = 'monthly'
+)
 select
-  period_start,
-  tenant_type,
-  sum(application_count) as application_count,
-  sum(movein_count) as movein_count,
+  p.period_start,
+  p.tenant_type,
+  sum(p.application_count) as application_count,
+  sum(p.movein_count) as movein_count,
   cast(
-    coalesce(100.0 * sum(movein_count) / nullif(sum(application_count), 0), 0)
+    coalesce(100.0 * sum(p.movein_count) / nullif(sum(p.application_count), 0), 0)
     as decimal(12, 2)
   ) as conversion_rate_pct
-from aurora_gold.funnel_application_to_movein_periodized
-where period_grain = 'monthly'
-  and period_start >= current_date - interval 730 day
-group by period_start, tenant_type
-order by period_start, tenant_type
+from aurora_gold.funnel_application_to_movein_periodized p
+cross join data_max m
+where p.period_grain = 'monthly'
+  and p.period_start >= m.max_period_start - interval 730 day
+group by p.period_start, p.tenant_type
+order by p.period_start, p.tenant_type
 ```
 
 ```sql conversion_trend_monthly_total
+with data_max as (
+  select max(period_start) as max_period_start
+  from aurora_gold.funnel_application_to_movein_periodized
+  where period_grain = 'monthly'
+)
 select
-  period_start,
-  sum(application_count) as application_count,
-  sum(movein_count) as movein_count,
+  p.period_start,
+  sum(p.application_count) as application_count,
+  sum(p.movein_count) as movein_count,
   cast(
-    coalesce(100.0 * sum(movein_count) / nullif(sum(application_count), 0), 0)
+    coalesce(100.0 * sum(p.movein_count) / nullif(sum(p.application_count), 0), 0)
     as decimal(12, 2)
   ) as conversion_rate_pct
-from aurora_gold.funnel_application_to_movein_periodized
-where period_grain = 'monthly'
-  and period_start >= current_date - interval 730 day
-group by period_start
-order by period_start
+from aurora_gold.funnel_application_to_movein_periodized p
+cross join data_max m
+where p.period_grain = 'monthly'
+  and p.period_start >= m.max_period_start - interval 730 day
+group by p.period_start
+order by p.period_start
 ```
 
 ```sql segment_pressure_ranking
+with data_max as (
+  select max(period_start) as max_period_start
+  from aurora_gold.funnel_application_to_movein_segment_share
+  where period_grain = 'monthly'
+)
 select
-  concat(segment_type, ': ', segment_value) as segment_label,
-  segment_type,
-  segment_value,
-  sum(application_count) as application_count,
-  sum(movein_count) as movein_count,
+  concat(s.segment_type, ': ', s.segment_value) as segment_label,
+  s.segment_type,
+  s.segment_value,
+  sum(s.application_count) as application_count,
+  sum(s.movein_count) as movein_count,
   cast(
-    coalesce(100.0 * sum(movein_count) / nullif(sum(application_count), 0), 0)
+    coalesce(100.0 * sum(s.movein_count) / nullif(sum(s.application_count), 0), 0)
     as decimal(12, 2)
   ) as conversion_rate_pct
-from aurora_gold.funnel_application_to_movein_segment_share
-where period_grain = 'monthly'
-  and period_start >= current_date - interval 365 day
-  and segment_type in ('municipality', 'nationality')
-  and coalesce(segment_value, '') <> ''
-group by segment_type, segment_value
-having sum(application_count) >= 10
+from aurora_gold.funnel_application_to_movein_segment_share s
+cross join data_max m
+where s.period_grain = 'monthly'
+  and s.period_start >= m.max_period_start - interval 365 day
+  and s.segment_type in ('municipality', 'nationality')
+  and coalesce(s.segment_value, '') <> ''
+group by s.segment_type, s.segment_value
+having sum(s.application_count) >= 10
 order by conversion_rate_pct asc, application_count desc
 limit 30
 ```
 
 ```sql segment_share_detail
+with data_max as (
+  select
+    max(case when period_grain = 'weekly' then period_start end) as max_weekly_period_start,
+    max(case when period_grain = 'monthly' then period_start end) as max_monthly_period_start
+  from aurora_gold.funnel_application_to_movein_segment_share
+)
 select
-  period_grain,
-  period_start,
-  tenant_type,
-  segment_type,
-  segment_value,
-  application_count,
-  movein_count,
-  round(application_share * 100, 2) as application_share_pct,
-  round(movein_share * 100, 2) as movein_share_pct,
-  round(application_to_movein_rate * 100, 2) as conversion_rate_pct,
-  segment_rank,
-  updated_at
+  s.period_grain,
+  s.period_start,
+  s.tenant_type,
+  s.segment_type,
+  s.segment_value,
+  s.application_count,
+  s.movein_count,
+  round(s.application_share * 100, 2) as application_share_pct,
+  round(s.movein_share * 100, 2) as movein_share_pct,
+  round(s.application_to_movein_rate * 100, 2) as conversion_rate_pct,
+  s.segment_rank,
+  s.updated_at
+from aurora_gold.funnel_application_to_movein_segment_share s
+cross join data_max m
+where (s.period_grain = 'weekly' and s.period_start >= m.max_weekly_period_start - interval 365 day)
+   or (s.period_grain = 'monthly' and s.period_start >= m.max_monthly_period_start - interval 365 day)
+order by s.period_grain, s.period_start desc, s.segment_type, s.tenant_type, s.segment_rank
+```
+
+```sql pricing_segment_monthly_coverage
+select
+  min(period_start) as coverage_from,
+  max(period_start) as coverage_to,
+  max(updated_at) as freshness_updated_at
 from aurora_gold.funnel_application_to_movein_segment_share
-where period_grain in ('weekly', 'monthly')
-  and period_start >= current_date - interval 365 day
-order by period_grain, period_start desc, segment_type, tenant_type, segment_rank
+where period_grain = 'monthly'
+```
+
+```sql pricing_segment_weekly_coverage
+select
+  min(period_start) as coverage_from,
+  max(period_start) as coverage_to,
+  max(updated_at) as freshness_updated_at
+from aurora_gold.funnel_application_to_movein_segment_share
+where period_grain = 'weekly'
+```
+
+```sql pricing_monthly_trend_coverage
+select
+  min(period_start) as coverage_from,
+  max(period_start) as coverage_to,
+  max(updated_at) as freshness_updated_at
+from aurora_gold.funnel_application_to_movein_periodized
+where period_grain = 'monthly'
 ```
 
 <Grid cols={3} gapSize="md">
@@ -271,7 +323,8 @@ order by period_grain, period_start desc, segment_type, tenant_type, segment_ran
 
 <Note>
 Time basis: latest monthly `period_start` from `funnel_application_to_movein_segment_share`.
-Freshness: KPI block follows `funnel_application_to_movein_segment_share.updated_at` at source refresh.
+Coverage: {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
+Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>
 
 ## Municipality Segment Parity (Applications vs Move-ins)
@@ -306,7 +359,8 @@ Freshness: KPI block follows `funnel_application_to_movein_segment_share.updated
 
 <Note>
 Time basis: latest monthly segment shares for `segment_type = municipality`.
-Freshness: municipality parity updates with the newest segment-share `updated_at` records.
+Coverage: {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
+Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>
 
 ## Nationality Segment Parity (Applications vs Move-ins)
@@ -341,7 +395,8 @@ Freshness: municipality parity updates with the newest segment-share `updated_at
 
 <Note>
 Time basis: latest monthly segment shares for `segment_type = nationality`.
-Freshness: nationality parity updates with the newest segment-share `updated_at` records.
+Coverage: {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
+Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>
 
 ## Monthly Conversion Trend
@@ -374,7 +429,8 @@ Freshness: nationality parity updates with the newest segment-share `updated_at`
 
 <Note>
 Time basis: monthly `period_start` rows from `funnel_application_to_movein_periodized`.
-Freshness: trend sections inherit periodized funnel freshness via source `updated_at`.
+Coverage: {pricing_monthly_trend_coverage[0].coverage_from} to {pricing_monthly_trend_coverage[0].coverage_to}.
+Freshness: {pricing_monthly_trend_coverage[0].freshness_updated_at}.
 </Note>
 
 ## Segment Pressure Ranking
@@ -392,7 +448,8 @@ Freshness: trend sections inherit periodized funnel freshness via source `update
 
 <Note>
 Time basis: rolling 12-month monthly window from `funnel_application_to_movein_segment_share`.
-Freshness: rankings reflect the latest monthly segment-share refresh.
+Coverage: {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
+Freshness: {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>
 
 ## Segment Share Detail
@@ -401,5 +458,6 @@ Freshness: rankings reflect the latest monthly segment-share refresh.
 
 <Note>
 Time basis: weekly and monthly `period_start` rows from segment-share contract output.
-Freshness: row-level recency is visible in `segment_share_detail.updated_at`.
+Coverage: Weekly {pricing_segment_weekly_coverage[0].coverage_from} to {pricing_segment_weekly_coverage[0].coverage_to}; Monthly {pricing_segment_monthly_coverage[0].coverage_from} to {pricing_segment_monthly_coverage[0].coverage_to}.
+Freshness: Weekly {pricing_segment_weekly_coverage[0].freshness_updated_at}; Monthly {pricing_segment_monthly_coverage[0].freshness_updated_at}.
 </Note>

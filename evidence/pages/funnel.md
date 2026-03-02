@@ -12,7 +12,6 @@ select
   application_to_movein_rate,
   updated_at
 from aurora_gold.funnel_application_to_movein_periodized
-where period_start >= current_date - interval 365 day
 order by period_grain, period_start, municipality, nationality, tenant_type
 ```
 
@@ -27,7 +26,6 @@ select
   application_to_movein_rate,
   updated_at
 from aurora_gold.funnel_application_to_movein_daily
-where activity_date >= current_date - interval 180 day
 order by activity_date, municipality, nationality, tenant_type
 ```
 
@@ -48,51 +46,104 @@ limit 1
 ```
 
 ```sql funnel_daily_total
+with data_max as (
+  select max(period_start) as max_period_start
+  from aurora_gold.funnel_application_to_movein_periodized
+  where period_grain = 'daily'
+)
 select
-  period_start,
-  sum(application_count) as application_count,
-  sum(movein_count) as movein_count,
+  p.period_start,
+  sum(p.application_count) as application_count,
+  sum(p.movein_count) as movein_count,
   cast(
-    coalesce(sum(movein_count) / nullif(sum(application_count), 0), 0)
+    coalesce(sum(p.movein_count) / nullif(sum(p.application_count), 0), 0)
     as decimal(12, 4)
   ) as application_to_movein_rate
-from aurora_gold.funnel_application_to_movein_periodized
-where period_grain = 'daily'
-  and period_start >= current_date - interval 90 day
-group by period_start
-order by period_start
+from aurora_gold.funnel_application_to_movein_periodized p
+cross join data_max m
+where p.period_grain = 'daily'
+  and p.period_start >= m.max_period_start - interval 90 day
+group by p.period_start
+order by p.period_start
 ```
 
 ```sql funnel_weekly_total
+with data_max as (
+  select max(period_start) as max_period_start
+  from aurora_gold.funnel_application_to_movein_periodized
+  where period_grain = 'weekly'
+)
 select
-  period_start,
-  sum(application_count) as application_count,
-  sum(movein_count) as movein_count,
+  p.period_start,
+  sum(p.application_count) as application_count,
+  sum(p.movein_count) as movein_count,
   cast(
-    coalesce(sum(movein_count) / nullif(sum(application_count), 0), 0)
+    coalesce(sum(p.movein_count) / nullif(sum(p.application_count), 0), 0)
     as decimal(12, 4)
   ) as application_to_movein_rate
-from aurora_gold.funnel_application_to_movein_periodized
-where period_grain = 'weekly'
-  and period_start >= current_date - interval 365 day
-group by period_start
-order by period_start
+from aurora_gold.funnel_application_to_movein_periodized p
+cross join data_max m
+where p.period_grain = 'weekly'
+  and p.period_start >= m.max_period_start - interval 365 day
+group by p.period_start
+order by p.period_start
 ```
 
 ```sql funnel_monthly_total
+with data_max as (
+  select max(period_start) as max_period_start
+  from aurora_gold.funnel_application_to_movein_periodized
+  where period_grain = 'monthly'
+)
 select
-  period_start,
-  sum(application_count) as application_count,
-  sum(movein_count) as movein_count,
+  p.period_start,
+  sum(p.application_count) as application_count,
+  sum(p.movein_count) as movein_count,
   cast(
-    coalesce(sum(movein_count) / nullif(sum(application_count), 0), 0)
+    coalesce(sum(p.movein_count) / nullif(sum(p.application_count), 0), 0)
     as decimal(12, 4)
   ) as application_to_movein_rate
+from aurora_gold.funnel_application_to_movein_periodized p
+cross join data_max m
+where p.period_grain = 'monthly'
+  and p.period_start >= m.max_period_start - interval 730 day
+group by p.period_start
+order by p.period_start
+```
+
+```sql funnel_daily_coverage
+select
+  min(activity_date) as coverage_from,
+  max(activity_date) as coverage_to,
+  max(updated_at) as freshness_updated_at
+from aurora_gold.funnel_application_to_movein_daily
+```
+
+```sql funnel_daily_period_coverage
+select
+  min(period_start) as coverage_from,
+  max(period_start) as coverage_to,
+  max(updated_at) as freshness_updated_at
+from aurora_gold.funnel_application_to_movein_periodized
+where period_grain = 'daily'
+```
+
+```sql funnel_weekly_period_coverage
+select
+  min(period_start) as coverage_from,
+  max(period_start) as coverage_to,
+  max(updated_at) as freshness_updated_at
+from aurora_gold.funnel_application_to_movein_periodized
+where period_grain = 'weekly'
+```
+
+```sql funnel_monthly_period_coverage
+select
+  min(period_start) as coverage_from,
+  max(period_start) as coverage_to,
+  max(updated_at) as freshness_updated_at
 from aurora_gold.funnel_application_to_movein_periodized
 where period_grain = 'monthly'
-  and period_start >= current_date - interval 730 day
-group by period_start
-order by period_start
 ```
 
 ## Conversion Snapshot
@@ -100,12 +151,13 @@ order by period_start
 <Grid cols={3} gapSize="md">
   <BigValue data={funnel_latest_month} title="Applications (Latest Month)" value="application_count" fmt="num0" />
   <BigValue data={funnel_latest_month} title="Move-ins (Latest Month)" value="movein_count" fmt="num0" />
-  <BigValue data={funnel_latest_month} title="Application -> Move-in Rate" value="application_to_movein_rate" fmt="pct" />
+  <BigValue data={funnel_latest_month} title="Overall Conversion Rate (%)" value="application_to_movein_rate" fmt="pct" />
 </Grid>
 
 <Note>
 Time basis: latest monthly `period_start` from `funnel_application_to_movein_periodized`.
-Freshness: recency is tracked by `funnel_application_to_movein_periodized.updated_at`.
+Coverage: {funnel_monthly_period_coverage[0].coverage_from} to {funnel_monthly_period_coverage[0].coverage_to}.
+Freshness: {funnel_monthly_period_coverage[0].freshness_updated_at}.
 </Note>
 
 ## Period Controls
@@ -129,70 +181,96 @@ Freshness: recency is tracked by `funnel_application_to_movein_periodized.update
 
 <Note>
 Time basis: period controls switch `period_grain` and `period_start` in `funnel_application_to_movein_periodized`.
-Freshness: each grain uses the model-level `updated_at` field from the periodized funnel mart.
+Coverage: Daily {funnel_daily_period_coverage[0].coverage_from} to {funnel_daily_period_coverage[0].coverage_to}; Weekly {funnel_weekly_period_coverage[0].coverage_from} to {funnel_weekly_period_coverage[0].coverage_to}; Monthly {funnel_monthly_period_coverage[0].coverage_from} to {funnel_monthly_period_coverage[0].coverage_to}.
+Freshness: Daily {funnel_daily_period_coverage[0].freshness_updated_at}; Weekly {funnel_weekly_period_coverage[0].freshness_updated_at}; Monthly {funnel_monthly_period_coverage[0].freshness_updated_at}.
 </Note>
 
-## Municipality and Nationality Segmentation
-
 ```sql funnel_top_municipality
+with data_max as (
+  select max(activity_date) as max_activity_date
+  from aurora_gold.funnel_application_to_movein_daily
+)
 select
-  municipality,
-  sum(application_count) as application_count,
-  sum(movein_count) as movein_count,
+  d.municipality,
+  sum(d.application_count) as application_count,
+  sum(d.movein_count) as movein_count,
   cast(
-    coalesce(sum(movein_count) / nullif(sum(application_count), 0), 0)
+    coalesce(sum(d.movein_count) / nullif(sum(d.application_count), 0), 0)
     as decimal(12, 4)
   ) as application_to_movein_rate
-from aurora_gold.funnel_application_to_movein_daily
-where activity_date >= current_date - interval 180 day
-group by municipality
+from aurora_gold.funnel_application_to_movein_daily d
+cross join data_max m
+where d.activity_date >= m.max_activity_date - interval 180 day
+group by d.municipality
 order by application_count desc
 limit 25
 ```
 
 ```sql funnel_top_nationality
+with data_max as (
+  select max(activity_date) as max_activity_date
+  from aurora_gold.funnel_application_to_movein_daily
+)
 select
-  nationality,
-  sum(application_count) as application_count,
-  sum(movein_count) as movein_count,
+  d.nationality,
+  sum(d.application_count) as application_count,
+  sum(d.movein_count) as movein_count,
   cast(
-    coalesce(sum(movein_count) / nullif(sum(application_count), 0), 0)
+    coalesce(sum(d.movein_count) / nullif(sum(d.application_count), 0), 0)
     as decimal(12, 4)
   ) as application_to_movein_rate
-from aurora_gold.funnel_application_to_movein_daily
-where activity_date >= current_date - interval 180 day
-group by nationality
+from aurora_gold.funnel_application_to_movein_daily d
+cross join data_max m
+where d.activity_date >= m.max_activity_date - interval 180 day
+group by d.nationality
 order by application_count desc
 limit 25
 ```
 
+## Municipality Segment Parity (Applications vs Move-ins)
+
 <BarChart data={funnel_top_municipality} x=municipality y=application_to_movein_rate yFmt="pct" title="Top Municipalities by Conversion Rate" />
+
+<Note>
+Time basis: municipality parity uses `funnel_application_to_movein_daily.activity_date`.
+Coverage: {funnel_daily_coverage[0].coverage_from} to {funnel_daily_coverage[0].coverage_to}.
+Freshness: {funnel_daily_coverage[0].freshness_updated_at}.
+</Note>
+
+## Nationality Segment Parity (Applications vs Move-ins)
 
 <BarChart data={funnel_top_nationality} x=nationality y=application_to_movein_rate yFmt="pct" title="Top Nationalities by Conversion Rate" />
 
 <Note>
-Time basis: segmentation uses `funnel_application_to_movein_daily.activity_date`.
-Freshness: segment charts rely on `funnel_application_to_movein_daily.updated_at`.
+Time basis: nationality parity uses `funnel_application_to_movein_daily.activity_date`.
+Coverage: {funnel_daily_coverage[0].coverage_from} to {funnel_daily_coverage[0].coverage_to}.
+Freshness: {funnel_daily_coverage[0].freshness_updated_at}.
 </Note>
 
-## Corporate vs Individual Cohorts
-
 ```sql funnel_tenant_type_monthly
+with data_max as (
+  select max(period_start) as max_period_start
+  from aurora_gold.funnel_application_to_movein_periodized
+  where period_grain = 'monthly'
+)
 select
-  period_start,
-  tenant_type,
-  sum(application_count) as application_count,
-  sum(movein_count) as movein_count,
+  p.period_start,
+  p.tenant_type,
+  sum(p.application_count) as application_count,
+  sum(p.movein_count) as movein_count,
   cast(
-    coalesce(sum(movein_count) / nullif(sum(application_count), 0), 0)
+    coalesce(sum(p.movein_count) / nullif(sum(p.application_count), 0), 0)
     as decimal(12, 4)
   ) as application_to_movein_rate
-from aurora_gold.funnel_application_to_movein_periodized
-where period_grain = 'monthly'
-  and period_start >= current_date - interval 730 day
-group by period_start, tenant_type
-order by period_start, tenant_type
+from aurora_gold.funnel_application_to_movein_periodized p
+cross join data_max m
+where p.period_grain = 'monthly'
+  and p.period_start >= m.max_period_start - interval 730 day
+group by p.period_start, p.tenant_type
+order by p.period_start, p.tenant_type
 ```
+
+## Monthly Conversion Trend
 
 <LineChart
   data={funnel_tenant_type_monthly}
@@ -214,7 +292,108 @@ order by period_start, tenant_type
 
 <Note>
 Time basis: cohort trends are monthly `period_start` by `tenant_type`.
-Freshness: cohort sections use `funnel_application_to_movein_periodized.updated_at`.
+Coverage: {funnel_monthly_period_coverage[0].coverage_from} to {funnel_monthly_period_coverage[0].coverage_to}.
+Freshness: {funnel_monthly_period_coverage[0].freshness_updated_at}.
+</Note>
+
+```sql moveout_movein_monthly_parity
+with moveout_monthly as (
+  select
+    cast(date_trunc('month', moveout_date) as date) as period_start,
+    count(*) as moveout_count
+  from aurora_gold.moveout_analysis_recent
+  group by cast(date_trunc('month', moveout_date) as date)
+),
+movein_monthly as (
+  select
+    cast(date_trunc('month', contract_start_date) as date) as period_start,
+    count(*) as movein_count
+  from aurora_gold.movein_analysis_recent
+  group by cast(date_trunc('month', contract_start_date) as date)
+),
+combined_periods as (
+  select period_start from moveout_monthly
+  union
+  select period_start from movein_monthly
+),
+parity as (
+  select
+    p.period_start,
+    coalesce(o.moveout_count, 0) as moveout_count,
+    coalesce(i.movein_count, 0) as movein_count
+  from combined_periods p
+  left join moveout_monthly o on p.period_start = o.period_start
+  left join movein_monthly i on p.period_start = i.period_start
+),
+data_max as (
+  select max(period_start) as max_period_start
+  from parity
+)
+select
+  parity.period_start,
+  parity.moveout_count,
+  parity.movein_count,
+  cast(
+    coalesce(100.0 * parity.movein_count / nullif(parity.moveout_count, 0), 0)
+    as decimal(12, 2)
+  ) as moveout_to_movein_rate_pct
+from parity
+cross join data_max
+where parity.period_start >= data_max.max_period_start - interval 12 month
+order by parity.period_start
+```
+
+```sql moveout_movein_parity_coverage
+with moveout_monthly as (
+  select cast(date_trunc('month', moveout_date) as date) as period_start
+  from aurora_gold.moveout_analysis_recent
+),
+movein_monthly as (
+  select cast(date_trunc('month', contract_start_date) as date) as period_start
+  from aurora_gold.movein_analysis_recent
+),
+combined_periods as (
+  select period_start from moveout_monthly
+  union
+  select period_start from movein_monthly
+),
+data_max as (
+  select max(period_start) as max_period_start
+  from combined_periods
+)
+select
+  min(period_start) as coverage_from,
+  max(period_start) as coverage_to,
+  max(data_max.max_period_start) as freshness_period
+from combined_periods
+cross join data_max
+where period_start >= data_max.max_period_start - interval 12 month
+```
+
+## Moveout -> Move-in Snapshot Parity
+
+<BarChart
+  data={moveout_movein_monthly_parity}
+  x=period_start
+  y=moveout_count
+  y2=movein_count
+  title="Monthly Moveout vs Move-in Counts"
+/>
+
+<LineChart
+  data={moveout_movein_monthly_parity}
+  x=period_start
+  y=moveout_to_movein_rate_pct
+  yFmt="num2"
+  title="Moveout -> Move-in Parity Rate (%)"
+/>
+
+<DataTable data={moveout_movein_monthly_parity} downloadable={true} />
+
+<Note>
+Time basis: monthly period snapshots using `moveout_analysis_recent.moveout_date` and `movein_analysis_recent.contract_start_date`.
+Coverage: {moveout_movein_parity_coverage[0].coverage_from} to {moveout_movein_parity_coverage[0].coverage_to}.
+Freshness: latest parity period is {moveout_movein_parity_coverage[0].freshness_period}.
 </Note>
 
 ## Detailed Funnel Tables
