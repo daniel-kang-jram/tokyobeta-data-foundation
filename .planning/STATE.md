@@ -73,6 +73,7 @@ progress:
 ## Accumulated Context
 ### Roadmap Evolution
 - Phase 3 added: Fix evidence dashboard parity and timestamp clarity (funnel chart fixes, snapshot moveout-to-movein analysis parity, geography occupancy physical-room filter and red-to-green colormap parity, remove Auth Test nav item, tighten Home KPI y-axis ranges, and clarify timestamp windows across charts).
+- Phase 4 added: Improve evidence UX readability and chart ergonomics (simplify time-basis text into user-friendly summaries, switch funnel to snapshot-style replacement-failure flow and remove mostly-100% municipality breakdowns, tighten tall municipality/nationality hotspot and pricing vertical chart layouts, remove left-bottom "Built with Evidence" link, and improve compact chart readability).
 
 ## Performance Metrics
 | Phase | Plan | Duration | Tasks | Files |
