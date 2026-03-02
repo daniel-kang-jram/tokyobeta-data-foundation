@@ -86,6 +86,20 @@ def test_parse_args_defaults(monkeypatch) -> None:
     assert args.moveout_prediction_date_column == "moveout_date"
 
 
+def test_parse_args_uses_db_host_env_override(monkeypatch) -> None:
+    monkeypatch.setenv("DB_HOST", "env-host.example.com")
+    monkeypatch.setattr("sys.argv", ["fill_flash_report.py"])
+    args = fill_flash_report.parse_args()
+    assert args.db_host == "env-host.example.com"
+
+
+def test_parse_args_defaults_to_public_aurora_host_when_env_not_set(monkeypatch) -> None:
+    monkeypatch.delenv("DB_HOST", raising=False)
+    monkeypatch.setattr("sys.argv", ["fill_flash_report.py"])
+    args = fill_flash_report.parse_args()
+    assert args.db_host == "tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com"
+
+
 def test_resolve_db_credentials_uses_cli_override() -> None:
     args = Namespace(db_user="user1", db_password="pw1")
     user, password = fill_flash_report.resolve_db_credentials(args)

@@ -5,6 +5,7 @@ import argparse
 import csv
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 from typing import Dict, List, Tuple
 from zoneinfo import ZoneInfo
@@ -51,7 +52,7 @@ from scripts.flash_report_fill.types import FlashReportQueryConfig, MetricRecord
 JST = ZoneInfo("Asia/Tokyo")
 DEFAULT_TEMPLATE_PATH = "/Users/danielkang/Downloads/February Occupancy Flash Report_Template_GG追記20260224.xlsx"
 DEFAULT_SECRET_ARN = "arn:aws:secretsmanager:ap-northeast-1:343881458651:secret:tokyobeta/prod/aurora/credentials-tlWiUd"
-DEFAULT_DB_HOST = "127.0.0.1"
+DEFAULT_DB_HOST = "tokyobeta-prod-aurora-cluster-public.cluster-cr46qo6y4bbb.ap-northeast-1.rds.amazonaws.com"
 DEFAULT_DB_PORT = 3306
 DEFAULT_DB_NAME = "tokyobeta"
 DEFAULT_D5_BENCHMARK = 11271
@@ -104,7 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--d5-tolerance", type=int, default=DEFAULT_D5_TOLERANCE)
     parser.add_argument("--aws-profile", default="gghouse")
     parser.add_argument("--aws-region", default="ap-northeast-1")
-    parser.add_argument("--db-host", default=DEFAULT_DB_HOST)
+    parser.add_argument("--db-host", default=os.getenv("DB_HOST", DEFAULT_DB_HOST))
     parser.add_argument("--db-port", type=int, default=DEFAULT_DB_PORT)
     parser.add_argument("--db-name", default=DEFAULT_DB_NAME)
     parser.add_argument("--secret-arn", default=DEFAULT_SECRET_ARN)
