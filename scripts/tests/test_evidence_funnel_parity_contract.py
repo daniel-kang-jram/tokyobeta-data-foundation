@@ -24,6 +24,30 @@ REQUIRED_FUNNEL_PARITY_MARKERS = (
     "Monthly Conversion Trend",
 )
 
+REMOVED_FUNNEL_BREAKDOWN_MARKERS = (
+    "Municipality Segment Parity (Applications vs Move-ins)",
+    "Nationality Segment Parity (Applications vs Move-ins)",
+    "Monthly Conversion Trend",
+)
+
+REQUIRED_REPLACEMENT_FLOW_MARKERS = (
+    "Killer Chart: Replacement Failure Flow",
+    "```sql replacement_flow_sankey",
+    "```sql replacement_flow_summary",
+    "type: 'sankey'",
+    "d.link_type === 'out'",
+    "d.link_type === 'in'",
+    "Move-out planned flow (red)",
+    "Move-in planned flow (green)",
+)
+
+REQUIRED_REPLACEMENT_FLOW_DIMENSIONS = (
+    "municipality",
+    "nationality",
+    "tenant_type",
+    "rent_band",
+)
+
 
 def _read(path: Path) -> str:
     """Read UTF-8 text from a repository file."""
@@ -42,13 +66,12 @@ def test_funnel_sources_use_data_max_anchored_windows() -> None:
         assert "date_sub(" in source, f"anchored lookback missing in {source_path}"
 
 
-def test_funnel_page_contains_moveout_to_movein_snapshot_parity_section() -> None:
-    """Funnel page must contain a gold-backed moveout->move-in parity section."""
+def test_funnel_page_contains_killer_replacement_flow_contract() -> None:
+    """Funnel page must include deterministic replacement-flow chart contracts."""
     source = _read(FUNNEL_PAGE)
 
-    assert "Moveout -> Move-in Snapshot Parity" in source
-    assert "from aurora_gold.moveout_analysis_recent" in source
-    assert "from aurora_gold.movein_analysis_recent" in source
+    for marker in REQUIRED_REPLACEMENT_FLOW_MARKERS:
+        assert marker in source
 
 
 def test_funnel_and_pricing_pages_include_timestamp_clarity_markers() -> None:
@@ -63,11 +86,27 @@ def test_funnel_and_pricing_pages_include_timestamp_clarity_markers() -> None:
         assert "Freshness: {" in source, f"Freshness must be query-backed in {page_path}"
 
 
-def test_funnel_and_pricing_pages_keep_required_funnel_parity_markers() -> None:
-    """Release funnel markers must remain deterministic on both pricing and funnel routes."""
+def test_funnel_replacement_flow_preserves_municipality_nationality_and_cohort_dimensions() -> None:
+    """Replacement-flow contracts must keep municipality/nationality/tenant_type dimensions."""
+    funnel_source = _read(FUNNEL_PAGE)
+
+    for marker in REQUIRED_REPLACEMENT_FLOW_DIMENSIONS:
+        assert marker in funnel_source
+
+    assert (
+        "municipality || ' | ' || nationality || ' | ' || tenant_type || ' | ' || rent_band"
+        in funnel_source
+    )
+
+
+def test_funnel_breakdown_markers_are_removed_but_pricing_parity_markers_stay() -> None:
+    """Low-signal breakdown markers should be removed from funnel only."""
     funnel_source = _read(FUNNEL_PAGE)
     pricing_source = _read(PRICING_PAGE)
 
+    for marker in REMOVED_FUNNEL_BREAKDOWN_MARKERS:
+        assert marker not in funnel_source
+        assert marker in pricing_source
+
     for marker in REQUIRED_FUNNEL_PARITY_MARKERS:
         assert marker in pricing_source
-        assert marker in funnel_source
