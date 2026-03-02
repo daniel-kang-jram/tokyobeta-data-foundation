@@ -121,6 +121,70 @@ where contract_start_date >= current_date - interval 120 day
 order by contract_start_date desc, apartment_name
 ```
 
+```sql movein_period_coverage
+select
+  (
+    select min(contract_start_date)
+    from aurora_gold.movein_analysis_recent
+    where contract_start_date >= current_date - interval 180 day
+  ) as daily_coverage_from,
+  (
+    select max(contract_start_date)
+    from aurora_gold.movein_analysis_recent
+    where contract_start_date >= current_date - interval 180 day
+  ) as daily_coverage_to,
+  (
+    select min(week_start)
+    from aurora_gold.move_events_weekly
+    where event_type = 'movein'
+  ) as weekly_coverage_from,
+  (
+    select max(week_start)
+    from aurora_gold.move_events_weekly
+    where event_type = 'movein'
+  ) as weekly_coverage_to,
+  (
+    select min(month_start)
+    from aurora_gold.movein_profile_monthly
+  ) as monthly_coverage_from,
+  (
+    select max(month_start)
+    from aurora_gold.movein_profile_monthly
+  ) as monthly_coverage_to
+```
+
+```sql movein_segment_coverage
+select
+  min(month_start) as coverage_from,
+  max(month_start) as coverage_to
+from aurora_gold.movein_profile_monthly
+where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
+```
+
+```sql movein_detail_coverage
+select
+  (
+    select min(month_start)
+    from aurora_gold.movein_profile_monthly
+    where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
+  ) as profile_coverage_from,
+  (
+    select max(month_start)
+    from aurora_gold.movein_profile_monthly
+    where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
+  ) as profile_coverage_to,
+  (
+    select min(contract_start_date)
+    from aurora_gold.movein_analysis_recent
+    where contract_start_date >= current_date - interval 120 day
+  ) as recent_coverage_from,
+  (
+    select max(contract_start_date)
+    from aurora_gold.movein_analysis_recent
+    where contract_start_date >= current_date - interval 120 day
+  ) as recent_coverage_to
+```
+
 ## Period Controls
 
 <Tabs background="true">
@@ -182,6 +246,7 @@ order by contract_start_date desc, apartment_name
 <Note>
 Time basis: period tabs map to `contract_start_date` (daily), `week_start` (weekly), and
 `month_start` (monthly).
+Coverage: Daily {movein_period_coverage[0].daily_coverage_from} to {movein_period_coverage[0].daily_coverage_to}; Weekly {movein_period_coverage[0].weekly_coverage_from} to {movein_period_coverage[0].weekly_coverage_to}; Monthly {movein_period_coverage[0].monthly_coverage_from} to {movein_period_coverage[0].monthly_coverage_to}.
 Freshness: series reflect latest rows from `aurora_gold.movein_analysis_recent`,
 `aurora_gold.move_events_weekly`, and `aurora_gold.movein_profile_monthly`.
 </Note>
@@ -217,6 +282,7 @@ Freshness: series reflect latest rows from `aurora_gold.movein_analysis_recent`,
 
 <Note>
 Time basis: segment charts aggregate monthly `movein_profile_monthly.month_start` rows.
+Coverage: {movein_segment_coverage[0].coverage_from} to {movein_segment_coverage[0].coverage_to}.
 Freshness: cohort/segment totals update with each refresh of `aurora_gold.movein_profile_monthly`.
 </Note>
 
@@ -228,5 +294,6 @@ Freshness: cohort/segment totals update with each refresh of `aurora_gold.movein
 
 <Note>
 Time basis: monthly profile detail uses `month_start`; recent contracts use `contract_start_date`.
+Coverage: Monthly profile {movein_detail_coverage[0].profile_coverage_from} to {movein_detail_coverage[0].profile_coverage_to}; Recent contracts {movein_detail_coverage[0].recent_coverage_from} to {movein_detail_coverage[0].recent_coverage_to}.
 Freshness: tables expose the latest available move-in profile and contract rows at query runtime.
 </Note>

@@ -6,6 +6,14 @@ from aurora_gold.occupancy_drivers_daily
 order by snapshot_date
 ```
 
+```sql occupancy_coverage
+select
+  min(snapshot_date) as coverage_from,
+  max(snapshot_date) as coverage_to,
+  max(as_of_snapshot_date) as freshness_snapshot_date
+from aurora_gold.occupancy_drivers_daily
+```
+
 ## Occupancy rate trend
 
 <LineChart data={occupancy_daily} x=snapshot_date y=occupancy_rate_pct title="Occupancy Rate" />
@@ -25,8 +33,9 @@ order by snapshot_date
 <Note>
 Time basis: `occupancy_daily.snapshot_date` for each row, with `as_of_snapshot_date` indicating the
 latest authoritative snapshot in the current model run.
+Coverage: {occupancy_coverage[0].coverage_from} to {occupancy_coverage[0].coverage_to}.
 Freshness: this page updates when `gold.occupancy_daily_metrics` and `gold.occupancy_kpi_meta`
-refresh, and `as_of_snapshot_date` reflects the latest available source date.
+refresh; latest snapshot date is {occupancy_coverage[0].freshness_snapshot_date}.
 </Note>
 
 <Note>

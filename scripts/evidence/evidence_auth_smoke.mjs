@@ -15,6 +15,7 @@ const ROUTE_MATRIX = Object.freeze({
     h1: "Occupancy Trend & Net Drivers",
     kpi_markers: Object.freeze(["Occupancy rate trend"]),
     time_context_markers: Object.freeze(["Time basis:", "Freshness:"]),
+    coverage_markers: Object.freeze(["Coverage:"]),
     funnel_markers: Object.freeze([]),
   }),
   moveins: Object.freeze({
@@ -22,6 +23,7 @@ const ROUTE_MATRIX = Object.freeze({
     h1: "Move-in Profiling (Daily / Weekly / Monthly)",
     kpi_markers: Object.freeze(["Period Controls"]),
     time_context_markers: Object.freeze(["Time basis:", "Freshness:"]),
+    coverage_markers: Object.freeze(["Coverage:"]),
     funnel_markers: Object.freeze([]),
   }),
   moveouts: Object.freeze({
@@ -29,6 +31,7 @@ const ROUTE_MATRIX = Object.freeze({
     h1: "Move-out Profiling (Daily / Weekly / Monthly)",
     kpi_markers: Object.freeze(["Period Controls"]),
     time_context_markers: Object.freeze(["Time basis:", "Freshness:"]),
+    coverage_markers: Object.freeze(["Coverage:"]),
     funnel_markers: Object.freeze([]),
   }),
   geography: Object.freeze({
@@ -36,6 +39,7 @@ const ROUTE_MATRIX = Object.freeze({
     h1: "Geography & Property Breakdown",
     kpi_markers: Object.freeze(["Tokyo Occupancy Map (Latest Snapshot)"]),
     time_context_markers: Object.freeze(["Time basis:", "Freshness:"]),
+    coverage_markers: Object.freeze(["Coverage:"]),
     funnel_markers: Object.freeze([]),
   }),
   pricing: Object.freeze({
@@ -43,6 +47,7 @@ const ROUTE_MATRIX = Object.freeze({
     h1: "Pricing and Segment Parity (Gold)",
     kpi_markers: Object.freeze(["Storyline"]),
     time_context_markers: Object.freeze(["Time basis:", "Freshness:"]),
+    coverage_markers: Object.freeze(["Coverage:"]),
     funnel_markers: Object.freeze([
       "Overall Conversion Rate (%)",
       "Municipality Segment Parity (Applications vs Move-ins)",
@@ -395,6 +400,7 @@ function createRouteResult(routeContract) {
     h1: routeContract.h1,
     kpi_markers: [...routeContract.kpi_markers],
     time_context_markers: [...routeContract.time_context_markers],
+    coverage_markers: [...routeContract.coverage_markers],
     funnel_markers: [...routeContract.funnel_markers],
     metadata_url: "",
     final_url: "",
@@ -545,6 +551,10 @@ async function runSmoke(options, artifactPaths) {
         }
 
         for (const marker of routeContract.time_context_markers) {
+          await assertMarkerVisible(page, marker, options.timeoutMs);
+        }
+
+        for (const marker of routeContract.coverage_markers) {
           await assertMarkerVisible(page, marker, options.timeoutMs);
         }
 

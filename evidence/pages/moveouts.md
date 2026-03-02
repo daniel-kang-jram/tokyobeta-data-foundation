@@ -133,6 +133,86 @@ where moveout_date >= current_date - interval 120 day
 order by moveout_date desc, apartment_name
 ```
 
+```sql moveout_period_coverage
+select
+  (
+    select min(moveout_date)
+    from aurora_gold.moveout_analysis_recent
+    where moveout_date >= current_date - interval 180 day
+  ) as daily_coverage_from,
+  (
+    select max(moveout_date)
+    from aurora_gold.moveout_analysis_recent
+    where moveout_date >= current_date - interval 180 day
+  ) as daily_coverage_to,
+  (
+    select min(week_start)
+    from aurora_gold.move_events_weekly
+    where event_type = 'moveout'
+  ) as weekly_coverage_from,
+  (
+    select max(week_start)
+    from aurora_gold.move_events_weekly
+    where event_type = 'moveout'
+  ) as weekly_coverage_to,
+  (
+    select min(month_start)
+    from aurora_gold.moveout_profile_monthly
+  ) as monthly_coverage_from,
+  (
+    select max(month_start)
+    from aurora_gold.moveout_profile_monthly
+  ) as monthly_coverage_to
+```
+
+```sql moveout_segment_coverage
+select
+  (
+    select min(month_start)
+    from aurora_gold.moveout_profile_monthly
+    where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
+  ) as profile_coverage_from,
+  (
+    select max(month_start)
+    from aurora_gold.moveout_profile_monthly
+    where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
+  ) as profile_coverage_to,
+  (
+    select min(moveout_date)
+    from aurora_gold.moveout_analysis_recent
+    where moveout_date >= current_date - interval 365 day
+  ) as reason_coverage_from,
+  (
+    select max(moveout_date)
+    from aurora_gold.moveout_analysis_recent
+    where moveout_date >= current_date - interval 365 day
+  ) as reason_coverage_to
+```
+
+```sql moveout_detail_coverage
+select
+  (
+    select min(month_start)
+    from aurora_gold.moveout_profile_monthly
+    where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
+  ) as profile_coverage_from,
+  (
+    select max(month_start)
+    from aurora_gold.moveout_profile_monthly
+    where cast(month_start as date) >= date_trunc('month', current_date - interval 12 month)
+  ) as profile_coverage_to,
+  (
+    select min(moveout_date)
+    from aurora_gold.moveout_analysis_recent
+    where moveout_date >= current_date - interval 120 day
+  ) as recent_coverage_from,
+  (
+    select max(moveout_date)
+    from aurora_gold.moveout_analysis_recent
+    where moveout_date >= current_date - interval 120 day
+  ) as recent_coverage_to
+```
+
 ## Period Controls
 
 <Tabs background="true">
@@ -194,6 +274,7 @@ order by moveout_date desc, apartment_name
 <Note>
 Time basis: period tabs map to `moveout_date` (daily), `week_start` (weekly), and
 `month_start` (monthly).
+Coverage: Daily {moveout_period_coverage[0].daily_coverage_from} to {moveout_period_coverage[0].daily_coverage_to}; Weekly {moveout_period_coverage[0].weekly_coverage_from} to {moveout_period_coverage[0].weekly_coverage_to}; Monthly {moveout_period_coverage[0].monthly_coverage_from} to {moveout_period_coverage[0].monthly_coverage_to}.
 Freshness: series reflect latest rows from `aurora_gold.moveout_analysis_recent`,
 `aurora_gold.move_events_weekly`, and `aurora_gold.moveout_profile_monthly`.
 </Note>
@@ -238,6 +319,7 @@ Freshness: series reflect latest rows from `aurora_gold.moveout_analysis_recent`
 
 <Note>
 Time basis: segment charts aggregate monthly profile rows plus 12-month reason totals.
+Coverage: Profile {moveout_segment_coverage[0].profile_coverage_from} to {moveout_segment_coverage[0].profile_coverage_to}; Reasons {moveout_segment_coverage[0].reason_coverage_from} to {moveout_segment_coverage[0].reason_coverage_to}.
 Freshness: segment and reason views update with profile/analysis source refreshes.
 </Note>
 
@@ -249,5 +331,6 @@ Freshness: segment and reason views update with profile/analysis source refreshe
 
 <Note>
 Time basis: monthly profile detail uses `month_start`; recent detail uses `moveout_date`.
+Coverage: Monthly profile {moveout_detail_coverage[0].profile_coverage_from} to {moveout_detail_coverage[0].profile_coverage_to}; Recent detail {moveout_detail_coverage[0].recent_coverage_from} to {moveout_detail_coverage[0].recent_coverage_to}.
 Freshness: tables expose latest profile and move-out analysis rows at query runtime.
 </Note>
