@@ -256,7 +256,7 @@ Freshness: charts use the latest rows from the daily/weekly/monthly move-in mart
   x=nationality
   y=movein_count
   swapXY={true}
-  chartAreaHeight={700}
+  chartAreaHeight={420}
   title="Top Nationalities (Move-ins)"
 />
 
@@ -265,7 +265,7 @@ Freshness: charts use the latest rows from the daily/weekly/monthly move-in mart
   x=municipality
   y=movein_count
   swapXY={true}
-  chartAreaHeight={900}
+  chartAreaHeight={420}
   title="Top Municipalities (Move-ins)"
 />
 
@@ -274,7 +274,7 @@ Freshness: charts use the latest rows from the daily/weekly/monthly move-in mart
   x=apartment_name
   y=movein_count
   swapXY={true}
-  chartAreaHeight={900}
+  chartAreaHeight={420}
   title="Top Properties (Move-ins)"
 />
 
