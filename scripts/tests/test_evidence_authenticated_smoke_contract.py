@@ -41,6 +41,13 @@ PRIMARY_ROUTE_PAGES = (
     "evidence/pages/geography.md",
     "evidence/pages/pricing.md",
 )
+READABILITY_REFRESH_ROUTE_PAGES = (
+    "evidence/pages/index.md",
+    "evidence/pages/occupancy.md",
+    "evidence/pages/moveins.md",
+    "evidence/pages/moveouts.md",
+)
+VERBOSE_TIMEZONE_MARKERS = ("GMT+0900", "Japan Standard Time")
 
 
 def load_route_matrix() -> dict[str, dict[str, object]]:
@@ -153,3 +160,14 @@ def test_primary_route_pages_include_time_and_coverage_markers_expected_by_smoke
         assert "Time basis:" in source, f"missing Time basis marker in {relative_path}"
         assert "Coverage:" in source, f"missing Coverage marker in {relative_path}"
         assert "Freshness:" in source, f"missing Freshness marker in {relative_path}"
+
+
+def test_readability_refresh_routes_require_compact_date_wording() -> None:
+    """Readability-refresh routes should keep compact-date wording and avoid timezone-style labels."""
+    for relative_path in READABILITY_REFRESH_ROUTE_PAGES:
+        page_path = REPO_ROOT / relative_path
+        source = page_path.read_text(encoding="utf-8")
+
+        assert "YYYY-MM-DD" in source, f"missing compact date wording in {relative_path}"
+        for marker in VERBOSE_TIMEZONE_MARKERS:
+            assert marker not in source, f"found verbose timezone token '{marker}' in {relative_path}"

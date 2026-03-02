@@ -7,6 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HOME_PAGE = REPO_ROOT / "evidence/pages/index.md"
 AUTH_TEST_PAGE = REPO_ROOT / "evidence/pages/auth-test.md"
 PAGES_DIR = REPO_ROOT / "evidence/pages"
+LAYOUT_TEMPLATE = REPO_ROOT / "evidence/.evidence/template/src/pages/+layout.svelte"
 REQUIRED_PRIMARY_ROUTES = (
     "index",
     "funnel",
@@ -16,6 +17,13 @@ REQUIRED_PRIMARY_ROUTES = (
     "geography",
     "pricing",
 )
+PLAN_REFRESH_ROUTE_PAGES = (
+    REPO_ROOT / "evidence/pages/index.md",
+    REPO_ROOT / "evidence/pages/occupancy.md",
+    REPO_ROOT / "evidence/pages/moveins.md",
+    REPO_ROOT / "evidence/pages/moveouts.md",
+)
+VERBOSE_TIMEZONE_MARKERS = ("GMT+0900", "Japan Standard Time")
 
 
 def _read(path: Path) -> str:
@@ -50,6 +58,33 @@ def test_home_kpi_section_includes_time_coverage_and_freshness_markers() -> None
     assert re.search(r"Coverage:\s*\{[^}]+\}\s*to\s*\{[^}]+\}", source), (
         "Coverage marker must include explicit from/to query-backed values"
     )
+
+
+def test_layout_disables_built_with_evidence_footer_branding() -> None:
+    """Evidence layout should disable the default Built with Evidence footer link."""
+    source = _read(LAYOUT_TEMPLATE)
+
+    assert "builtWithEvidence={false}" in source
+
+
+def test_refresh_routes_preserve_time_context_markers() -> None:
+    """Routes touched in this plan must keep deterministic marker prefixes."""
+    for page_path in PLAN_REFRESH_ROUTE_PAGES:
+        source = _read(page_path)
+
+        assert "Time basis:" in source, f"missing Time basis marker in {page_path.name}"
+        assert "Coverage:" in source, f"missing Coverage marker in {page_path.name}"
+        assert "Freshness:" in source, f"missing Freshness marker in {page_path.name}"
+
+
+def test_refresh_routes_use_compact_date_wording_without_timezone_tokens() -> None:
+    """Refreshed routes should advertise compact date formatting and avoid timezone-style copy."""
+    for page_path in PLAN_REFRESH_ROUTE_PAGES:
+        source = _read(page_path)
+
+        assert "YYYY-MM-DD" in source, f"missing compact date wording in {page_path.name}"
+        for marker in VERBOSE_TIMEZONE_MARKERS:
+            assert marker not in source, f"found verbose timezone token '{marker}' in {page_path.name}"
 
 
 def test_auth_test_route_source_is_removed_from_pages_contract() -> None:
