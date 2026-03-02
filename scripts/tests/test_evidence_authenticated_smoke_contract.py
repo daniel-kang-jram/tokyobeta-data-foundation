@@ -1,5 +1,7 @@
 """Contract tests for authenticated Evidence smoke route matrix and workflow wiring."""
 
+import json
+import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -7,7 +9,13 @@ SMOKE_SCRIPT = REPO_ROOT / "scripts/evidence/evidence_auth_smoke.mjs"
 SMOKE_WORKFLOW = REPO_ROOT / ".github/workflows/evidence-auth-smoke.yml"
 
 REQUIRED_ROUTES = ("/occupancy", "/moveins", "/moveouts", "/geography", "/pricing")
-ROUTE_MATRIX_SCHEMA_FIELDS = ("h1", "kpi_markers", "time_context_markers", "funnel_markers")
+ROUTE_MATRIX_SCHEMA_FIELDS = (
+    "h1",
+    "kpi_markers",
+    "time_context_markers",
+    "coverage_markers",
+    "funnel_markers",
+)
 ROUTE_RESULT_PASS_FAIL_FIELDS = (
     "status",
     "error",
@@ -35,6 +43,19 @@ PRIMARY_ROUTE_PAGES = (
 )
 
 
+def load_route_matrix() -> dict[str, dict[str, object]]:
+    """Load deterministic route matrix JSON from the smoke script."""
+    output = subprocess.check_output(
+        ["node", str(SMOKE_SCRIPT), "--print-route-matrix"],
+        cwd=REPO_ROOT,
+        text=True,
+    )
+    payload = json.loads(output)
+    routes = payload.get("routes")
+    assert isinstance(routes, dict)
+    return routes
+
+
 def test_smoke_script_includes_all_release_routes() -> None:
     """Smoke contract must include all release-gated routes."""
     assert SMOKE_SCRIPT.exists(), "expected smoke script at scripts/evidence/evidence_auth_smoke.mjs"
@@ -52,6 +73,18 @@ def test_smoke_script_exposes_route_matrix_schema_and_print_flag() -> None:
     assert "--print-route-matrix" in source
     for field in ROUTE_MATRIX_SCHEMA_FIELDS:
         assert field in source
+
+
+def test_route_matrix_requires_coverage_markers_for_release_routes() -> None:
+    """Every release-gated route must expose deterministic coverage marker checks."""
+    routes = load_route_matrix()
+
+    for route_data in routes.values():
+        route_contract = dict(route_data)
+        route_path = route_contract["path"]
+        if route_path in REQUIRED_ROUTES:
+            assert "coverage_markers" in route_contract
+            assert "Coverage:" in route_contract["coverage_markers"]
 
 
 def test_smoke_script_encodes_pricing_funnel_assertions() -> None:
@@ -111,11 +144,12 @@ def test_smoke_script_route_results_include_deterministic_redirect_failure_field
     assert "failed-auth-redirect" in source
 
 
-def test_primary_route_pages_include_time_context_markers_expected_by_smoke() -> None:
-    """Route pages gated by smoke must expose explicit Time basis/Freshness copy."""
+def test_primary_route_pages_include_time_and_coverage_markers_expected_by_smoke() -> None:
+    """Route pages gated by smoke must expose explicit Time basis/Coverage/Freshness copy."""
     for relative_path in PRIMARY_ROUTE_PAGES:
         page_path = REPO_ROOT / relative_path
         source = page_path.read_text(encoding="utf-8")
 
         assert "Time basis:" in source, f"missing Time basis marker in {relative_path}"
+        assert "Coverage:" in source, f"missing Coverage marker in {relative_path}"
         assert "Freshness:" in source, f"missing Freshness marker in {relative_path}"

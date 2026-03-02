@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 CI_WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
+SMOKE_SCRIPT = REPO_ROOT / "scripts/evidence/evidence_auth_smoke.mjs"
 
 
 def test_ci_runs_evidence_guardrail_tests() -> None:
@@ -46,3 +48,11 @@ def test_ci_detects_all_evidence_guardrail_paths() -> None:
         "evidence/buildspec.yml",
     ):
         assert expected in source
+
+
+def test_release_contract_requires_coverage_marker_checks_in_smoke_matrix() -> None:
+    """Release guardrails must include smoke contract checks for timestamp coverage markers."""
+    source = SMOKE_SCRIPT.read_text(encoding="utf-8")
+
+    assert "coverage_markers" in source
+    assert "Coverage:" in source
