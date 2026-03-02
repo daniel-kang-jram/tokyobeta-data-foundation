@@ -423,7 +423,8 @@ resource "aws_iam_role_policy" "codebuild" {
         Action = [
           "s3:PutObject",
           "s3:DeleteObject",
-          "s3:ListBucket"
+          "s3:ListBucket",
+          "s3:GetObject"
         ],
         Resource = [
           aws_s3_bucket.site.arn,
