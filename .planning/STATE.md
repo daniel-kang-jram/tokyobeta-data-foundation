@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: Evidence Gold KPI Refresh
-status: in_progress
-last_updated: "2026-03-02T05:55:51.301Z"
+status: complete
+last_updated: "2026-03-02T06:08:39.065Z"
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 17
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -18,9 +18,9 @@ progress:
 
 ## Current Phase
 - `04-improve-evidence-ux-readability-and-chart-ergonomics`
-- Last completed plan: `04-02-PLAN.md` (Phase 4)
-- Next plan: `04-03-PLAN.md`
-- Phase progress: 2/3 plans complete
+- Last completed plan: `04-03-PLAN.md` (Phase 4)
+- Next plan: `None`
+- Phase progress: 3/3 plans complete
 
 ## Decisions
 - 2026-03-01 (01-02): Normalize missing municipality/nationality/tenant_type to `unknown` in funnel marts.
@@ -75,6 +75,9 @@ progress:
 - [Phase 04]: Set geography hotspot and pricing segment-pressure chartAreaHeight guardrail to <=560 for reduced scrolling and readable labels.
 - [Phase 04]: Preserve deterministic Time basis/Coverage/Freshness prefixes while simplifying note prose to operator-facing language.
 - [Phase 04]: Render coverage and freshness values as compact YYYY-MM-DD strings in geography/pricing helper queries.
+- [Phase 04]: Implement footer-link removal in tracked evidence/pages/+layout.svelte so generated template output survives evidence build regeneration.
+- [Phase 04]: Keep deterministic Time basis/Coverage/Freshness prefixes unchanged while tightening readability copy to concise operator wording.
+- [Phase 04]: Use compact YYYY-MM-DD values for displayed coverage/freshness context on all scoped routes.
 
 ## Accumulated Context
 ### Roadmap Evolution
@@ -100,10 +103,11 @@ progress:
 | 03 | 04 | 5 min | 3 | 8 |
 | 04 | 01 | 6 min | 3 | 2 |
 | 04 | 02 | 5 min | 3 | 4 |
+| 04 | 03 | 8 min | 3 | 7 |
 
 ## Blockers
 - None
 
 ## Session
-- Updated: 2026-03-02T05:55:51Z
-- Stopped At: Completed 04-02-PLAN.md
+- Updated: 2026-03-02T06:08:39Z
+- Stopped At: Completed 04-03-PLAN.md
